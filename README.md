@@ -26,10 +26,15 @@ with I.context():
   A = I.Set("A[i, j]") + I.Constraint("0 <= i <= 512", "0 <= j <= 512")
   B = I.Set("B[i, j]") + I.Constraint("0 <= i <= 512", "0 <= j <= 512")
   C = I.Set("C[i, j]") + I.Constraint("0 <= i <= 512", "0 <= j <= 512")
-  with P.domain(A and B and C, ctx=...):
+  with P.domain(A and B and C) as dom: # ctx = extra information to generate kernel
     with P.filter(" { A }"):
       with P.band("{ A[i, j] -> [(i)] }"):
         with P.band():
+          # ...
+    kernel = C.kernel(dom, color=...)
+    C.auto_schedule(kernel)
+    result = C.retrive_kernel(kernel)
+    return result
   # all allocated items inside I.context() is freed?
   
 # caten.py provides extended isl schedule_tree
