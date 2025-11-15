@@ -4,6 +4,9 @@
 - Automatic ownership semantics: model `__isl_give/__isl_take/__isl_keep` by inserting copies for destructive APIs, rely on GC-driven finalizers for freeing handles (no context-driven bulk free), and keep `I.InPlace(obj)` available for explicit destructive use-cases like ScheduleTree edits.
 - Context requirements: implement `with I.context()` as a mandatory, thread-safe scope injector that validates allocations/copies and (de)serializes primitive contexts, but never directly manages lifetime.
 - Context helper usage: call `current()` directly instead of layering helper wrappers so implementations stay minimal and beautiful.
+- ctypes configuration: avoid setting `restype`/`argtypes` manually; route bindings through `ISLFunction.create` so signatures stay centralized.
+- Type discipline: skip `isinstance` runtime checks for ISL wrappers unless absolutely necessary—prefer static typing/multi-dispatch plans, and defer operator overloads (e.g., `__or__`) until the shared mixin layer lands.
+- Testing: use `pytest` with the global config enforcing coverage ≥ 95%, keeping new suites aligned with the existing `pytest.ini_options` defaults.
 - Object layer expectations: define `ISLObject` subclasses (e.g., `Set`, `UnionSet`) one layer above `islpy` objects, offering operator overloading via multi-dispatch (e.g., `Set + Set`, `Set + Constraint`) and capturing allocation metadata through `copy/free/from_ptr` hooks.
 - Function layer requirements: engineer `ISLFunction` decorators plus qualifiers (`I.Keep`, `I.Give`, `I.Take`, `I.Null`, `I.Param`) so Python wrappers can infer argument modes, enforce class/type checks, auto-inject contexts, and wrap primitive return values.
 - Code quality priorities: “abstraction first” with well-typed, dense Python—smart algorithms and succinct comments only when truly helpful; defer detailed API wrappers until the foundational abstractions are solid.
