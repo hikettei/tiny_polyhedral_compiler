@@ -7,7 +7,7 @@ from typing import Callable, Optional
 from ..ffi import FfiPointer, load_libisl
 from ..func import ISLFunction
 from ..obj import ISLObject, InPlace
-from ..qualifier import Give, Null, Qualifier, Take
+from ..qualifier import Qualifier, Give, Take, Null, Param, Keep
 
 _lib = load_libisl()
 
@@ -28,11 +28,11 @@ class ISLContext(ISLObject, Qualifier):
         self._closed = False
 
     def copy_handle(self) -> FfiPointer:
-        return _lib.isl_ctx_copy(self.handle)
+        raise ISLContextError("Context cannot be copied.")
 
     @classmethod
     def free_handle(cls, handle: FfiPointer) -> None:
-        _lib.isl_ctx_free(handle)
+        pass # TODO: _lib.isl_ctx_free(handle)
 
     def __enter__(self) -> "ISLContext":
         if self._token is not None:
@@ -61,12 +61,20 @@ class ISLContext(ISLObject, Qualifier):
         if self._closed:
             raise ISLContextError("Context was already closed.")
 
-    def as_ctype(self):
-        return c_void_p
+    def as_ctype(self): return c_void_p
+    @classmethod
+    def alloc(cls) -> Context: return isl_ctx_alloc()
 
 isl_ctx_alloc = ISLFunction.create(
     "isl_ctx_alloc",
     return_=Give(ISLContext),
+    lib=_lib,
+)
+
+isl_ctx_free = ISLFunction.create(
+    "isl_ctx_free",
+    Keep(ISLContext),
+    return_=Null(),
     lib=_lib,
 )
 
@@ -77,7 +85,7 @@ def current(*, required: bool = False) -> Optional[ISLContext]:
     return ctx
 
 def context(*, prim_context_factory: Optional[Callable[[], ISLContext]] = None, name: str = "isl") -> ISLContext:
-    factory = prim_context_factory or ctx_alloc
+    factory = prim_context_factory or isl_ctx_alloc
     ctx = factory()
     if not isinstance(ctx, ISLContext):
         raise TypeError("Context factory must return an ISLContext instance.")

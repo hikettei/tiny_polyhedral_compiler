@@ -70,7 +70,6 @@ class ISLFunction:
         return wrapper
 
     @staticmethod
-    @staticmethod
     def _resolve_and_configure(
         primitive: Any,
         lib: Optional[Any],
