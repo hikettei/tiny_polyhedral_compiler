@@ -89,7 +89,4 @@ def InPlace(obj: T_ISLObject) -> T_ISLObject:
 def _run_finalizer(cls: type[ISLObject], handle: Any) -> None:
     """Invoke :meth:`free_handle` if ``handle`` is non-null."""
     if handle is None: return
-    try:
-        cls.free_handle(handle)
-    except Exception as exc:  # pragma: no cover - defensive
-        warnings.warn(f"Failed to free {cls.__name__} handle: {exc}", RuntimeWarning)
+    cls.free_handle(handle)
