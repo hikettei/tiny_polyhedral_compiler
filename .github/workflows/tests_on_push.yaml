@@ -18,4 +18,4 @@ jobs:
       - name: Run mypy
         run: uv run mypy caten
       - name: Run pytest
-        run: uv run pytest ./test
+        run: PYTHONPATH=. uv run pytest ./test

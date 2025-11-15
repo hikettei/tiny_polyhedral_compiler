@@ -5,6 +5,7 @@ repos:
         name: uv ruff
         entry: uv run ruff check . --fix
         language: system
+        types: [python]
         pass_filenames: true
       - id: uv-mypy
         name: uv mypy
