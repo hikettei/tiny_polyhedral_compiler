@@ -63,7 +63,7 @@ class ISLContext(ISLObject, Qualifier):
 
     def as_ctype(self): return c_void_p
     @classmethod
-    def alloc(cls) -> Context: return isl_ctx_alloc()
+    def alloc(cls) -> ISLContext: return isl_ctx_alloc()
 
 isl_ctx_alloc = ISLFunction.create(
     "isl_ctx_alloc",
@@ -84,7 +84,11 @@ def current(*, required: bool = False) -> Optional[ISLContext]:
         raise ISLContextError("No active ISL context; wrap code with `with I.context():`.")
     return ctx
 
-def context(*, prim_context_factory: Optional[Callable[[], ISLContext]] = None, name: str = "isl") -> ISLContext:
+def context(
+    *,
+    prim_context_factory: Optional[Callable[[], ISLContext]] = None,
+    name: str = "isl",
+) -> ISLContext:
     factory = prim_context_factory or isl_ctx_alloc
     ctx = factory()
     if not isinstance(ctx, ISLContext):

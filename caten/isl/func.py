@@ -40,7 +40,6 @@ class ISLFunction:
     def _build_wrapper(py_name: str, spec: FunctionSpec) -> Callable[..., Any]:
         def wrapper(*user_args: Any) -> Any:
             from .specs.context import current  # local import to avoid cycles
-
             ctx = current(required=False)
             prepared_args: list[Any] = []
             arg_iter = iter(user_args)
@@ -85,7 +84,8 @@ class ISLFunction:
         if hasattr(primitive, "argtypes") and not getattr(primitive, "argtypes", None):
             argtypes = [q.as_ctype() for q in arguments]
             primitive.argtypes = [t for t in argtypes if t is not None]
-        if hasattr(primitive, "restype") and getattr(primitive, "restype", None) is None and return_spec:
+        if (hasattr(primitive, "restype") and
+            getattr(primitive, "restype", None) is None and return_spec):
             restype = return_spec.as_ctype()
             if restype is not None:
                 primitive.restype = restype

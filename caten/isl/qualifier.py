@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import abc
 from ctypes import c_char_p, c_double, c_longlong, c_void_p
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from .ffi import FfiPointer
 from .obj import ISLObject
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .specs.context import ISLContext
 
 
 class Qualifier(abc.ABC):

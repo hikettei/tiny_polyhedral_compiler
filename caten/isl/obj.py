@@ -44,14 +44,16 @@ class ISLObject(abc.ABC):
 
     def free(self) -> None:
         """Release the underlying handle immediately (idempotent)."""
-        if self._handle is None: return
+        if self._handle is None:
+            return
         self._finalizer()
         self._handle = None
 
     def request_inplace(self) -> None:
         """Allow the next ``Take`` qualifier to steal the handle."""
         self._assert_usable()
-        if self._in_place: return
+        if self._in_place:
+            return
         self._in_place = True
 
     def _assert_usable(self) -> None:
@@ -87,5 +89,6 @@ def InPlace(obj: T_ISLObject) -> T_ISLObject:
 
 def _run_finalizer(cls: type[ISLObject], handle: Any) -> None:
     """Invoke :meth:`free_handle` if ``handle`` is non-null."""
-    if handle is None: return
+    if handle is None:
+        return
     cls.free_handle(handle)
