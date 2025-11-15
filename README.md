@@ -20,6 +20,17 @@ with P.domain():
     for j in P.schedule(...):
       for k in P.schedule(...):
         P.filter(...)
+        
+import caten.isl as I
+with I.context():
+  A = I.Set("A[i, j]", "0 <= i <= 512", "0 <= j <= 512")
+  B = I.Set("B[i, j]", "0 <= i <= 512", "0 <= j <= 512")
+  C = I.Set("C[i, j]", "0 <= i <= 512", "0 <= j <= 512")
+  with P.domain(I.Union(A, B, C), ctx=...):
+    with P.filter(" { A }"):
+      with P.band("{ A[i, j] -> [(i)] }"):
+        with P.band():
+  # all allocated items inside I.context() is freed?
 ```
 
 ```python
@@ -40,3 +51,4 @@ with P.domain():
 - [ ] Enhancement on Symbolic Reduction Coincidence Computataion
 - [ ] AutoScheduler Infrastructure
 - [ ] Memory Layout Optimization
+- [ ] ISL Object GC Extension
