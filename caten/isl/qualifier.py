@@ -68,7 +68,6 @@ class _ISLObjectQualifier(Qualifier):
     def as_ctype(self):
         return c_void_p
 
-
 class Take(_ISLObjectQualifier):
     def view(self, obj: ISLObject) -> ISLObject:
         if getattr(obj, "_in_place", False):
@@ -99,7 +98,7 @@ class Give(Qualifier):
         return target.from_ptr(value)
 
     def as_ctype(self):
-        raise TypeError("Give qualifier cannot infer ctypes restype automatically.")
+        return c_void_p
 
 class Keep(_ISLObjectQualifier):
     def view(self, obj: ISLObject) -> ISLObject:
@@ -117,15 +116,13 @@ class Null(Qualifier):
     def as_ctype(self):
         return None
 
-_PY_CTYPE_MAP = {
-    int: c_longlong,
-    float: c_double,
-    str: c_char_p,
-    bytes: c_char_p,
-}
-
-
 class Param(Qualifier):
+    _PY_CTYPE_MAP = {
+        int: c_longlong,
+        float: c_double,
+        str: c_char_p,
+        bytes: c_char_p,
+    }
     def __init__(
         self,
         target: Optional[type] = None,
@@ -135,7 +132,7 @@ class Param(Qualifier):
     ) -> None:
         super().__init__(target=target)
         self.converter = converter
-        self._ctype = ctype or (target and _PY_CTYPE_MAP.get(target))
+        self._ctype = ctype or (target and self._PY_CTYPE_MAP.get(target))
 
     def prepare(self, value: Any, *, ctx: ISLContext, name: str) -> Any:
         if self.converter is not None:
@@ -145,8 +142,3 @@ class Param(Qualifier):
 
     def as_ctype(self):
         return self._ctype
-
-    def as_ctype(self):
-        return None
-    def as_ctype(self):
-        return c_void_p

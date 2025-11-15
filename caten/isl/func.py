@@ -20,12 +20,14 @@ class ISLFunction:
     @classmethod
     def create(
         cls,
-        primitive: Callable[..., Any],
+        primitive: Any,
         *arg_qualifiers: Qualifier,
         return_: Optional[Qualifier] = None,
+        lib: Optional[Any] = None,
     ) -> Callable[..., Any]:
-        py_name = getattr(primitive, "__name__", primitive.__class__.__name__)
-        spec = FunctionSpec(primitive, tuple(arg_qualifiers), return_)
+        func = cls._resolve_and_configure(primitive, lib, tuple(arg_qualifiers), return_)
+        py_name = getattr(func, "__name__", func.__class__.__name__)
+        spec = FunctionSpec(func, tuple(arg_qualifiers), return_)
         wrapper = cls._build_wrapper(py_name, spec)
         cls._registry[py_name] = spec
         return wrapper
@@ -66,3 +68,26 @@ class ISLFunction:
 
         wrapper.__name__ = py_name
         return wrapper
+
+    @staticmethod
+    @staticmethod
+    def _resolve_and_configure(
+        primitive: Any,
+        lib: Optional[Any],
+        arguments: Tuple[Qualifier, ...],
+        return_spec: Optional[Qualifier],
+    ) -> Callable[..., Any]:
+        if isinstance(primitive, str):
+            if lib is None:
+                raise ValueError("lib must be provided when primitive is given by name.")
+            primitive = getattr(lib, primitive)
+        elif lib is not None:
+            primitive = getattr(lib, getattr(primitive, "__name__", primitive))
+        if hasattr(primitive, "argtypes") and not getattr(primitive, "argtypes", None):
+            argtypes = [q.as_ctype() for q in arguments]
+            primitive.argtypes = [t for t in argtypes if t is not None]
+        if hasattr(primitive, "restype") and getattr(primitive, "restype", None) is None and return_spec:
+            restype = return_spec.as_ctype()
+            if restype is not None:
+                primitive.restype = restype
+        return primitive

@@ -9,7 +9,6 @@ from typing import Optional
 
 # ``ctypes`` exposes libisl handles as plain Python integers (void * as int).
 FfiPointer = int
-
 _LIB: Optional[CDLL] = None
 
 def _candidate_paths() -> list[str]:
