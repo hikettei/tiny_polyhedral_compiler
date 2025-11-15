@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import contextvars
 from ctypes import c_void_p
-from typing import Callable, Optional
+from types import TracebackType
+from typing import Any, Callable, Optional
 
 from ..ffi import FfiPointer, load_libisl
 from ..func import ISLFunction
@@ -24,7 +25,7 @@ class ISLContext(ISLObject, Qualifier):
         ISLObject.__init__(self, handle)
         Qualifier.__init__(self)
         self.name = "isl"
-        self._token = None
+        self._token: contextvars.Token[Optional["ISLContext"]] | None = None
         self._closed = False
 
     def copy_handle(self) -> FfiPointer:
@@ -42,17 +43,23 @@ class ISLContext(ISLObject, Qualifier):
         self._token = _current_context.set(self)
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         if self._token is not None:
             _current_context.reset(self._token)
             self._token = None
         self._closed = True
         self.free()
     # Qualifier protocol ----------------------------------------------------
-    def view(self, value):  # type: ignore[override]
+    def view(self, value: Any) -> FfiPointer:  # type: ignore[override]
         if value is not None:
             raise TypeError("Context qualifier does not accept positional arguments.")
         ctx = current(required=True)
+        assert ctx is not None
         return ctx.handle
 
     def ensure_active(self) -> None:
@@ -61,9 +68,12 @@ class ISLContext(ISLObject, Qualifier):
         if self._closed:
             raise ISLContextError("Context was already closed.")
 
-    def as_ctype(self): return c_void_p
+    def as_ctype(self) -> Any:
+        return c_void_p
+
     @classmethod
-    def alloc(cls) -> ISLContext: return isl_ctx_alloc()
+    def alloc(cls) -> "ISLContext":
+        return isl_ctx_alloc()
 
 isl_ctx_alloc = ISLFunction.create(
     "isl_ctx_alloc",

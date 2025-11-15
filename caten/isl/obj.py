@@ -26,13 +26,14 @@ class ISLObject(abc.ABC):
 
     __slots__ = ("_handle", "_in_place", "_finalizer")
     def __init__(self, handle: FfiPointer) -> None:
-        self._handle: FfiPointer = handle
+        self._handle: FfiPointer | None = handle
         self._in_place: bool = False
         self._finalizer = weakref.finalize(self, _run_finalizer, type(self), handle)
 
     @property
     def handle(self) -> FfiPointer:
         self._assert_usable()
+        assert self._handle is not None
         return self._handle
 
     def copy(self: T_ISLObject) -> T_ISLObject:

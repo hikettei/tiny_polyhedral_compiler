@@ -22,11 +22,11 @@ class Qualifier(abc.ABC):
     def __init__(self, target: Optional[type] = None) -> None:
         self.target = target
 
-    def prepare(self, value: Any, *, ctx: ISLContext, name: str) -> Any:
+    def prepare(self, value: Any, *, ctx: "ISLContext" | None, name: str) -> Any:
         self._validate_type(value, name)
         return self.view(value)
 
-    def wrap(self, value: Any, *, ctx: ISLContext, name: str = "return") -> Any:
+    def wrap(self, value: Any, *, ctx: "ISLContext" | None, name: str = "return") -> Any:
         self._validate_type(value, name)
         return self.view(value)
 
@@ -37,7 +37,7 @@ class Qualifier(abc.ABC):
         return value
 
     @abc.abstractmethod
-    def as_ctype(self):
+    def as_ctype(self) -> Any | None:
         """Return a ctypes type used to auto-configure libisl symbols."""
 
     def _validate_type(self, value: Any, name: str) -> None:
@@ -62,14 +62,14 @@ class _ISLObjectQualifier(Qualifier):
         value._assert_usable()
         return value
 
-    def prepare(self, value: Any, *, ctx: ISLContext, name: str) -> ISLObject:
+    def prepare(self, value: Any, *, ctx: "ISLContext" | None, name: str) -> ISLObject:
         obj = self._expect_isl_object(value, name)
         return self.view(obj)
 
     def view(self, obj: ISLObject) -> ISLObject:
         return obj
 
-    def as_ctype(self):
+    def as_ctype(self) -> Any:
         return c_void_p
 
 class Take(_ISLObjectQualifier):
@@ -85,10 +85,10 @@ class Give(Qualifier):
     def __init__(self, target: Optional[type] = None) -> None:
         super().__init__(target=target)
 
-    def prepare(self, value: Any, *, ctx, name: str) -> ISLObject:  # type: ignore[override]
+    def prepare(self, value: Any, *, ctx: "ISLContext" | None, name: str) -> ISLObject:  # type: ignore[override]
         return self.view(value)
 
-    def wrap(self, value: Any, *, ctx, name: str = "return") -> ISLObject:  # type: ignore[override]
+    def wrap(self, value: Any, *, ctx: "ISLContext" | None, name: str = "return") -> ISLObject:  # type: ignore[override]
         return self.view(value)
 
     def view(self, value: Any) -> ISLObject:
@@ -101,7 +101,7 @@ class Give(Qualifier):
             raise TypeError("Give qualifier expects an FFI pointer.")
         return target.from_ptr(value)
 
-    def as_ctype(self):
+    def as_ctype(self) -> Any:
         return c_void_p
 
 class Keep(_ISLObjectQualifier):
@@ -112,12 +112,12 @@ class Null(Qualifier):
     def __init__(self) -> None:
         super().__init__(target=type(None))
 
-    def prepare(self, value: Any, *, ctx: ISLContext, name: str) -> None:
+    def prepare(self, value: Any, *, ctx: "ISLContext" | None, name: str) -> None:
         if value is not None:
             raise TypeError(f"Argument '{name}' must be None to satisfy Null qualifier.")
         return None
 
-    def as_ctype(self):
+    def as_ctype(self) -> None:
         return None
 
 class Param(Qualifier):
@@ -138,11 +138,11 @@ class Param(Qualifier):
         self.converter = converter
         self._ctype = ctype or (target and self._PY_CTYPE_MAP.get(target))
 
-    def prepare(self, value: Any, *, ctx: ISLContext, name: str) -> Any:
+    def prepare(self, value: Any, *, ctx: "ISLContext" | None, name: str) -> Any:
         if self.converter is not None:
             value = self.converter(value)
         self._validate_type(value, name)
         return self.view(value)
 
-    def as_ctype(self):
+    def as_ctype(self) -> Any | None:
         return self._ctype
