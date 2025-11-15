@@ -36,7 +36,6 @@ class ISLObject(abc.ABC):
 
     def copy(self: T_ISLObject) -> T_ISLObject:
         """Create a logically distinct copy via the primitive layer."""
-
         self._assert_usable()
         handle = self.copy_handle()
         cls: Type[T_ISLObject] = type(self)
@@ -44,23 +43,18 @@ class ISLObject(abc.ABC):
 
     def free(self) -> None:
         """Release the underlying handle immediately (idempotent)."""
-
-        if self._handle is None:
-            return
+        if self._handle is None: return
         self._finalizer()
         self._handle = None
 
     def request_inplace(self) -> None:
         """Allow the next ``Take`` qualifier to steal the handle."""
-
         self._assert_usable()
-        if self._in_place:
-            return
+        if self._in_place: return
         self._in_place = True
 
     def _assert_usable(self) -> None:
         """Ensure the object still owns a valid handle."""
-
         if self._handle is None:
             raise RuntimeError("ISLObject handle was already freed.")
 
@@ -84,7 +78,6 @@ class ISLObject(abc.ABC):
 
 def InPlace(obj: T_ISLObject) -> T_ISLObject:
     """Mark ``obj`` so the next ``Take`` qualifier moves its handle."""
-
     if not isinstance(obj, ISLObject):
         raise TypeError("InPlace expects an ISLObject instance.")
     obj.request_inplace()
@@ -92,7 +85,6 @@ def InPlace(obj: T_ISLObject) -> T_ISLObject:
 
 def _run_finalizer(cls: type[ISLObject], handle: Any) -> None:
     """Invoke :meth:`free_handle` if ``handle`` is non-null."""
-
     if handle is None: return
     try:
         cls.free_handle(handle)
