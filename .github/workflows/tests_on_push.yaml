@@ -1,4 +1,4 @@
-name: CI
+name: Tests on push
 
 on:
   push:
@@ -12,10 +12,10 @@ jobs:
       - name: Install uv
         run: pipx install uv
       - name: Install dependencies
-        run: uv pip install -e .[test,dev]
+        run: uv sync
       - name: Run ruff
         run: uv run ruff check .
       - name: Run mypy
         run: uv run mypy caten
       - name: Run pytest
-        run: uv run pytest
+        run: uv run pytest ./tests
