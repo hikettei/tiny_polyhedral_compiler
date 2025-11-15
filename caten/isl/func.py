@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
-from .specs.context import ISLContext
 from .qualifier import Qualifier
 
 
@@ -12,7 +11,6 @@ class FunctionSpec:
     primitive: Callable[..., Any]
     arguments: Tuple[Qualifier, ...]
     return_spec: Optional[Qualifier]
-
 
 class ISLFunction:
     """Factory for lightweight wrappers around libisl primitives."""
@@ -26,9 +24,10 @@ class ISLFunction:
         *arg_qualifiers: Qualifier,
         return_: Optional[Qualifier] = None,
     ) -> Callable[..., Any]:
+        py_name = getattr(primitive, "__name__", primitive.__class__.__name__)
         spec = FunctionSpec(primitive, tuple(arg_qualifiers), return_)
-        wrapper = cls._build_wrapper(spec)
-        cls._registry[wrapper.__name__] = spec
+        wrapper = cls._build_wrapper(py_name, spec)
+        cls._registry[py_name] = spec
         return wrapper
 
     @classmethod
@@ -36,11 +35,11 @@ class ISLFunction:
         return cls._registry[name]
 
     @staticmethod
-    def _build_wrapper(spec: FunctionSpec) -> Callable[..., Any]:
-        py_name = getattr(spec.primitive, "__name__", spec.primitive.__class__.__name__)
-
+    def _build_wrapper(py_name: str, spec: FunctionSpec) -> Callable[..., Any]:
         def wrapper(*user_args: Any) -> Any:
-            ctx = ISLContext.current(required=True)
+            from .specs.context import current  # local import to avoid cycles
+
+            ctx = current(required=False)
             prepared_args: list[Any] = []
             arg_iter = iter(user_args)
             for index, qualifier in enumerate(spec.arguments):
@@ -49,7 +48,7 @@ class ISLFunction:
                         raw = next(arg_iter)
                     except StopIteration as exc:
                         raise TypeError(
-                            f"Missing argument #{index + 1} for {spec.python_name}."
+                            f"Missing argument #{index + 1} for {py_name}."
                         ) from exc
                 else:
                     raw = None
@@ -59,12 +58,11 @@ class ISLFunction:
             except StopIteration:
                 pass
             else:
-                raise TypeError(f"Too many arguments for {spec.python_name}.")
+                raise TypeError(f"Too many arguments for {py_name}.")
             result = spec.primitive(*prepared_args)
             if spec.return_spec is not None:
                 result = spec.return_spec.wrap(result, ctx=ctx, name="return")
             return result
 
         wrapper.__name__ = py_name
-        cls._registry[py_name] = spec
         return wrapper

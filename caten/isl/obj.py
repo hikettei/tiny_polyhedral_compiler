@@ -5,9 +5,7 @@ import weakref
 import warnings
 from typing import Any, Type, TypeVar
 
-# ``libisl`` pointers exposed through cffi/ctypes; kept as ``Any`` because the
-# exact type depends on the concrete binding layer.
-FfiPointer = Any
+from .ffi import FfiPointer
 
 T_ISLObject = TypeVar("T_ISLObject", bound="ISLObject")
 
@@ -28,10 +26,9 @@ class ISLObject(abc.ABC):
     """
 
     __slots__ = ("_handle", "_in_place", "_finalizer")
-
     def __init__(self, handle: FfiPointer) -> None:
-        self._handle = handle
-        self._in_place = False
+        self._handle: FfiPointer = handle
+        self._in_place: bool = False
         self._finalizer = weakref.finalize(self, _run_finalizer, type(self), handle)
 
     @property

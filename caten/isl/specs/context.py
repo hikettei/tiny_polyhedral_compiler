@@ -4,9 +4,9 @@ import contextvars
 from ctypes import c_void_p
 from typing import Callable, Optional
 
-from ..ffi import load_libisl
+from ..ffi import FfiPointer, load_libisl
 from ..func import ISLFunction
-from ..obj import FfiPointer, ISLObject
+from ..obj import ISLObject, InPlace
 from ..qualifier import Give, Null, Qualifier, Take
 
 _lib = load_libisl()
@@ -24,9 +24,9 @@ if _lib is not None:  # pragma: no cover - ctypes metadata setup
 def _missing(*_args):  # pragma: no cover - best effort
     raise RuntimeError("libisl is required but could not be loaded.")
 
-_alloc_prim = getattr(_lib, "isl_ctx_alloc", None) or _missing
-_free_prim = getattr(_lib, "isl_ctx_free", None) or _missing
-_ref_prim = getattr(_lib, "isl_ctx_ref", None)
+_alloc_c = getattr(_lib, "isl_ctx_alloc", None) or _missing
+_free_c = getattr(_lib, "isl_ctx_free", None) or _missing
+_ref_c = getattr(_lib, "isl_ctx_ref", None)
 
 
 class ISLContextError(RuntimeError):
@@ -51,13 +51,13 @@ class ISLContext(ISLObject, Qualifier):
         self._closed = False
 
     def copy_handle(self) -> FfiPointer:
-        if _ref_prim is None:
+        if _ref_c is None:
             raise RuntimeError("libisl missing isl_ctx_ref; cannot duplicate context handle.")
-        return _ref_prim(self.handle)
+        return _ref_c(self.handle)
 
     @classmethod
     def free_handle(cls, handle: FfiPointer) -> None:
-        _free_prim(handle)
+        _free_c(handle)
 
     def __enter__(self) -> "ISLContext":
         if self._token is not None:
@@ -72,7 +72,7 @@ class ISLContext(ISLObject, Qualifier):
             _current_context.reset(self._token)
             self._token = None
         self._closed = True
-        self.free()
+        ctx_free(InPlace(self))
 
     # Qualifier protocol ----------------------------------------------------
     def view(self, value):  # type: ignore[override]
@@ -95,13 +95,21 @@ class ISLContext(ISLObject, Qualifier):
             raise ISLContextError("Context was already closed.")
 
 
+def _ctx_alloc_obj() -> ISLContext:
+    return ISLContext(_alloc_c())
+
+
+def _ctx_free_obj(ctx: ISLContext) -> None:
+    ctx.free()
+
+
 ctx_alloc = ISLFunction.create(
-    _alloc_prim,
+    _ctx_alloc_obj,
     return_=Give(ISLContext),
 )
 
 ctx_free = ISLFunction.create(
-    _free_prim,
+    _ctx_free_obj,
     Take(ISLContext),
     return_=Null(),
 )
