@@ -7,17 +7,11 @@ from .specs.context import ISLContext
 from .qualifier import Qualifier
 
 
-@dataclass
+@dataclass(frozen=True)
 class FunctionSpec:
-    python_name: str
     primitive: Callable[..., Any]
     arguments: Tuple[Qualifier, ...]
     return_spec: Optional[Qualifier]
-
-    def describe(self) -> str:
-        arg_desc = ", ".join(arg.describe() for arg in self.arguments)
-        ret = self.return_spec.describe() if self.return_spec else "param"
-        return f"{self.python_name}({arg_desc}) -> {ret}"
 
 
 class ISLFunction:
@@ -29,14 +23,12 @@ class ISLFunction:
     def create(
         cls,
         primitive: Callable[..., Any],
-        python_name: str,
         *arg_qualifiers: Qualifier,
         return_: Optional[Qualifier] = None,
     ) -> Callable[..., Any]:
-        spec = FunctionSpec(python_name, primitive, tuple(arg_qualifiers), return_)
+        spec = FunctionSpec(primitive, tuple(arg_qualifiers), return_)
         wrapper = cls._build_wrapper(spec)
-        wrapper.__name__ = python_name
-        cls._registry[python_name] = spec
+        cls._registry[wrapper.__name__] = spec
         return wrapper
 
     @classmethod
@@ -45,6 +37,8 @@ class ISLFunction:
 
     @staticmethod
     def _build_wrapper(spec: FunctionSpec) -> Callable[..., Any]:
+        py_name = getattr(spec.primitive, "__name__", spec.primitive.__class__.__name__)
+
         def wrapper(*user_args: Any) -> Any:
             ctx = ISLContext.current(required=True)
             prepared_args: list[Any] = []
@@ -71,4 +65,6 @@ class ISLFunction:
                 result = spec.return_spec.wrap(result, ctx=ctx, name="return")
             return result
 
+        wrapper.__name__ = py_name
+        cls._registry[py_name] = spec
         return wrapper

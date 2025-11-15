@@ -97,13 +97,11 @@ class ISLContext(ISLObject, Qualifier):
 
 ctx_alloc = ISLFunction.create(
     _alloc_prim,
-    "isl_ctx_alloc",
     return_=Give(ISLContext),
 )
 
 ctx_free = ISLFunction.create(
     _free_prim,
-    "isl_ctx_free",
     Take(ISLContext),
     return_=Null(),
 )
