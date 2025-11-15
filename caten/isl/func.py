@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
-from .context import ISLContext
+from .specs.context import ISLContext
 from .qualifier import Qualifier
 
 
