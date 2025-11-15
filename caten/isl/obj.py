@@ -5,15 +5,19 @@ import weakref
 import warnings
 from typing import Any, Type, TypeVar
 
+# ``libisl`` pointers exposed through cffi/ctypes; kept as ``Any`` because the
+# exact type depends on the concrete binding layer.
+FfiPointer = Any
+
 T_ISLObject = TypeVar("T_ISLObject", bound="ISLObject")
 
 class ISLObject(abc.ABC):
-    """GC-reachable wrapper around raw ISL handles.
+    """GC-reachable wrapper around raw libisl handles obtained via FFI.
 
     Slots
     -----
-    _handle : Any | None
-        Opaque handle provided by ``islpy``; ``None`` signals that the wrapper
+    _handle : FfiPointer | None
+        Opaque pointer returned by the C FFI; ``None`` signals that the wrapper
         was consumed or freed.
     _in_place : bool
         Marks whether the next ``Take`` qualifier may steal the handle instead
@@ -24,13 +28,13 @@ class ISLObject(abc.ABC):
     """
 
     __slots__ = ("_handle", "_in_place", "_finalizer")
-    def __init__(self, handle: Any) -> None:
+    def __init__(self, handle: FfiPointer) -> None:
         self._handle = handle
         self._in_place = False
         self._finalizer = weakref.finalize(self, _run_finalizer, type(self), handle)
 
     @property
-    def handle(self) -> Any:
+    def handle(self) -> FfiPointer:
         self._assert_usable()
         return self._handle
 
@@ -59,16 +63,16 @@ class ISLObject(abc.ABC):
             raise RuntimeError("ISLObject handle was already freed.")
 
     @abc.abstractmethod
-    def copy_handle(self) -> Any:
+    def copy_handle(self) -> FfiPointer:
         """Return a new primitive handle cloned from the wrapped object."""
 
     @classmethod
     @abc.abstractmethod
-    def free_handle(cls, handle: Any) -> None:
+    def free_handle(cls, handle: FfiPointer) -> None:
         """Release ``handle`` via the primitive library (e.g., ``isl_set_free``)."""
 
     @classmethod
-    def from_ptr(cls: Type[T_ISLObject], handle: Any) -> T_ISLObject:
+    def from_ptr(cls: Type[T_ISLObject], handle: FfiPointer) -> T_ISLObject:
         """Wrap a raw isl handle in this subclass."""
         return cls(handle)
 
