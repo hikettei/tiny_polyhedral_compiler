@@ -31,7 +31,7 @@ with I.context():
       with P.band("{ A[i, j] -> [(i)] }"):
         with P.band():
           # ...
-    kernel = C.kernel(dom, color=...)
+    kernel = dom.finalize(op_context=...) # Finalize Schedule Construction
     C.auto_schedule(kernel)
     result = C.retrive_kernel(kernel)
     return result
@@ -65,3 +65,4 @@ with I.context():
 - [ ] AutoScheduler Infrastructure
 - [ ] Memory Layout Optimization
 - [ ] ISL Object GC Extension
+- [ ] Ruff, mypy, pytest in CI.

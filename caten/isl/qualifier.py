@@ -3,16 +3,18 @@ from __future__ import annotations
 import abc
 from typing import Any, Callable, Optional
 
-from .context import ISLContext
+from .context import ISLContext, ISLContextError
 from .obj import ISLObject
 
 
 class Qualifier(abc.ABC):
-    """Base descriptor used to annotate ISL function arguments and returns.
+    """Base descriptor for ISL argument/return policy.
 
     Implementations may operate on :class:`ISLObject` instances or raw FFI
     pointers (when wrapping return values directly from ``libisl``).
     """
+
+    requires_argument: bool = True
 
     def __init__(self, target: Optional[type] = None) -> None:
         self.target = target
@@ -88,6 +90,17 @@ class Give(Qualifier):
 class Keep(_ISLObjectQualifier):
     def view(self, obj: ISLObject) -> ISLObject:
         return obj
+
+
+class Context(Qualifier):
+    """Inject the current primitive ISL context (no user argument required)."""
+    requires_argument = False
+    def view(self, value: Any) -> Any:  # type: ignore[override]
+        ctx = ISLContext.current(required=True)
+        prim = ctx.prim
+        if prim is None:
+            raise ISLContextError("ISLContext prim_context_factory must be provided to use Context qualifier.")
+        return prim
 
 
 class Null(Qualifier):

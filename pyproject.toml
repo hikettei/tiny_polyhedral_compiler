@@ -5,5 +5,9 @@ description = "Polyhedral Compiler Infrastructure"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "islpy>=2025.2.5",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=9",
 ]

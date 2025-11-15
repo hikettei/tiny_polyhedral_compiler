@@ -28,6 +28,7 @@ class ISLObject(abc.ABC):
     """
 
     __slots__ = ("_handle", "_in_place", "_finalizer")
+
     def __init__(self, handle: FfiPointer) -> None:
         self._handle = handle
         self._in_place = False
@@ -75,6 +76,7 @@ class ISLObject(abc.ABC):
     def from_ptr(cls: Type[T_ISLObject], handle: FfiPointer) -> T_ISLObject:
         """Wrap a raw isl handle in this subclass."""
         return cls(handle)
+
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         status = "freed" if self._handle is None else hex(id(self._handle))
