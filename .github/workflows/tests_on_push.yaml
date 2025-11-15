@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
-        run: pipx install uv
+        run: pipx install uv ruff mypy pytest
       - name: Install dependencies
         run: uv sync
       - name: Run ruff
