@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 import contextvars
-from ctypes import c_void_p
+from ctypes import c_char_p, c_int, c_void_p
 from types import TracebackType
 from typing import Any, Callable, Optional
 
 from ..ffi import FfiPointer, load_libisl
 from ..func import ISLFunction
 from ..obj import ISLObject
-from ..qualifier import Give, Keep, Null, Qualifier
+from ..qualifier import Give, Keep, Null, Param, Qualifier
 
 _lib = load_libisl()
 
 class ISLContextError(RuntimeError):
     """Raised when ISL operations are attempted without a valid context."""
+
+
+class ISLError(RuntimeError):
+    """Raised when libisl signals an operational error."""
 
 _current_context: contextvars.ContextVar[Optional["ISLContext"]]
 _current_context = contextvars.ContextVar("caten_isl_context", default=None)
@@ -105,3 +109,83 @@ def context(
         raise TypeError("Context factory must return an ISLContext instance.")
     ctx.name = name
     return ctx
+
+
+class _CStringResult(Qualifier):
+    requires_argument = False
+
+    def prepare(self, value: Any, *, ctx: "ISLContext" | None, name: str) -> Any:  # pragma: no cover - never used
+        raise TypeError("CStringResult is only valid for return values.")
+
+    def wrap(self, value: Any, *, ctx: "ISLContext" | None, name: str = "return") -> str | None:  # type: ignore[override]
+        if value is None:
+            return None
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return str(value)
+
+    def as_ctype(self) -> Any:
+        return c_char_p
+
+
+def last_error_details(ctx: ISLContext) -> tuple[str | None, str | None, int | None]:
+    msg = _isl_ctx_last_error_msg(ctx)
+    file = _isl_ctx_last_error_file(ctx)
+    line = _isl_ctx_last_error_line(ctx)
+    if isinstance(line, int) and line >= 0:
+        line_no: int | None = line
+    else:
+        line_no = None
+    return msg, file, line_no
+
+
+def expect_handle(
+    result: Any,
+    *,
+    ctx: ISLContext | None = None,
+    func: str | None = None,
+) -> FfiPointer:
+    if result is None:
+        return _raise_last_error(ctx, func)
+    value = int(result)
+    if value == 0:
+        return _raise_last_error(ctx, func)
+    return value
+
+
+def _raise_last_error(ctx: ISLContext | None, func: str | None) -> FfiPointer:
+    active_ctx = ctx or current(required=True)
+    assert active_ctx is not None
+    msg, file, line = last_error_details(active_ctx)
+    parts: list[str] = []
+    if func:
+        parts.append(func)
+    if msg:
+        parts.append(msg)
+    if file:
+        location = f"{file}:{line}" if line is not None else file
+        parts.append(location)
+    reason = " | ".join(parts) or "libisl reported an unknown error"
+    raise ISLError(reason)
+
+
+_isl_ctx_last_error_msg = ISLFunction.create(
+    "isl_ctx_last_error_msg",
+    Keep(ISLContext),
+    return_=_CStringResult(),
+    lib=_lib,
+)
+
+_isl_ctx_last_error_file = ISLFunction.create(
+    "isl_ctx_last_error_file",
+    Keep(ISLContext),
+    return_=_CStringResult(),
+    lib=_lib,
+)
+
+_isl_ctx_last_error_line = ISLFunction.create(
+    "isl_ctx_last_error_line",
+    Keep(ISLContext),
+    return_=Param(int, ctype=c_int),
+    lib=_lib,
+)

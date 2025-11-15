@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Polyhedral Compiler Infrastructure"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "pytest-cov>=7.0.0",
+]
 
 [project.optional-dependencies]
 test = [
@@ -28,3 +30,7 @@ python_version = "3.11"
 warn_unused_configs = true
 disallow_untyped_defs = true
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+addopts = "--cov=caten --cov=test --cov-report=term-missing --cov-fail-under=95"
+testpaths = ["test"]
