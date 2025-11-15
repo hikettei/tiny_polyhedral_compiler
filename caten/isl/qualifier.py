@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import abc
+from ctypes import c_char_p, c_double, c_float, c_longlong, c_void_p
 from typing import Any, Callable, Optional
 
 from .ffi import FfiPointer
@@ -31,6 +32,10 @@ class Qualifier(abc.ABC):
     def view(self, value: Any) -> Any:
         return value
 
+    @abc.abstractmethod
+    def as_ctype(self):
+        """Return a ctypes type used to auto-configure libisl symbols."""
+
     def _validate_type(self, value: Any, name: str) -> None:
         if self.target is None or value is None:
             return
@@ -59,6 +64,9 @@ class _ISLObjectQualifier(Qualifier):
 
     def view(self, obj: ISLObject) -> ISLObject:
         return obj
+
+    def as_ctype(self):
+        return c_void_p
 
 
 class Take(_ISLObjectQualifier):
@@ -90,6 +98,9 @@ class Give(Qualifier):
             raise TypeError("Give qualifier expects an FFI pointer.")
         return target.from_ptr(value)
 
+    def as_ctype(self):
+        raise TypeError("Give qualifier cannot infer ctypes restype automatically.")
+
 class Keep(_ISLObjectQualifier):
     def view(self, obj: ISLObject) -> ISLObject:
         return obj
@@ -103,13 +114,39 @@ class Null(Qualifier):
             raise TypeError(f"Argument '{name}' must be None to satisfy Null qualifier.")
         return None
 
+    def as_ctype(self):
+        return None
+
+_PY_CTYPE_MAP = {
+    int: c_longlong,
+    float: c_double,
+    str: c_char_p,
+    bytes: c_char_p,
+}
+
+
 class Param(Qualifier):
-    def __init__(self, target: Optional[type] = None, *, converter: Optional[Callable[[Any], Any]] = None) -> None:
+    def __init__(
+        self,
+        target: Optional[type] = None,
+        *,
+        converter: Optional[Callable[[Any], Any]] = None,
+        ctype: Optional[Any] = None,
+    ) -> None:
         super().__init__(target=target)
         self.converter = converter
+        self._ctype = ctype or (target and _PY_CTYPE_MAP.get(target))
 
     def prepare(self, value: Any, *, ctx: ISLContext, name: str) -> Any:
         if self.converter is not None:
             value = self.converter(value)
         self._validate_type(value, name)
         return self.view(value)
+
+    def as_ctype(self):
+        return self._ctype
+
+    def as_ctype(self):
+        return None
+    def as_ctype(self):
+        return c_void_p
