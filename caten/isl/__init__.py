@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from .specs.context import ISLContext, ISLContextError, context
 from .func import ISLFunction
-from .obj import ISLObject, InPlace
+from .obj import InPlace, ISLObject
 from .qualifier import Give, Keep, Null, Param, Qualifier, Take
+from .specs.context import ISLContext, ISLContextError, context
 
 __all__ = [
     "ISLContext",

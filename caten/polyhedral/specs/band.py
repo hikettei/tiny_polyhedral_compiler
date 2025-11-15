@@ -1,5 +1,6 @@
 from caten.polyhedral.schedule_tree import ScheduleTree
 
+
 class Band(ScheduleTree):
     def __init__(self):
         pass

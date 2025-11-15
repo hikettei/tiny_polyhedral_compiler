@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import abc
 import weakref
-import warnings
 from typing import Any, Type, TypeVar
 
 from .ffi import FfiPointer

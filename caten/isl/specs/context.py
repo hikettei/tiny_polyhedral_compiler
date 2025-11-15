@@ -6,8 +6,8 @@ from typing import Callable, Optional
 
 from ..ffi import FfiPointer, load_libisl
 from ..func import ISLFunction
-from ..obj import ISLObject, InPlace
-from ..qualifier import Qualifier, Give, Take, Null, Param, Keep
+from ..obj import ISLObject
+from ..qualifier import Give, Keep, Null, Qualifier
 
 _lib = load_libisl()
 

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import abc
-from ctypes import c_char_p, c_double, c_float, c_longlong, c_void_p
+from ctypes import c_char_p, c_double, c_longlong, c_void_p
 from typing import Any, Callable, Optional
 
 from .ffi import FfiPointer
 from .obj import ISLObject
+
 
 class Qualifier(abc.ABC):
     """Base descriptor for ISL argument/return policy.

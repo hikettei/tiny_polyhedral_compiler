@@ -2,7 +2,7 @@ import pytest
 
 import caten.isl as I
 from caten.isl.ffi import load_libisl
-from caten.isl.specs.context import isl_ctx_alloc, current
+from caten.isl.specs.context import current, isl_ctx_alloc
 
 pytestmark = pytest.mark.skipif(load_libisl() is None, reason="libisl not available")
 
