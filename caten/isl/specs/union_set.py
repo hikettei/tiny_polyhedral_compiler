@@ -305,4 +305,84 @@ _isl_union_set_params = ISLFunction.create(
     lib=_lib,
 )
 
-__all__ = ["UnionSet"]
+_isl_union_set_list_alloc = ISLFunction.create(
+    _lib.isl_union_set_list_alloc,
+    Context(),
+    Param(int, ctype=c_int),
+    return_=Give(lambda: UnionSetList),  # type: ignore[arg-type]
+    lib=_lib,
+)
+
+_isl_union_set_list_from_union_set = ISLFunction.create(
+    _lib.isl_union_set_list_from_union_set,
+    Take(UnionSet),
+    return_=Give(lambda: UnionSetList),  # type: ignore[arg-type]
+    lib=_lib,
+)
+
+_isl_union_set_list_copy = ISLFunction.create(
+    _lib.isl_union_set_list_copy,
+    Keep(lambda: UnionSetList),  # type: ignore[arg-type]
+    return_=Give(lambda: UnionSetList),  # type: ignore[arg-type]
+    lib=_lib,
+)
+
+_isl_union_set_list_free = ISLFunction.create(
+    _lib.isl_union_set_list_free,
+    Take(lambda: UnionSetList),  # type: ignore[arg-type]
+    return_=Null(),
+    lib=_lib,
+)
+
+_isl_union_set_list_add = ISLFunction.create(
+    _lib.isl_union_set_list_add,
+    Take(lambda: UnionSetList),  # type: ignore[arg-type]
+    Take(UnionSet),
+    return_=Give(lambda: UnionSetList),  # type: ignore[arg-type]
+    lib=_lib,
+)
+
+_isl_union_set_list_n_union_set = ISLFunction.create(
+    _lib.isl_union_set_list_n_union_set,
+    Keep(lambda: UnionSetList),  # type: ignore[arg-type]
+    return_=Param(int, ctype=c_int),
+    lib=_lib,
+)
+
+_isl_union_set_list_get_union_set = ISLFunction.create(
+    _lib.isl_union_set_list_get_union_set,
+    Keep(lambda: UnionSetList),  # type: ignore[arg-type]
+    Param(int, ctype=c_int),
+    return_=Give(UnionSet),
+    lib=_lib,
+)
+
+__all__ = ["UnionSet", "UnionSetList"]
+
+
+class UnionSetList(ISLObject):
+    __slots__ = ()
+
+    @classmethod
+    def alloc(cls, ctx: Context, min_size: int = 0) -> "UnionSetList":
+        return _isl_union_set_list_alloc(ctx, min_size)
+
+    @classmethod
+    def from_union_set(cls, uset: "UnionSet") -> "UnionSetList":
+        return _isl_union_set_list_from_union_set(uset)
+
+    def add(self, uset: "UnionSet") -> "UnionSetList":
+        return _isl_union_set_list_add(self, uset)
+
+    def n_union_set(self) -> int:
+        return _isl_union_set_list_n_union_set(self)
+
+    def get(self, pos: int) -> "UnionSet":
+        return _isl_union_set_list_get_union_set(self, pos)
+
+    def copy_handle(self) -> FfiPointer:
+        return _isl_union_set_list_copy(self, return_raw_pointer=True)
+
+    @classmethod
+    def free_handle(cls, handle: FfiPointer) -> None:
+        _isl_union_set_list_free(handle)

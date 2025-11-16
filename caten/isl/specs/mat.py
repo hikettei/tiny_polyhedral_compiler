@@ -37,12 +37,39 @@ class Mat(ISLObject):
     def cols(self) -> int:
         return _isl_mat_cols(self)
 
+    def context(self) -> Context:
+        return _isl_mat_get_ctx(self)
+
     def get_element_si(self, row: int, col: int) -> int:
         val = _isl_mat_get_element_val(self, row, col)
         return val.num_si()
 
+    def get_element_val(self, row: int, col: int) -> Val:
+        return _isl_mat_get_element_val(self, row, col)
+
     def set_element_si(self, row: int, col: int, value: int) -> "Mat":
         return _isl_mat_set_element_si(self, row, col, value)
+
+    def set_element_val(self, row: int, col: int, value: Val) -> "Mat":
+        return _isl_mat_set_element_val(self, row, col, value)
+
+    def rank(self) -> int:
+        return _isl_mat_rank(self)
+
+    def right_inverse(self) -> "Mat":
+        return _isl_mat_right_inverse(self)
+
+    def right_kernel(self) -> "Mat":
+        return _isl_mat_right_kernel(self)
+
+    def row_basis(self) -> "Mat":
+        return _isl_mat_row_basis(self)
+
+    def row_basis_extension(self, other: "Mat") -> "Mat":
+        return _isl_mat_row_basis_extension(self, other)
+
+    def has_linearly_independent_rows(self, other: "Mat") -> bool:
+        return _isl_mat_has_linearly_independent_rows(self, other)
 
     def __repr__(self) -> str:  # pragma: no cover
         try:
@@ -95,6 +122,13 @@ _isl_mat_cols = ISLFunction.create(
     lib=_lib,
 )
 
+_isl_mat_get_ctx = ISLFunction.create(
+    _lib.isl_mat_get_ctx,
+    Keep(Mat),
+    return_=Keep(Context),
+    lib=_lib,
+)
+
 _isl_mat_set_element_si = ISLFunction.create(
     _lib.isl_mat_set_element_si,
     Take(Mat),
@@ -112,6 +146,60 @@ _isl_mat_get_element_val = ISLFunction.create(
     Param(int, ctype=c_int),
     Param(int, ctype=c_int),
     return_=Give(Val),
+    lib=_lib,
+)
+
+_isl_mat_set_element_val = ISLFunction.create(
+    _lib.isl_mat_set_element_val,
+    Take(Mat),
+    Param(int, ctype=c_int),
+    Param(int, ctype=c_int),
+    Take(Val),
+    return_=Give(Mat),
+    lib=_lib,
+)
+
+_isl_mat_rank = ISLFunction.create(
+    _lib.isl_mat_rank,
+    Keep(Mat),
+    return_=Param(int, ctype=c_int),
+    lib=_lib,
+)
+
+_isl_mat_right_inverse = ISLFunction.create(
+    _lib.isl_mat_right_inverse,
+    Take(Mat),
+    return_=Give(Mat),
+    lib=_lib,
+)
+
+_isl_mat_right_kernel = ISLFunction.create(
+    _lib.isl_mat_right_kernel,
+    Take(Mat),
+    return_=Give(Mat),
+    lib=_lib,
+)
+
+_isl_mat_row_basis = ISLFunction.create(
+    _lib.isl_mat_row_basis,
+    Take(Mat),
+    return_=Give(Mat),
+    lib=_lib,
+)
+
+_isl_mat_row_basis_extension = ISLFunction.create(
+    _lib.isl_mat_row_basis_extension,
+    Take(Mat),
+    Take(Mat),
+    return_=Give(Mat),
+    lib=_lib,
+)
+
+_isl_mat_has_linearly_independent_rows = ISLFunction.create(
+    _lib.isl_mat_has_linearly_independent_rows,
+    Keep(Mat),
+    Keep(Mat),
+    return_=Param(bool, ctype=c_int),
     lib=_lib,
 )
 

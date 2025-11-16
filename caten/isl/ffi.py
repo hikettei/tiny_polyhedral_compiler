@@ -16,6 +16,13 @@ def _candidate_paths() -> list[str]:
     candidates = []
     if env_path:
         candidates.append(env_path)
+    # Prefer common Homebrew path (Apple Silicon / Intel)
+    candidates.extend(
+        [
+            "/opt/homebrew/lib/libisl.dylib",
+            "/usr/local/lib/libisl.dylib",
+        ]
+    )
     libname = find_library("isl")
     if libname:
         candidates.append(libname)
