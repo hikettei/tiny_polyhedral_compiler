@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Tuple
 
-from .qualifier import Qualifier
+from .qualifier import Null, Param, Qualifier
 from .ffi import load_libisl
 
 @dataclass(frozen=True)
@@ -65,8 +65,9 @@ class ISLFunction:
             result = spec.primitive(*prepared_args)
             # ISL returned null_pointer while spec is defined as pointer? => Error
             if spec.return_spec is not None and result is None:
-                ctx.raise_isl_error()
-            if spec.return_spec is not None and return_raw_pointer is not None:
+                if not isinstance(spec.return_spec, (Null, Param)):
+                    ctx.raise_isl_error()
+            if spec.return_spec is not None and not return_raw_pointer:
                 result = spec.return_spec.wrap(result, ctx=ctx, name="return")
             return result
         wrapper.__name__ = py_name

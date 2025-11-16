@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import abc
-from ctypes import c_char_p, c_double, c_longlong, c_void_p
+from ctypes import c_char_p, c_double, c_int, c_longlong, c_void_p
 from typing import TYPE_CHECKING, Any, Optional
 
 from .ffi import FfiPointer
@@ -62,22 +62,25 @@ class _ISLObjectQualifier(Qualifier):
         value._assert_usable()
         return value
 
-    def prepare(self, value: Any, *, ctx: "Context" | None, name: str) -> ISLObject:
+    def prepare(self, value: Any, *, ctx: "Context" | None, name: str) -> FfiPointer:
         obj = self._expect_isl_object(value, name)
         return self.view(obj)
 
-    def view(self, obj: ISLObject) -> ISLObject:
-        return obj
+    def view(self, obj: ISLObject) -> FfiPointer:
+        return obj.handle
 
     def as_ctype(self) -> Any:
         return c_void_p
 
 class Take(_ISLObjectQualifier):
-    def view(self, obj: ISLObject) -> ISLObject:
+    def view(self, obj: ISLObject) -> FfiPointer:
         if getattr(obj, "_in_place", False):
             obj._in_place = False
-            return obj
-        return obj.copy()
+            obj._finalizer.detach()
+            handle = obj.handle
+            obj._handle = None
+            return handle
+        return obj.copy_handle()
 
 class Give(Qualifier):
     """Convert raw libisl pointers into freshly wrapped :class:`ISLObject`s."""
@@ -105,8 +108,8 @@ class Give(Qualifier):
         return c_void_p
 
 class Keep(_ISLObjectQualifier):
-    def view(self, obj: ISLObject) -> ISLObject:
-        return obj
+    def view(self, obj: ISLObject) -> FfiPointer:
+        return obj.handle
 
 class Null(Qualifier):
     def __init__(self) -> None:
@@ -126,6 +129,7 @@ class Param(Qualifier):
         float: c_double,
         str: c_char_p,
         bytes: c_char_p,
+        bool: c_int,
     }
     def __init__(
         self,
@@ -137,6 +141,10 @@ class Param(Qualifier):
         self._ctype = ctype or (target and self._PY_CTYPE_MAP.get(target))
     
     def wrap(self, value: Any, *, ctx: "Context" | None, name: str = "return") -> Any:
+        if self.target is bool and isinstance(value, int):
+            if value == -1 and ctx is not None:
+                ctx.raise_isl_error()
+            return bool(value)
         if isinstance(value, bytes) and self.target is str:
             value = value.decode("utf-8")
         self._validate_type(value, name)
@@ -144,6 +152,8 @@ class Param(Qualifier):
     
     def prepare(self, value: Any, *, ctx: "ISLContext" | None, name: str) -> Any:
         self._validate_type(value, name)
+        if self.target is bool:
+            return int(bool(value))
         if isinstance(value, str):
             value = value.encode("utf-8")
         return self.view(value)

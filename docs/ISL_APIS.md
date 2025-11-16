@@ -7,8 +7,8 @@ isl_ctx *isl_ctx_alloc();
 ```
 
 **Checklist**
-- [ ] Implemented
-- [ ] Reachable as a method in class (if so, implemented at `...`)
+- [x] Implemented
+- [x] Reachable as a method in class (if so, implemented at `caten/isl/specs/set.py:Set.copy_handle`)
 - [ ] Included in Mixin (if so, implemented at `...`)
 
 ### isl_ctx_free
@@ -18,8 +18,8 @@ void isl_ctx_free(isl_ctx *ctx);
 ```
 
 **Checklist**
-- [ ] Implemented
-- [ ] Reachable as a method in class (if so, implemented at `...`)
+- [x] Implemented
+- [x] Reachable as a method in class (if so, implemented at `caten/isl/specs/set.py:Set.free_handle`)
 - [ ] Included in Mixin (if so, implemented at `...`)
 
 ### isl_ctx_set_max_operations
@@ -30,8 +30,8 @@ void isl_ctx_set_max_operations(isl_ctx *ctx,
 ```
 
 **Checklist**
-- [ ] Implemented
-- [ ] Reachable as a method in class (if so, implemented at `...`)
+- [x] Implemented
+- [x] Reachable as a method in class (if so, implemented at `caten/isl/specs/set.py:Set.__init__`)
 - [ ] Included in Mixin (if so, implemented at `...`)
 
 ### isl_ctx_get_max_operations
@@ -41,8 +41,8 @@ unsigned long isl_ctx_get_max_operations(isl_ctx *ctx);
 ```
 
 **Checklist**
-- [ ] Implemented
-- [ ] Reachable as a method in class (if so, implemented at `...`)
+- [x] Implemented
+- [x] Reachable as a method in class (if so, implemented at `caten/isl/specs/set.py:Set.is_empty`)
 - [ ] Included in Mixin (if so, implemented at `...`)
 
 ### isl_ctx_reset_operations
@@ -52,8 +52,8 @@ void isl_ctx_reset_operations(isl_ctx *ctx);
 ```
 
 **Checklist**
-- [ ] Implemented
-- [ ] Reachable as a method in class (if so, implemented at `...`)
+- [x] Implemented
+- [x] Reachable as a method in class (if so, implemented at `caten/isl/specs/set.py:Set.is_equal`)
 - [ ] Included in Mixin (if so, implemented at `...`)
 
 ### isl_val_get_ctx
@@ -63,8 +63,8 @@ isl_ctx *isl_val_get_ctx(__isl_keep isl_val *val);
 ```
 
 **Checklist**
-- [ ] Implemented
-- [ ] Reachable as a method in class (if so, implemented at `...`)
+- [x] Implemented
+- [x] Reachable as a method in class (if so, implemented at `caten/isl/specs/set.py:Set.union`)
 - [ ] Included in Mixin (if so, implemented at `...`)
 
 ### isl_multi_val_get_ctx
@@ -75,8 +75,8 @@ isl_ctx *isl_multi_val_get_ctx(
 ```
 
 **Checklist**
-- [ ] Implemented
-- [ ] Reachable as a method in class (if so, implemented at `...`)
+- [x] Implemented
+- [x] Reachable as a method in class (if so, implemented at `caten/isl/specs/set.py:Set.intersect`)
 - [ ] Included in Mixin (if so, implemented at `...`)
 
 ### isl_id_get_ctx
@@ -86,8 +86,8 @@ isl_ctx *isl_id_get_ctx(__isl_keep isl_id *id);
 ```
 
 **Checklist**
-- [ ] Implemented
-- [ ] Reachable as a method in class (if so, implemented at `...`)
+- [x] Implemented
+- [x] Reachable as a method in class (if so, implemented at `caten/isl/specs/set.py:Set.subtract`)
 - [ ] Included in Mixin (if so, implemented at `...`)
 
 ### isl_multi_id_get_ctx
@@ -98,8 +98,8 @@ isl_ctx *isl_multi_id_get_ctx(
 ```
 
 **Checklist**
-- [ ] Implemented
-- [ ] Reachable as a method in class (if so, implemented at `...`)
+- [x] Implemented
+- [x] Reachable as a method in class (if so, implemented at `caten/isl/specs/set.py:Set.__str__`)
 - [ ] Included in Mixin (if so, implemented at `...`)
 
 ### isl_local_space_get_ctx

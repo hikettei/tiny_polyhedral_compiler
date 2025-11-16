@@ -39,13 +39,19 @@ class Context(ISLObject, Qualifier):
         _lib.isl_ctx_free(handle)
 
     def raise_isl_error(self) -> None:
+        if getattr(self, "_raising", False):  # pragma: no cover - defensive
+            raise ISLError("Nested ISL error reporting failed.")
+        self._raising = True
         parts: list[str] = []
-        if (msg := _isl_ctx_last_error_msg()):
-            parts.append(msg)
-        if (file := _isl_ctx_last_error_file()):
-            line = _isl_ctx_last_error_line()
-        parts.append(f"{file}:{line}" if line is not None else file)
-        raise ISLError(" | ".join(parts))
+        try:
+            if (msg := _isl_ctx_last_error_msg()):
+                parts.append(msg)
+            if (file := _isl_ctx_last_error_file()):
+                line = _isl_ctx_last_error_line()
+                parts.append(f"{file}:{line}" if line is not None else file)
+        finally:
+            self._raising = False
+        raise ISLError(" | ".join(parts) if parts else "Unknown ISL error")
 
     def __enter__(self) -> "Context":
         if self._token is not None:
