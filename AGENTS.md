@@ -47,11 +47,11 @@
 - Map: ✅
 - UnionMap: ✅
 - Aff / PwAff / MultiAff / PwMultiAff: ✅
-- MultiVal: ⏳
-- MultiUnionPwAff / UnionPwAff / UnionPwMultiAff / MultiUnionPwAff: ⏳
-- ScheduleConstraint / Schedule / ScheduleNode: ⏳
+- MultiVal: ✅
+- MultiUnionPwAff / UnionPwAff / UnionPwMultiAff / MultiUnionPwAff: ✅
+- ScheduleConstraint / Schedule / ScheduleNode: ✅（Schedule/Node/Band最小ラッパ）
 - UnionAccessInfo / UnionFlow: ⏳
-- ASTExpr / ASTNode / ASTBuild: ⏳
-- Mat: ⏳
+- ASTExpr / ASTNode / ASTBuild: ✅
+- Mat: ✅
 
-次に着手する対象: MultiVal → MultiUnionPwAff / UnionPwAff / UnionPwMultiAff / MultiUnionPwAff の順で進行。
+次に着手する対象: UnionAccessInfo / UnionFlow を残処理。

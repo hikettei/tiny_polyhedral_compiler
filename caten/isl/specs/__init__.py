@@ -1,16 +1,20 @@
 from .aff import Aff, MultiAff, PwAff, PwMultiAff
+from .ast import ASTBuild, ASTExpr, ASTNode
 from .basic_map import BasicMap
 from .basic_set import BasicSet
 from .constraint import Constraint, EqualityConstraint, InequalityConstraint, ISLDimType
 from .context import Context, ISLContextError, ISLError, context, current
 from .id import Id
 from .map import Map
+from .mat import Mat
 from .multi_val import MultiVal
+from .schedule import Schedule, ScheduleNode, ScheduleNodeBand
 from .set import Set
 from .space import LocalSpace, Space
 from .union_map import UnionMap
 from .union_pw_aff import MultiUnionPwAff, UnionPwAff, UnionPwMultiAff
 from .union_set import UnionSet
+from .val import Val
 
 __all__ = [
     "Context",
@@ -33,6 +37,15 @@ __all__ = [
     "UnionPwAff",
     "UnionPwMultiAff",
     "MultiUnionPwAff",
+    "Val",
+    "ASTExpr",
+    "ASTNode",
+    "ASTBuild",
+    "Mat",
+    "Schedule",
+    "ScheduleNode",
+    "ScheduleNodeBand",
+    "Mat",
     "Space",
     "LocalSpace",
     "Set",
