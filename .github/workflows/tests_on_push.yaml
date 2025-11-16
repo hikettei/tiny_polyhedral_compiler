@@ -11,7 +11,7 @@ on:
 
 jobs:
   UnitTests:
-    name: ${{ matrix.backend }}) Unittests
+    name: (${{ matrix.os }}) Unittests
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
