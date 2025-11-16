@@ -33,3 +33,25 @@
 - 全関数に対しテストを用意し、ruff / mypy / pytest を定期実行。例: `uv run python -m pytest ./tests` 等。
 - `./docs/ISL_APIS.md` に列挙された全 API 完了まで中断不可。
 - 既存コードへの余計な修正禁止。Set 単体で完結する API は `caten/isl/specs/set.py` 内で完結させる。UnionSet 依存 API は関数名だけ置いて保留可。自動生成手法は禁止。
+- 進捗と作業計画を常に本ファイルに記録し更新すること（型ごとに完了状況や今後の順番を明記）。最新の計画がここに存在する状態を保つ。
+
+## 作業計画と進捗 (2025-11-16)
+優先順とステータス（✅完了 / 🚧着手中 / ⏳未着手）
+- Identifier / Id: ✅
+- Space / LocalSpace: ✅（基本API：alloc/read/dim/tuple_name/local_space等）
+- Constraint / Equality-Constraint / Inequality-Constraint: ✅
+- BasicSet: ✅
+- Set: ✅（基本API・bool対応済）
+- UnionSet: ✅（シンボル未リンク分はコメントアウト／NotImplemented）
+- BasicMap: ⏳
+- Map: ⏳
+- UnionMap: ⏳
+- Aff / PwAff / MultiAff / PwMultiAff: ⏳
+- MultiVal: ⏳
+- MultiUnionPwAff / UnionPwAff / UnionPwMultiAff / MultiUnionPwAff: ⏳
+- ScheduleConstraint / Schedule / ScheduleNode: ⏳
+- UnionAccessInfo / UnionFlow: ⏳
+- ASTExpr / ASTNode / ASTBuild: ⏳
+- Mat: ⏳
+
+次に着手する対象: BasicMap → Map → UnionMap の順で進行。

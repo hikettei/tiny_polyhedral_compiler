@@ -4,7 +4,7 @@ import caten.isl as I
 from caten.isl.ffi import load_libisl
 from caten.isl.specs.context import current, isl_ctx_alloc
 
-pytestmark = pytest.mark.skipif(load_libisl() is None, reason="libisl not available")
+load_libisl()  # ensure libisl present; test assumes dependency
 
 
 def test_ctx_alloc_free_roundtrip() -> None:

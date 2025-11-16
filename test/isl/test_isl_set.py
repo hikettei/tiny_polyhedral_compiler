@@ -3,13 +3,7 @@ import pytest
 import caten.isl as I
 from caten.isl.ffi import load_libisl
 
-try:
-    load_libisl()
-    HAS_ISL = True
-except RuntimeError:
-    HAS_ISL = False
-
-pytestmark = pytest.mark.skipif(not HAS_ISL, reason="libisl not available")
+load_libisl()  # hard dependency
 
 
 def test_set_copy_and_free() -> None:
