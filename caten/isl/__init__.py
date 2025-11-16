@@ -3,12 +3,11 @@ from __future__ import annotations
 from .func import ISLFunction
 from .obj import InPlace, ISLObject
 from .qualifier import Give, Keep, Null, Param, Qualifier, Take
-from .specs import ISLContext, ISLContextError, ISLError, Set, context, current
+from .specs import Context, ISLContextError, Set, context, current
 
 __all__ = [
-    "ISLContext",
+    "Context",
     "ISLContextError",
-    "ISLError",
     "context",
     "current",
     "Set",
@@ -16,6 +15,7 @@ __all__ = [
     "ISLObject",
     "InPlace",
     "Qualifier",
+    "Context",
     "Take",
     "Give",
     "Keep",

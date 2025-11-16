@@ -1,10 +1,10 @@
-from .context import ISLContext, ISLContextError, ISLError, context, current
+from .context import Context, ISLError, ISLContextError, context, current
 from .set import Set
 
 __all__ = [
-    "ISLContext",
-    "ISLContextError",
+    "Context",
     "ISLError",
+    "ISLContextError",
     "Set",
     "context",
     "current",

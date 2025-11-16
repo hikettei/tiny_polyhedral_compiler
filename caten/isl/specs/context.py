@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import contextvars
-from ctypes import c_char_p, c_int, c_void_p
+from ctypes import c_void_p
 from types import TracebackType
 from typing import Any, Callable, Optional
 
@@ -12,24 +12,23 @@ from ..qualifier import Give, Keep, Null, Param, Qualifier
 
 _lib = load_libisl()
 
-class ISLContextError(RuntimeError):
-    """Raised when ISL operations are attempted without a valid context."""
-
-
 class ISLError(RuntimeError):
     """Raised when libisl signals an operational error."""
 
-_current_context: contextvars.ContextVar[Optional["ISLContext"]]
+class ISLContextError(RuntimeError):
+    """Raised when ISL operations are attempted without a valid context."""
+
+_current_context: contextvars.ContextVar[Optional["Context"]]
 _current_context = contextvars.ContextVar("caten_isl_context", default=None)
 
-class ISLContext(ISLObject, Qualifier):
+class Context(ISLObject, Qualifier):
     requires_argument = False
     __slots__ = ("name", "_token", "_closed")
-    def __init__(self, handle: FfiPointer) -> None:
+    def __init__(self, handle: Optional[FfiPointer] = None) -> None:
         ISLObject.__init__(self, handle)
         Qualifier.__init__(self)
         self.name = "isl"
-        self._token: contextvars.Token[Optional["ISLContext"]] | None = None
+        self._token: contextvars.Token[Optional["Context"]] | None = None
         self._closed = False
 
     def copy_handle(self) -> FfiPointer:
@@ -37,9 +36,18 @@ class ISLContext(ISLObject, Qualifier):
 
     @classmethod
     def free_handle(cls, handle: FfiPointer) -> None:
-        pass # TODO: _lib.isl_ctx_free(handle)
+        pass #isl_ctx_free()
 
-    def __enter__(self) -> "ISLContext":
+    def raise_isl_error(self) -> None:
+        parts: list[str] = []
+        if (msg := _isl_ctx_last_error_msg(self)):
+            parts.append(msg)
+        if (file := _isl_ctx_last_error_file(self)):
+            line = _isl_ctx_last_error_line(self)
+        parts.append(f"{file}:{line}" if line is not None else file)
+        raise ISLError(" | ".join(parts))
+
+    def __enter__(self) -> "Context":
         if self._token is not None:
             raise ISLContextError("Context is already active on this instance.")
         if self._closed:
@@ -63,7 +71,6 @@ class ISLContext(ISLObject, Qualifier):
         if value is not None:
             raise TypeError("Context qualifier does not accept positional arguments.")
         ctx = current(required=True)
-        assert ctx is not None
         return ctx.handle
 
     def ensure_active(self) -> None:
@@ -76,23 +83,23 @@ class ISLContext(ISLObject, Qualifier):
         return c_void_p
 
     @classmethod
-    def alloc(cls) -> "ISLContext":
+    def alloc(cls) -> "Context":
         return isl_ctx_alloc()
 
 isl_ctx_alloc = ISLFunction.create(
     "isl_ctx_alloc",
-    return_=Give(ISLContext),
+    return_=Give(Context),
     lib=_lib,
 )
 
 isl_ctx_free = ISLFunction.create(
     "isl_ctx_free",
-    Keep(ISLContext),
+    Context(),
     return_=Null(),
     lib=_lib,
 )
 
-def current(*, required: bool = False) -> Optional[ISLContext]:
+def current(*, required: bool = False) -> Optional[Context]:
     ctx = _current_context.get()
     if ctx is None and required:
         raise ISLContextError("No active ISL context; wrap code with `with I.context():`.")
@@ -100,92 +107,33 @@ def current(*, required: bool = False) -> Optional[ISLContext]:
 
 def context(
     *,
-    prim_context_factory: Optional[Callable[[], ISLContext]] = None,
+    prim_context_factory: Optional[Callable[[], Context]] = None,
     name: str = "isl",
-) -> ISLContext:
+) -> Context:
     factory = prim_context_factory or isl_ctx_alloc
     ctx = factory()
-    if not isinstance(ctx, ISLContext):
-        raise TypeError("Context factory must return an ISLContext instance.")
+    if not isinstance(ctx, Context):
+        raise TypeError("Context factory must return an Context instance.")
     ctx.name = name
     return ctx
 
-
-class _CStringResult(Qualifier):
-    requires_argument = False
-
-    def prepare(self, value: Any, *, ctx: "ISLContext" | None, name: str) -> Any:  # pragma: no cover - never used
-        raise TypeError("CStringResult is only valid for return values.")
-
-    def wrap(self, value: Any, *, ctx: "ISLContext" | None, name: str = "return") -> str | None:  # type: ignore[override]
-        if value is None:
-            return None
-        if isinstance(value, bytes):
-            return value.decode("utf-8", errors="replace")
-        return str(value)
-
-    def as_ctype(self) -> Any:
-        return c_char_p
-
-
-def last_error_details(ctx: ISLContext) -> tuple[str | None, str | None, int | None]:
-    msg = _isl_ctx_last_error_msg(ctx)
-    file = _isl_ctx_last_error_file(ctx)
-    line = _isl_ctx_last_error_line(ctx)
-    if isinstance(line, int) and line >= 0:
-        line_no: int | None = line
-    else:
-        line_no = None
-    return msg, file, line_no
-
-
-def expect_handle(
-    result: Any,
-    *,
-    ctx: ISLContext | None = None,
-    func: str | None = None,
-) -> FfiPointer:
-    if result is None:
-        return _raise_last_error(ctx, func)
-    value = int(result)
-    if value == 0:
-        return _raise_last_error(ctx, func)
-    return value
-
-
-def _raise_last_error(ctx: ISLContext | None, func: str | None) -> FfiPointer:
-    active_ctx = ctx or current(required=True)
-    assert active_ctx is not None
-    msg, file, line = last_error_details(active_ctx)
-    parts: list[str] = []
-    if func:
-        parts.append(func)
-    if msg:
-        parts.append(msg)
-    if file:
-        location = f"{file}:{line}" if line is not None else file
-        parts.append(location)
-    reason = " | ".join(parts) or "libisl reported an unknown error"
-    raise ISLError(reason)
-
-
 _isl_ctx_last_error_msg = ISLFunction.create(
     "isl_ctx_last_error_msg",
-    Keep(ISLContext),
-    return_=_CStringResult(),
+    Context(),
+    return_=Param(str),
     lib=_lib,
 )
 
 _isl_ctx_last_error_file = ISLFunction.create(
     "isl_ctx_last_error_file",
-    Keep(ISLContext),
-    return_=_CStringResult(),
+    Context(),
+    return_=Param(str),
     lib=_lib,
 )
 
 _isl_ctx_last_error_line = ISLFunction.create(
     "isl_ctx_last_error_line",
-    Keep(ISLContext),
-    return_=Param(int, ctype=c_int),
+    Context(),
+    return_=Param(int),
     lib=_lib,
 )

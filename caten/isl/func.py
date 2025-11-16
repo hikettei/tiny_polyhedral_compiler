@@ -5,7 +5,6 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from .qualifier import Qualifier
 
-
 @dataclass(frozen=True)
 class FunctionSpec:
     primitive: Callable[..., Any]
@@ -61,10 +60,13 @@ class ISLFunction:
             else:
                 raise TypeError(f"Too many arguments for {py_name}.")
             result = spec.primitive(*prepared_args)
+            # ISL returned null_pointer while spec is defined as pointer? => ERror
+            if spec.return_spec is not None and result is None:
+                ctx.raise_isl_error()
+
             if spec.return_spec is not None:
                 result = spec.return_spec.wrap(result, ctx=ctx, name="return")
             return result
-
         wrapper.__name__ = py_name
         return wrapper
 

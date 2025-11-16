@@ -8,7 +8,7 @@ from .ffi import FfiPointer
 from .obj import ISLObject
 
 if TYPE_CHECKING:  # pragma: no cover
-    from .specs.context import ISLContext
+    from .specs.context import Context
 
 
 class Qualifier(abc.ABC):
@@ -22,11 +22,11 @@ class Qualifier(abc.ABC):
     def __init__(self, target: Optional[type] = None) -> None:
         self.target = target
 
-    def prepare(self, value: Any, *, ctx: "ISLContext" | None, name: str) -> Any:
+    def prepare(self, value: Any, *, ctx: "Context" | None, name: str) -> Any:
         self._validate_type(value, name)
         return self.view(value)
 
-    def wrap(self, value: Any, *, ctx: "ISLContext" | None, name: str = "return") -> Any:
+    def wrap(self, value: Any, *, ctx: "Context" | None, name: str = "return") -> Any:
         self._validate_type(value, name)
         return self.view(value)
 
@@ -62,7 +62,7 @@ class _ISLObjectQualifier(Qualifier):
         value._assert_usable()
         return value
 
-    def prepare(self, value: Any, *, ctx: "ISLContext" | None, name: str) -> ISLObject:
+    def prepare(self, value: Any, *, ctx: "Context" | None, name: str) -> ISLObject:
         obj = self._expect_isl_object(value, name)
         return self.view(obj)
 
@@ -85,10 +85,10 @@ class Give(Qualifier):
     def __init__(self, target: Optional[type] = None) -> None:
         super().__init__(target=target)
 
-    def prepare(self, value: Any, *, ctx: "ISLContext" | None, name: str) -> ISLObject:  # type: ignore[override]
+    def prepare(self, value: Any, *, ctx: "Context" | None, name: str) -> ISLObject:  # type: ignore[override]
         return self.view(value)
 
-    def wrap(self, value: Any, *, ctx: "ISLContext" | None, name: str = "return") -> ISLObject:  # type: ignore[override]
+    def wrap(self, value: Any, *, ctx: "Context" | None, name: str = "return") -> ISLObject:  # type: ignore[override]
         return self.view(value)
 
     def view(self, value: Any) -> ISLObject:
@@ -131,16 +131,12 @@ class Param(Qualifier):
         self,
         target: Optional[type] = None,
         *,
-        converter: Optional[Callable[[Any], Any]] = None,
         ctype: Optional[Any] = None,
     ) -> None:
         super().__init__(target=target)
-        self.converter = converter
         self._ctype = ctype or (target and self._PY_CTYPE_MAP.get(target))
 
     def prepare(self, value: Any, *, ctx: "ISLContext" | None, name: str) -> Any:
-        if self.converter is not None:
-            value = self.converter(value)
         self._validate_type(value, name)
         return self.view(value)
 
