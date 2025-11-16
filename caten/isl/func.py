@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from .qualifier import Qualifier
+from .ffi import load_libisl
 
 @dataclass(frozen=True)
 class FunctionSpec:
@@ -22,8 +23,10 @@ class ISLFunction:
         primitive: Any,
         *arg_qualifiers: Qualifier,
         return_: Optional[Qualifier] = None,
-        lib: Optional[Any] = None,
+        lib: Optional[Any] = load_libisl(),
     ) -> Callable[..., Any]:
+        assert lib is not None, "ISLFunction requires lib"
+        assert return_ is not None, "return_ is required"
         func = cls._resolve_and_configure(primitive, lib, tuple(arg_qualifiers), return_)
         py_name = getattr(func, "__name__", func.__class__.__name__)
         spec = FunctionSpec(func, tuple(arg_qualifiers), return_)
@@ -60,12 +63,14 @@ class ISLFunction:
             else:
                 raise TypeError(f"Too many arguments for {py_name}.")
             result = spec.primitive(*prepared_args)
-            # ISL returned null_pointer while spec is defined as pointer? => ERror
+            # ISL returned null_pointer while spec is defined as pointer? => Error
             if spec.return_spec is not None and result is None:
                 ctx.raise_isl_error()
-
+            print("Wrapping")
+            print(spec.return_spec)
             if spec.return_spec is not None:
                 result = spec.return_spec.wrap(result, ctx=ctx, name="return")
+            print(result)
             return result
         wrapper.__name__ = py_name
         return wrapper
@@ -83,12 +88,7 @@ class ISLFunction:
             primitive = getattr(lib, primitive)
         elif lib is not None:
             primitive = getattr(lib, getattr(primitive, "__name__", primitive))
-        if hasattr(primitive, "argtypes") and not getattr(primitive, "argtypes", None):
-            argtypes = [q.as_ctype() for q in arguments]
-            primitive.argtypes = [t for t in argtypes if t is not None]
-        if (hasattr(primitive, "restype") and
-            getattr(primitive, "restype", None) is None and return_spec):
-            restype = return_spec.as_ctype()
-            if restype is not None:
-                primitive.restype = restype
+
+        primitive.argtypes = [q.as_ctype() for q in arguments]
+        primitive.restype = return_spec.as_ctype()                
         return primitive

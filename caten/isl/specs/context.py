@@ -8,7 +8,7 @@ from typing import Any, Callable, Optional
 from ..ffi import FfiPointer, load_libisl
 from ..func import ISLFunction
 from ..obj import ISLObject
-from ..qualifier import Give, Keep, Null, Param, Qualifier
+from ..qualifier import Give, Null, Param, Qualifier
 
 _lib = load_libisl()
 
@@ -70,8 +70,7 @@ class Context(ISLObject, Qualifier):
     def view(self, value: Any) -> FfiPointer:  # type: ignore[override]
         if value is not None:
             raise TypeError("Context qualifier does not accept positional arguments.")
-        ctx = current(required=True)
-        return ctx.handle
+        return current(required=True).handle
 
     def ensure_active(self) -> None:
         if self._token is None:

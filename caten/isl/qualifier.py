@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import abc
 from ctypes import c_char_p, c_double, c_longlong, c_void_p
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from .ffi import FfiPointer
 from .obj import ISLObject
@@ -138,6 +138,8 @@ class Param(Qualifier):
 
     def prepare(self, value: Any, *, ctx: "ISLContext" | None, name: str) -> Any:
         self._validate_type(value, name)
+        if isinstance(value, str):
+            value = value.encode("utf-8")
         return self.view(value)
 
     def as_ctype(self) -> Any | None:
