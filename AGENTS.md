@@ -43,10 +43,10 @@
 - BasicSet: ✅
 - Set: ✅（基本API・bool対応済）
 - UnionSet: ✅（シンボル未リンク分はコメントアウト／NotImplemented）
-- BasicMap: ⏳
-- Map: ⏳
-- UnionMap: ⏳
-- Aff / PwAff / MultiAff / PwMultiAff: ⏳
+- BasicMap: ✅
+- Map: ✅
+- UnionMap: ✅
+- Aff / PwAff / MultiAff / PwMultiAff: ✅
 - MultiVal: ⏳
 - MultiUnionPwAff / UnionPwAff / UnionPwMultiAff / MultiUnionPwAff: ⏳
 - ScheduleConstraint / Schedule / ScheduleNode: ⏳
@@ -54,4 +54,4 @@
 - ASTExpr / ASTNode / ASTBuild: ⏳
 - Mat: ⏳
 
-次に着手する対象: BasicMap → Map → UnionMap の順で進行。
+次に着手する対象: MultiVal → MultiUnionPwAff / UnionPwAff / UnionPwMultiAff / MultiUnionPwAff の順で進行。
