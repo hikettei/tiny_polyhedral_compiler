@@ -13,3 +13,23 @@
 - Module exports: avoid defining `__all__`; instead, expose the intended public symbols by importing them in the package-level `__init__.py` for each directory, so downstream code can rely solely on `import caten.isl as I` and reference everything as `I.context`, `I.Set`, `I.Take`, … without touching submodules directly.
 - Testing allowance: lightweight test doubles (e.g., in `test/test_isl_gc.py`) may define minimal `isl_set`-like functions/objects to validate GC behavior without bringing real `islpy` bindings.
 - Documentation: adopt **Sphinx** for project-wide docs, and ensure new public classes/methods include meaningful docstrings so Sphinx autodoc output remains useful.
+
+## Wrapper Construction Instruction
+- Think in English, answer in Japanese.
+- 作業はデータ型ごとに分割（Set, UnionSet …）。コード自動生成は禁止。`./caten/isl/gen/*.json` の Spec を手作業で確認し、`./docs/ISL_APIS.md` のチェックボックスを実装完了ごとに更新。
+- Wrapper は必ず `ISLFunction.create` を経由し、`lib` に関数定義を直接挿入しない。メソッド名は `isl_` プレフィックスやオブジェクト名を削除してクラスメソッドから到達可能にする（例: `isl_union_map_add_union` → `add`）。
+- Set のみで完結する API は `caten/isl/specs/set.py` に集約。UnionSet 依存 API は名称だけ残し未実装可。Constraint 依存 API も未実装で良いが場所はここに置かない。既存コードへ不要な変更を加えない。
+- `Set` の文字列表現は `_isl_set_to_str` を用いた `__str__`/`__repr__` で整形（他クラスも同習慣を踏襲）。
+- `isl_set_wrapped_reverse` のような未リンクシンボル向けに `_prim` のような動的ラッパーを追加しない。存在しない場合は実装をコメントアウトするか `NotImplementedError` を返す。
+- Qualifier `Param` に `bool` を追加し、`isl_bool` の -1 は `ctx.raise_isl_error()` とする。`_as_bool` のような外部ヘルパは不要。
+- 返り値が NULL になり得る `Param` ではエラーチェックをしないが、`Null` 以外で None が返った場合はコンテキストがあればエラーを挙げる。
+- コメントや docstring は日本語禁止（コード中）。説明は英語で。
+- ruff / mypy / pytest を定期実行して整合を確認すること。代表コマンド例:
+  - `UV_CACHE_DIR=./.uv-cache uv run ruff check`
+  - `UV_CACHE_DIR=./.uv-cache uv run mypy caten/isl`
+  - `UV_CACHE_DIR=./.uv-cache uv run python -m pytest test/isl/test_isl_context.py test/isl/test_isl_set.py --no-cov`
+- `./caten/isl/gen/*.json` に全ての Spec がある。Set, UnionSet など型ごとにタスクを区切り、手作業で全 API を実装→テスト→合格確認を繰り返す。提案の拒否権なし。
+- `./docs/ISL_APIS.md` にある全 ISL Function をクラス単位で整理・実装。流れは 1) 対応クラス作成 2) `ISLFunction.create` でラッパ定義（`_lib` に直接注入禁止） 3) クラスメソッド化し `isl` 接頭辞と型名は削除した名称で到達可能にする。実装済みはチェックボックスを逐次更新。
+- 全関数に対しテストを用意し、ruff / mypy / pytest を定期実行。例: `uv run python -m pytest ./tests` 等。
+- `./docs/ISL_APIS.md` に列挙された全 API 完了まで中断不可。
+- 既存コードへの余計な修正禁止。Set 単体で完結する API は `caten/isl/specs/set.py` 内で完結させる。UnionSet 依存 API は関数名だけ置いて保留可。自動生成手法は禁止。

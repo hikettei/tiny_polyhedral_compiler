@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Tuple
 
-from .qualifier import Null, Param, Qualifier
 from .ffi import load_libisl
+from .qualifier import Null, Param, Qualifier
+
 
 @dataclass(frozen=True)
 class FunctionSpec:
@@ -23,8 +24,10 @@ class ISLFunction:
         primitive: Any,
         *arg_qualifiers: Qualifier,
         return_: Optional[Qualifier] = None,
-        lib: Optional[Any] = load_libisl(),
+        lib: Optional[Any] = None,
     ) -> Callable[..., Any]:
+        if lib is None:
+            lib = load_libisl()
         assert lib is not None, "ISLFunction requires lib"
         assert return_ is not None, "return_ is required"
         func = cls._resolve_and_configure(primitive, lib, tuple(arg_qualifiers), return_)
@@ -65,7 +68,7 @@ class ISLFunction:
             result = spec.primitive(*prepared_args)
             # ISL returned null_pointer while spec is defined as pointer? => Error
             if spec.return_spec is not None and result is None:
-                if not isinstance(spec.return_spec, (Null, Param)):
+                if ctx is not None and not isinstance(spec.return_spec, (Null, Param)):
                     ctx.raise_isl_error()
             if spec.return_spec is not None and not return_raw_pointer:
                 result = spec.return_spec.wrap(result, ctx=ctx, name="return")
@@ -88,5 +91,5 @@ class ISLFunction:
             primitive = getattr(lib, getattr(primitive, "__name__", primitive))
 
         primitive.argtypes = [q.as_ctype() for q in arguments]
-        primitive.restype = return_spec.as_ctype()                
+        primitive.restype = return_spec.as_ctype()  # type: ignore[union-attr]
         return primitive

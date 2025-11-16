@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextvars
 from ctypes import c_void_p
 from types import TracebackType
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 from ..ffi import FfiPointer, load_libisl
 from ..func import ISLFunction
@@ -25,7 +25,7 @@ class Context(ISLObject, Qualifier):
     requires_argument = False
     __slots__ = ("name", "_token", "_closed")
     def __init__(self, handle: Optional[FfiPointer] = None) -> None:
-        ISLObject.__init__(self, handle)
+        ISLObject.__init__(self, cast(FfiPointer, handle))
         Qualifier.__init__(self)
         self.name = "isl"
         self._token: contextvars.Token[Optional["Context"]] | None = None
@@ -76,7 +76,9 @@ class Context(ISLObject, Qualifier):
     def view(self, value: Any) -> FfiPointer:  # type: ignore[override]
         if value is not None:
             raise TypeError("Context qualifier does not accept positional arguments.")
-        return current(required=True).handle
+        ctx = current(required=True)
+        assert ctx is not None
+        return ctx.handle
 
     def ensure_active(self) -> None:
         if self._token is None:

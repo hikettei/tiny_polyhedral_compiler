@@ -115,7 +115,7 @@ class Null(Qualifier):
     def __init__(self) -> None:
         super().__init__(target=type(None))
 
-    def prepare(self, value: Any, *, ctx: "ISLContext" | None, name: str) -> None:
+    def prepare(self, value: Any, *, ctx: "Context" | None, name: str) -> None:
         if value is not None:
             raise TypeError(f"Argument '{name}' must be None to satisfy Null qualifier.")
         return None
@@ -150,7 +150,7 @@ class Param(Qualifier):
         self._validate_type(value, name)
         return self.view(value)
     
-    def prepare(self, value: Any, *, ctx: "ISLContext" | None, name: str) -> Any:
+    def prepare(self, value: Any, *, ctx: "Context" | None, name: str) -> Any:
         self._validate_type(value, name)
         if self.target is bool:
             return int(bool(value))

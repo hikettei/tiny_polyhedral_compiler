@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ctypes import c_int, c_void_p
+from typing import Any
 
 from ..ffi import FfiPointer, load_libisl
 from ..func import ISLFunction
@@ -34,8 +35,7 @@ class Set(ISLObject):
         _isl_set_free(handle)
 
     @classmethod
-    def from_union_set(cls, union: UnionSet) -> "Set":
-        # UnionSet 依存の API は後続タスクで実装する
+    def from_union_set(cls, union: Any) -> "Set":
         raise NotImplementedError("UnionSet-dependent API is deferred")
 
     # -- Queries ---------------------------------------------------------
@@ -118,7 +118,7 @@ class Set(ISLObject):
         return _isl_set_complement(self)
 
     def wrapped_reverse(self) -> "Set":
-        return _isl_set_wrapped_reverse(self)
+        raise NotImplementedError("isl_set_wrapped_reverse not available")
 
     def project_out_all_params(self) -> "Set":
         return _isl_set_project_out_all_params(self)
@@ -195,7 +195,7 @@ class Set(ISLObject):
     def lexmax(self) -> "Set":
         return _isl_set_lexmax(self)
 
-    def add_constraint(self, constraint: Constraint) -> "Set":
+    def add_constraint(self, constraint: Any) -> "Set":
         raise NotImplementedError("Constraint-dependent API is deferred")
 
     def __str__(self) -> str:  # pragma: no cover - trivial wrapper
@@ -451,7 +451,6 @@ _isl_set_complement = ISLFunction.create(
     lib=_lib,
 )
 
-# isl_set_wrapped_reverse は古い libisl には存在しない場合があるため、存在チェックを行う
 # if hasattr(_lib, "isl_set_wrapped_reverse"):
 #     _isl_set_wrapped_reverse = ISLFunction.create(
 #         _lib.isl_set_wrapped_reverse,
