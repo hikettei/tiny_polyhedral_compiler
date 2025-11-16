@@ -12,7 +12,12 @@ class Set(ISLObject):
     """High-level wrapper around ``isl_set`` handles."""
 
     __slots__ = ()
-    def __init__(self, handle: FfiPointer) -> None:
+    def __init__(self, handle_or_spec: str | FfiPointer) -> None:
+        handle = None
+        if isinstance(handle_or_spec, str):
+            handle = _isl_set_read_from_str(handle_or_spec, return_raw_pointer=True)
+        else:
+            handle = handle_or_spec
         super().__init__(handle)
 
     @classmethod
@@ -20,11 +25,11 @@ class Set(ISLObject):
         return _isl_set_read_from_str(handle)
     
     def copy_handle(self) -> FfiPointer:
-        pass #return _isl_set_copy_handle(self)
+        pass
 
     @classmethod
     def free_handle(cls, handle: FfiPointer) -> None:
-        pass #_lib.isl_set_free(handle)
+        pass
 
     @classmethod
     def from_union_set(cls, union: UnionSet) -> "Set":

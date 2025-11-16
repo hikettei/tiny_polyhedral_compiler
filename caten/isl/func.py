@@ -40,7 +40,7 @@ class ISLFunction:
 
     @staticmethod
     def _build_wrapper(py_name: str, spec: FunctionSpec) -> Callable[..., Any]:
-        def wrapper(*user_args: Any) -> Any:
+        def wrapper(*user_args: Any, return_raw_pointer: bool = False) -> Any:
             from .specs.context import current  # local import to avoid cycles
             ctx = current(required=False)
             prepared_args: list[Any] = []
@@ -66,11 +66,8 @@ class ISLFunction:
             # ISL returned null_pointer while spec is defined as pointer? => Error
             if spec.return_spec is not None and result is None:
                 ctx.raise_isl_error()
-            print("Wrapping")
-            print(spec.return_spec)
-            if spec.return_spec is not None:
+            if spec.return_spec is not None and return_raw_pointer is not None:
                 result = spec.return_spec.wrap(result, ctx=ctx, name="return")
-            print(result)
             return result
         wrapper.__name__ = py_name
         return wrapper

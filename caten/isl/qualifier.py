@@ -135,7 +135,13 @@ class Param(Qualifier):
     ) -> None:
         super().__init__(target=target)
         self._ctype = ctype or (target and self._PY_CTYPE_MAP.get(target))
-
+    
+    def wrap(self, value: Any, *, ctx: "Context" | None, name: str = "return") -> Any:
+        if isinstance(value, bytes) and self.target is str:
+            value = value.decode("utf-8")
+        self._validate_type(value, name)
+        return self.view(value)
+    
     def prepare(self, value: Any, *, ctx: "ISLContext" | None, name: str) -> Any:
         self._validate_type(value, name)
         if isinstance(value, str):

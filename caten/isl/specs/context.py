@@ -36,14 +36,14 @@ class Context(ISLObject, Qualifier):
 
     @classmethod
     def free_handle(cls, handle: FfiPointer) -> None:
-        pass #isl_ctx_free()
+        _lib.isl_ctx_free(handle)
 
     def raise_isl_error(self) -> None:
         parts: list[str] = []
-        if (msg := _isl_ctx_last_error_msg(self)):
+        if (msg := _isl_ctx_last_error_msg()):
             parts.append(msg)
-        if (file := _isl_ctx_last_error_file(self)):
-            line = _isl_ctx_last_error_line(self)
+        if (file := _isl_ctx_last_error_file()):
+            line = _isl_ctx_last_error_line()
         parts.append(f"{file}:{line}" if line is not None else file)
         raise ISLError(" | ".join(parts))
 
