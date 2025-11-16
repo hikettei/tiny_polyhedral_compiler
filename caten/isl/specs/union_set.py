@@ -357,6 +357,21 @@ _isl_union_set_list_get_union_set = ISLFunction.create(
     lib=_lib,
 )
 
+_isl_union_set_list_read_from_str = ISLFunction.create(
+    _lib.isl_union_set_list_read_from_str,
+    Context(),
+    Param(str),
+    return_=Give(lambda: UnionSetList),  # type: ignore[arg-type]
+    lib=_lib,
+)
+
+_isl_union_set_list_union = ISLFunction.create(
+    _lib.isl_union_set_list_union,
+    Take(lambda: UnionSetList),  # type: ignore[arg-type]
+    return_=Give(UnionSet),
+    lib=_lib,
+)
+
 __all__ = ["UnionSet", "UnionSetList"]
 
 
@@ -366,6 +381,10 @@ class UnionSetList(ISLObject):
     @classmethod
     def alloc(cls, ctx: Context, min_size: int = 0) -> "UnionSetList":
         return _isl_union_set_list_alloc(ctx, min_size)
+
+    @classmethod
+    def from_str(cls, ctx: Context, text: str) -> "UnionSetList":
+        return _isl_union_set_list_read_from_str(ctx, text)
 
     @classmethod
     def from_union_set(cls, uset: "UnionSet") -> "UnionSetList":
@@ -379,6 +398,9 @@ class UnionSetList(ISLObject):
 
     def get(self, pos: int) -> "UnionSet":
         return _isl_union_set_list_get_union_set(self, pos)
+
+    def union(self) -> UnionSet:
+        return _isl_union_set_list_union(self)
 
     def copy_handle(self) -> FfiPointer:
         return _isl_union_set_list_copy(self, return_raw_pointer=True)

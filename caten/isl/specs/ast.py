@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from ctypes import c_int, c_void_p
+from ctypes import CFUNCTYPE, c_int, c_void_p
+from typing import Any, Callable
 
 from ..ffi import FfiPointer, load_libisl
 from ..func import ISLFunction
@@ -11,7 +12,6 @@ from .id import Id
 from .val import Val
 
 _lib = load_libisl()
-
 
 class AstExprList(ISLObject):
     __slots__ = ()
@@ -69,6 +69,46 @@ class AstNodeList(ISLObject):
         _isl_ast_node_list_free(handle)
 
 
+class IdToAstExpr(ISLObject):
+    __slots__ = ()
+
+    @classmethod
+    def alloc(cls, ctx: Context, min_size: int = 0) -> "IdToAstExpr":
+        return _isl_id_to_ast_expr_alloc(ctx, min_size)
+
+    @classmethod
+    def from_str(cls, ctx: Context, text: str) -> "IdToAstExpr":
+        return _isl_id_to_ast_expr_read_from_str(ctx, text)
+
+    def copy_handle(self) -> FfiPointer:
+        return _isl_id_to_ast_expr_copy(self, return_raw_pointer=True)
+
+    @classmethod
+    def free_handle(cls, handle: FfiPointer) -> None:
+        _isl_id_to_ast_expr_free(handle)
+
+    def context(self) -> Context:
+        return _isl_id_to_ast_expr_get_ctx(self)
+
+    def set(self, id: Id, expr: "ASTExpr") -> "IdToAstExpr":
+        return _isl_id_to_ast_expr_set(self, id, expr)
+
+    def drop(self, id: Id) -> "IdToAstExpr":
+        return _isl_id_to_ast_expr_drop(self, id)
+
+    def try_get(self, id: Id) -> "ASTExpr | None":
+        return _isl_id_to_ast_expr_try_get(self, id)
+
+    def has(self, id: Id) -> bool:
+        return _isl_id_to_ast_expr_has(self, id)
+
+    def is_equal(self, other: "IdToAstExpr") -> bool:
+        return _isl_id_to_ast_expr_is_equal(self, other)
+
+    def to_str(self) -> str:
+        return _isl_id_to_ast_expr_to_str(self)
+
+
 class ASTExpr(ISLObject):
     __slots__ = ()
 
@@ -108,8 +148,36 @@ class ASTExpr(ISLObject):
         return _isl_ast_expr_call(self, args)
 
     def substitute_ids(self, mapping: object) -> "ASTExpr":
-        # TODO: id_to_ast_expr symbols are unavailable in the linked libisl.
-        raise NotImplementedError("isl_id_to_ast_expr* symbols unavailable in linked libisl")
+        if not isinstance(mapping, IdToAstExpr):
+            raise TypeError("mapping must be IdToAstExpr")
+        return _isl_ast_expr_substitute_ids(self, mapping)
+
+    def foreach_ast_expr_op_type(self, fn: Callable[[int], Any]) -> None:
+        CALLBACK = CFUNCTYPE(c_int, c_int, c_void_p)
+
+        def c_fn(op_type: int, user: c_void_p) -> int:
+            try:
+                fn(op_type)
+                return 0  # isl_stat_ok
+            except Exception:
+                return -1  # isl_stat_error
+
+        cb = CALLBACK(c_fn)
+        # Note: no keepalive because callback bridge not implemented fully.
+        _isl_ast_expr_foreach_ast_expr_op_type(self, cb, None)
+
+    def foreach_ast_op_type(self, fn: Callable[[int], Any]) -> None:
+        CALLBACK = CFUNCTYPE(c_int, c_int, c_void_p)
+
+        def c_fn(op_type: int, user: c_void_p) -> int:
+            try:
+                fn(op_type)
+                return 0
+            except Exception:
+                return -1
+
+        cb = CALLBACK(c_fn)
+        _isl_ast_expr_foreach_ast_op_type(self, cb, None)
 
     def print_macros(self, printer: "Printer") -> "Printer":
         return _isl_ast_expr_print_macros(self, printer)
@@ -383,21 +451,17 @@ class ASTNode(ISLObject):
     def if_print(self, printer: "Printer", options: "AstPrintOptions") -> "Printer":
         return _isl_ast_node_if_print(self, printer, options)
 
-    def foreach_descendant_top_down(self, fn: object) -> None:
-        # TODO: callback bridge not implemented yet.
-        raise NotImplementedError("foreach_descendant_top_down callback bridge not implemented")
+    def foreach_descendant_top_down(self, fn: Callable[[c_void_p], Any]) -> None:
+        raise NotImplementedError("callback bridge not implemented")
 
-    def map_descendant_bottom_up(self, fn: object) -> "ASTNode":
-        # TODO: callback bridge not implemented yet.
-        raise NotImplementedError("map_descendant_bottom_up callback bridge not implemented")
+    def map_descendant_bottom_up(self, fn: Callable[[c_void_p], c_void_p | None]) -> "ASTNode":
+        raise NotImplementedError("callback bridge not implemented")
 
-    def foreach_ast_expr_op_type(self, fn: object) -> None:
-        # TODO: callback bridge not implemented yet.
-        raise NotImplementedError("foreach_ast_expr_op_type callback bridge not implemented")
+    def foreach_ast_expr_op_type(self, fn: Callable[[int], Any]) -> None:
+        raise NotImplementedError("callback bridge not implemented")
 
-    def foreach_ast_op_type(self, fn: object) -> None:
-        # TODO: callback bridge not implemented yet.
-        raise NotImplementedError("foreach_ast_op_type callback bridge not implemented")
+    def foreach_ast_op_type(self, fn: Callable[[int], Any]) -> None:
+        raise NotImplementedError("callback bridge not implemented")
 
 
 class ASTForNode(ASTNode):
@@ -496,12 +560,10 @@ class AstPrintOptions(ISLObject):
         _isl_ast_print_options_free(handle)
 
     def set_print_user(self, fn: object) -> "AstPrintOptions":
-        # TODO: callback bridge not implemented.
-        raise NotImplementedError("ast_print_options_set_print_user not implemented")
+        raise NotImplementedError("callback bridge not implemented")
 
     def set_print_for(self, fn: object) -> "AstPrintOptions":
-        # TODO: callback bridge not implemented.
-        raise NotImplementedError("ast_print_options_set_print_for not implemented")
+        raise NotImplementedError("callback bridge not implemented")
 
 
 _isl_ast_expr_from_val = ISLFunction.create(
@@ -587,7 +649,7 @@ _isl_ast_node_list_copy = ISLFunction.create(
 
 _isl_ast_node_list_free = ISLFunction.create(
     _lib.isl_ast_node_list_free,
-    Take(AstNodeList),
+    Param(None, ctype=c_void_p),
     return_=Null(),
     lib=_lib,
 )
@@ -642,6 +704,99 @@ _isl_ast_expr_call = ISLFunction.create(
     Take(ASTExpr),
     Take(AstExprList),
     return_=Give(ASTExpr),
+    lib=_lib,
+)
+
+_isl_ast_expr_substitute_ids = ISLFunction.create(
+    _lib.isl_ast_expr_substitute_ids,
+    Take(ASTExpr),
+    Take(IdToAstExpr),
+    return_=Give(ASTExpr),
+    lib=_lib,
+)
+
+_isl_id_to_ast_expr_alloc = ISLFunction.create(
+    _lib.isl_id_to_ast_expr_alloc,
+    Context(),
+    Param(int, ctype=c_int),
+    return_=Give(IdToAstExpr),
+    lib=_lib,
+)
+
+_isl_id_to_ast_expr_copy = ISLFunction.create(
+    _lib.isl_id_to_ast_expr_copy,
+    Keep(IdToAstExpr),
+    return_=Give(IdToAstExpr),
+    lib=_lib,
+)
+
+_isl_id_to_ast_expr_free = ISLFunction.create(
+    _lib.isl_id_to_ast_expr_free,
+    Take(IdToAstExpr),
+    return_=Null(),
+    lib=_lib,
+)
+
+_isl_id_to_ast_expr_get_ctx = ISLFunction.create(
+    _lib.isl_id_to_ast_expr_get_ctx,
+    Keep(IdToAstExpr),
+    return_=Keep(Context),
+    lib=_lib,
+)
+
+_isl_id_to_ast_expr_set = ISLFunction.create(
+    _lib.isl_id_to_ast_expr_set,
+    Take(IdToAstExpr),
+    Take(Id),
+    Take(ASTExpr),
+    return_=Give(IdToAstExpr),
+    lib=_lib,
+)
+
+_isl_id_to_ast_expr_drop = ISLFunction.create(
+    _lib.isl_id_to_ast_expr_drop,
+    Take(IdToAstExpr),
+    Take(Id),
+    return_=Give(IdToAstExpr),
+    lib=_lib,
+)
+
+_isl_id_to_ast_expr_try_get = ISLFunction.create(
+    _lib.isl_id_to_ast_expr_try_get,
+    Keep(IdToAstExpr),
+    Keep(Id),
+    return_=Give(ASTExpr),
+    lib=_lib,
+)
+
+_isl_id_to_ast_expr_has = ISLFunction.create(
+    _lib.isl_id_to_ast_expr_has,
+    Keep(IdToAstExpr),
+    Keep(Id),
+    return_=Param(bool, ctype=c_int),
+    lib=_lib,
+)
+
+_isl_id_to_ast_expr_is_equal = ISLFunction.create(
+    _lib.isl_id_to_ast_expr_is_equal,
+    Keep(IdToAstExpr),
+    Keep(IdToAstExpr),
+    return_=Param(bool, ctype=c_int),
+    lib=_lib,
+)
+
+_isl_id_to_ast_expr_to_str = ISLFunction.create(
+    _lib.isl_id_to_ast_expr_to_str,
+    Keep(IdToAstExpr),
+    return_=Param(str),
+    lib=_lib,
+)
+
+_isl_id_to_ast_expr_read_from_str = ISLFunction.create(
+    _lib.isl_id_to_ast_expr_read_from_str,
+    Context(),
+    Param(str),
+    return_=Give(IdToAstExpr),
     lib=_lib,
 )
 
@@ -721,6 +876,24 @@ _isl_ast_expr_get_op_arg = ISLFunction.create(
     Keep(ASTExpr),
     Param(int, ctype=c_int),
     return_=Give(ASTExpr),
+    lib=_lib,
+)
+
+_isl_ast_expr_foreach_ast_expr_op_type = ISLFunction.create(
+    _lib.isl_ast_expr_foreach_ast_expr_op_type,
+    Keep(ASTExpr),
+    Param(None, ctype=c_void_p),
+    Param(None, ctype=c_void_p),
+    return_=Param(int, ctype=c_int),
+    lib=_lib,
+)
+
+_isl_ast_expr_foreach_ast_op_type = ISLFunction.create(
+    _lib.isl_ast_expr_foreach_ast_op_type,
+    Keep(ASTExpr),
+    Param(None, ctype=c_void_p),
+    Param(None, ctype=c_void_p),
+    return_=Param(int, ctype=c_int),
     lib=_lib,
 )
 
@@ -1002,6 +1175,24 @@ _isl_ast_print_options_free = ISLFunction.create(
     lib=_lib,
 )
 
+_isl_ast_print_options_set_print_for = ISLFunction.create(
+    _lib.isl_ast_print_options_set_print_for,
+    Take(lambda: AstPrintOptions),  # type: ignore[arg-type]
+    Param(None, ctype=c_void_p),
+    Param(None, ctype=c_void_p),
+    return_=Give(lambda: AstPrintOptions),  # type: ignore[arg-type]
+    lib=_lib,
+)
+
+_isl_ast_print_options_set_print_user = ISLFunction.create(
+    _lib.isl_ast_print_options_set_print_user,
+    Take(lambda: AstPrintOptions),  # type: ignore[arg-type]
+    Param(None, ctype=c_void_p),
+    Param(None, ctype=c_void_p),
+    return_=Give(lambda: AstPrintOptions),  # type: ignore[arg-type]
+    lib=_lib,
+)
+
 _isl_ast_node_if_has_else = ISLFunction.create(
     _lib.isl_ast_node_if_has_else,
     Keep(ASTNode),
@@ -1077,6 +1268,42 @@ _isl_ast_node_if_print = ISLFunction.create(
     Take(lambda: Printer),  # type: ignore[arg-type]
     Take(lambda: AstPrintOptions),  # type: ignore[arg-type]
     return_=Give(lambda: Printer),  # type: ignore[arg-type]
+    lib=_lib,
+)
+
+_isl_ast_node_foreach_descendant_top_down = ISLFunction.create(
+    _lib.isl_ast_node_foreach_descendant_top_down,
+    Keep(ASTNode),
+    Param(None, ctype=c_void_p),
+    Param(None, ctype=c_void_p),
+    return_=Param(int, ctype=c_int),
+    lib=_lib,
+)
+
+_isl_ast_node_map_descendant_bottom_up = ISLFunction.create(
+    _lib.isl_ast_node_map_descendant_bottom_up,
+    Take(ASTNode),
+    Param(None, ctype=c_void_p),
+    Param(None, ctype=c_void_p),
+    return_=Give(ASTNode),
+    lib=_lib,
+)
+
+_isl_ast_node_foreach_ast_expr_op_type = ISLFunction.create(
+    _lib.isl_ast_node_foreach_ast_expr_op_type,
+    Keep(ASTNode),
+    Param(None, ctype=c_void_p),
+    Param(None, ctype=c_void_p),
+    return_=Param(int, ctype=c_int),
+    lib=_lib,
+)
+
+_isl_ast_node_foreach_ast_op_type = ISLFunction.create(
+    _lib.isl_ast_node_foreach_ast_op_type,
+    Keep(ASTNode),
+    Param(None, ctype=c_void_p),
+    Param(None, ctype=c_void_p),
+    return_=Param(int, ctype=c_int),
     lib=_lib,
 )
 
@@ -1274,6 +1501,7 @@ __all__ = [
     "ASTOpAddressOf",
     "AstExprList",
     "AstNodeList",
+    "IdToAstExpr",
     "Printer",
     "AstPrintOptions",
     "ASTNode",

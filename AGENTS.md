@@ -36,22 +36,25 @@
 - 進捗と作業計画を常に本ファイルに記録し更新すること（型ごとに完了状況や今後の順番を明記）。最新の計画がここに存在する状態を保つ。
 
 ## 作業計画と進捗 (2025-11-16)
+直近のギャップ集計: `docs/ISL_missing_apis.md`（2025-11-16 再生成、欠落API 2047件）。map 残 126 件（tuple_name未提供シンボル除外済み）。
 優先順とステータス（✅完了 / 🚧着手中 / ⏳未着手）
-- Identifier / Id: ✅
-- Space / LocalSpace: ✅（基本API：alloc/read/dim/tuple_name/local_space等）
-- Constraint / Equality-Constraint / Inequality-Constraint: ✅
-- BasicSet: ✅
-- Set: ✅（基本API・bool対応済）
-- UnionSet: ✅（シンボル未リンク分はコメントアウト／NotImplemented）
-- BasicMap: ✅
-- Map: ✅
-- UnionMap: ✅
-- Aff / PwAff / MultiAff / PwMultiAff: ✅
-- MultiVal: ✅
-- MultiUnionPwAff / UnionPwAff / UnionPwMultiAff / MultiUnionPwAff: ✅
-- ScheduleConstraint / Schedule / ScheduleNode: ✅（Schedule/Node/Band最小ラッパ）
+- Identifier / Id: 🚧（基本APIは揃うが欠落検証 継続）
+- Space / LocalSpace: 🚧（dim/tuple系以外の抜け有り）
+- Constraint / Equality-Constraint / Inequality-Constraint: 🚧
+- BasicSet / Set: 🚧（missing計: set 105, basic_set 63）
+- UnionSet: 🚧（missing計: union_set 52）
+- BasicMap / Map: 🚧（missing計: basic_map 85, map 190）
+- UnionMap: 🚧（missing計: union_map 112）
+- Aff / PwAff / MultiAff / PwMultiAff: 🚧（missing計: aff 73, pw_aff 96, multi_aff 90, pw_multi_aff 89）
+- MultiVal: 🚧（missing計: multi_val 37, val 66）
+- MultiUnionPwAff / UnionPwAff / UnionPwMultiAff / MultiUnionPwAff: 🚧（missing計: multi_union_pw_aff 75 ほか）
+- ScheduleConstraint / Schedule / ScheduleNode: ✅（schedule_node 0）
 - UnionAccessInfo / UnionFlow: ⏳
-- ASTExpr / ASTNode / ASTBuild: ✅
-- Mat: ✅
+- ASTExpr / ASTNode / ASTBuild: 🚧（Expr系クラス不足・missing計: ast_expr 0, ast_node 0）
+- Mat: ✅（要素参照系API実装済・missing計: mat 0）
+- その他: misc 71, options 29 など多数。
 
-次に着手する対象: UnionAccessInfo / UnionFlow を残処理。
+次に着手する対象:
+1) ScheduleNode / ASTExpr / Mat のクラス追加・アクセサ補完
+2) UnionAccessInfo / UnionFlow ラッパ実装
+3) map / set 系を皮切りに `docs/ISL_missing_apis.md` に基づく欠落API埋め

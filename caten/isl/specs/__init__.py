@@ -1,5 +1,16 @@
 from .aff import Aff, MultiAff, PwAff, PwMultiAff
-from .ast import ASTBuild, ASTExpr, ASTNode
+from .ast import (
+    ASTBlockNode,
+    ASTBuild,
+    ASTExpr,
+    AstExprList,
+    ASTNode,
+    AstNodeList,
+    AstPrintOptions,
+    ASTUserNode,
+    IdToAstExpr,
+    Printer,
+)
 from .basic_map import BasicMap
 from .basic_set import BasicSet
 from .constraint import Constraint, EqualityConstraint, InequalityConstraint, ISLDimType
@@ -13,7 +24,7 @@ from .set import Set
 from .space import LocalSpace, Space
 from .union_map import UnionMap
 from .union_pw_aff import MultiUnionPwAff, UnionPwAff, UnionPwMultiAff
-from .union_set import UnionSet
+from .union_set import UnionSet, UnionSetList
 from .val import Val
 
 __all__ = [
@@ -40,6 +51,13 @@ __all__ = [
     "Val",
     "ASTExpr",
     "ASTNode",
+    "ASTBlockNode",
+    "ASTUserNode",
+    "AstExprList",
+    "AstNodeList",
+    "IdToAstExpr",
+    "Printer",
+    "AstPrintOptions",
     "ASTBuild",
     "Mat",
     "Schedule",
@@ -50,6 +68,7 @@ __all__ = [
     "LocalSpace",
     "Set",
     "UnionSet",
+    "UnionSetList",
     "context",
     "current",
 ]
