@@ -5,13 +5,13 @@ on:
     branches:
       - main
   pull_request:
-      branches:
-        - main
-        - develop
+    branches:
+      - main
+      - develop
 
 jobs:
-  UnitTests:
-    name: (${{ matrix.os }}) Unittests
+  Ruff:
+    name: (${{ matrix.os }}) Ruff
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -19,7 +19,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         target:
-        - normal
+          - normal
     steps:
       - uses: actions/checkout@v4
       - name: Installing libisl-dev
@@ -30,7 +30,45 @@ jobs:
         run: uv sync
       - name: Run ruff
         run: uv run ruff check .
+
+  Mypy:
+    name: (${{ matrix.os }}) Mypy
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        target:
+          - normal
+    steps:
+      - uses: actions/checkout@v4
+      - name: Installing libisl-dev
+        run: sudo apt-get install -y libisl-dev
+      - name: Install uv
+        run: pipx install uv ruff mypy pytest
+      - name: Install dependencies
+        run: uv sync
       - name: Run mypy
         run: uv run mypy caten
+
+  Pytest:
+    name: (${{ matrix.os }}) Pytest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        target:
+          - normal
+    steps:
+      - uses: actions/checkout@v4
+      - name: Installing libisl-dev
+        run: sudo apt-get install -y libisl-dev
+      - name: Install uv
+        run: pipx install uv ruff mypy pytest
+      - name: Install dependencies
+        run: uv sync
       - name: Run pytest
         run: PYTHONPATH=. uv run pytest ./test
