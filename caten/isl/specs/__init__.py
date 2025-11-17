@@ -17,6 +17,7 @@ from .constraint import Constraint, EqualityConstraint, InequalityConstraint, IS
 from .context import Context, ISLContextError, ISLError, context, current
 from .id import Id
 from .map import Map
+from .map_list import BasicMapList, MapList
 from .mat import Mat
 from .multi_val import MultiVal
 from .schedule import Schedule, ScheduleNode, ScheduleNodeBand
@@ -44,6 +45,8 @@ __all__ = [
     "InequalityConstraint",
     "Id",
     "Map",
+    "MapList",
+    "BasicMapList",
     "UnionMap",
     "UnionPwAff",
     "UnionPwMultiAff",
