@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-)
+from ctypes import c_char_p, c_int, c_uint
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,6 +13,9 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .id import Id
+    from .id_list import IdList
+    from .space import Space
 
 _lib = load_libisl()
 
@@ -47,7 +46,7 @@ class MultiId(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"MultiId({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_multi_id_get_ctx(self)
 
     def get_space(self) -> "Space":
@@ -81,7 +80,7 @@ class MultiId(ISLObject, ISLObjectMixin):
     def range_is_wrapping(self) -> bool:
         return _isl_multi_id_range_is_wrapping(self)
 
-    def is_equal(self, mi2: "MultiId") -> bool:
+    def plain_is_equal(self, mi2: "MultiId") -> bool:
         return _isl_multi_id_plain_is_equal(self, mi2)
 
     def from_range(self) -> "MultiId":
@@ -117,7 +116,7 @@ register_type("MultiId", MultiId)
 _isl_multi_id_get_ctx = ISLFunction.create(
     "isl_multi_id_get_ctx",
     Keep("MultiId"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

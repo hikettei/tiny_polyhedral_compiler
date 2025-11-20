@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -16,7 +12,12 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .ast_expr_list import AstExprList
     from .context import Context
+    from .id import Id
+    from .id_to_ast_expr import IdToAstExpr
+    from .printer import Printer
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -47,7 +48,7 @@ class ASTExpr(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"ASTExpr({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_ast_expr_get_ctx(self)
 
     def get_type(self) -> int:
@@ -183,7 +184,7 @@ register_type("ASTExpr", ASTExpr)
 _isl_ast_expr_get_ctx = ISLFunction.create(
     "isl_ast_expr_get_ctx",
     Keep("ASTExpr"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

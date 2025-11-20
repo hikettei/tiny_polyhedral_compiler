@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,7 +12,21 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .aff import Aff
+    from .basic_map import BasicMap
+    from .constraint import Constraint
+    from .constraint_list import ConstraintList
     from .context import Context
+    from .id import Id
+    from .local_space import LocalSpace
+    from .mat import Mat
+    from .multi_aff import MultiAff
+    from .point import Point
+    from .pw_multi_aff import PwMultiAff
+    from .set import Set
+    from .space import Space
+    from .val import Val
+    from .vertices import Vertices
 
 _lib = load_libisl()
 
@@ -155,7 +164,7 @@ class BasicSet(ISLObject, ISLObjectMixin):
     def is_wrapping(self) -> bool:
         return _isl_basic_set_is_wrapping(self)
 
-    def is_equal(self, bset2: "BasicSet") -> bool:
+    def plain_is_equal(self, bset2: "BasicSet") -> bool:
         return _isl_basic_set_plain_is_equal(self, bset2)
 
     def is_equal(self, bset2: "BasicSet") -> bool:

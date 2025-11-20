@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,7 +12,19 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .aff import Aff
     from .context import Context
+    from .multi_aff import MultiAff
+    from .multi_union_pw_aff import MultiUnionPwAff
+    from .multi_val import MultiVal
+    from .pw_multi_aff import PwMultiAff
+    from .pw_multi_aff_list import PwMultiAffList
+    from .set import Set
+    from .space import Space
+    from .union_map import UnionMap
+    from .union_pw_aff import UnionPwAff
+    from .union_set import UnionSet
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -48,7 +55,7 @@ class UnionPwMultiAff(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"UnionPwMultiAff({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_union_pw_multi_aff_get_ctx(self)
 
     def get_space(self) -> "Space":
@@ -144,7 +151,7 @@ class UnionPwMultiAff(ISLObject, ISLObjectMixin):
     def involves_nan(self) -> bool:
         return _isl_union_pw_multi_aff_involves_nan(self)
 
-    def is_equal(self, upma2: "UnionPwMultiAff") -> bool:
+    def plain_is_equal(self, upma2: "UnionPwMultiAff") -> bool:
         return _isl_union_pw_multi_aff_plain_is_equal(self, upma2)
 
     def domain(self) -> "UnionSet":
@@ -255,7 +262,7 @@ register_type("UnionPwMultiAff", UnionPwMultiAff)
 _isl_union_pw_multi_aff_get_ctx = ISLFunction.create(
     "isl_union_pw_multi_aff_get_ctx",
     Keep("UnionPwMultiAff"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

@@ -2,7 +2,7 @@ import json
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set, Tuple
 
 # Mapping from C types to Python primitive types and ctypes
 PRIMITIVE_TYPES = {
@@ -38,6 +38,7 @@ CLASS_RENAMES = {
     "AstExprList": "AstExprList",
     "AstNodeList": "AstNodeList",
     "IdToAstExpr": "IdToAstExpr",
+    "Ctx": "Context",
 }
 
 METHOD_RENAMES = {
@@ -45,10 +46,8 @@ METHOD_RENAMES = {
     "alloc_inequality": "inequality",
     "alloc_user": "from_expr",
     "get_user": "user",
-    "plain_is_equal": "is_equal",
     "from_ast_node": "from_node",
     "get_name": "name",
-    # "read_from_str": "from_str", # Handled explicitly
 }
 
 class Generator:
@@ -58,41 +57,41 @@ class Generator:
         self.catalog = self._load_catalog()
         self.types = self.catalog["types"]
         self._apply_renames()
-        self.c_type_map = {}
+        self.c_type_map: Dict[str, str] = {}
         self._build_type_map()
         self.functions = self.catalog["functions"]
-        self.functions_by_owner = defaultdict(list)
+        self.functions_by_owner: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         self._organize_functions()
 
     def _load_catalog(self) -> Dict[str, Any]:
         with open(self.catalog_path, "r") as f:
             return json.load(f)
 
-    def _apply_renames(self):
-        for slug, type_info in self.types.items():
+    def _apply_renames(self) -> None:
+        for _slug, type_info in self.types.items():
             original_name = type_info["class_name"]
             if original_name in CLASS_RENAMES:
                 type_info["class_name"] = CLASS_RENAMES[original_name]
 
-    def _build_type_map(self):
+    def _build_type_map(self) -> None:
         for slug, info in self.types.items():
             c_decl = info["c_decl"]
             clean_c = c_decl.replace("*", "").strip()
             self.c_type_map[clean_c] = slug
-            # Also map the pointer version just in case, though clean_type removes it
+            # Also map the pointer version just in case
             self.c_type_map[c_decl] = slug
             # Handle struct prefix
             if clean_c.startswith("struct "):
                 clean_struct = clean_c.replace("struct ", "").strip()
                 self.c_type_map[clean_struct] = slug
 
-    def _organize_functions(self):
+    def _organize_functions(self) -> None:
         for func in self.functions:
             owner = func.get("owner_slug")
             if owner:
                 self.functions_by_owner[owner].append(func)
 
-    def generate(self):
+    def generate(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Generate specs for each type
@@ -111,14 +110,80 @@ class Generator:
             
         self._generate_init(generated_files)
 
+    def _get_dependencies(self, functions: List[Dict[str, Any]], self_class: str) -> Set[Tuple[str, str]]:
+        """Collects (slug, class_name) of dependencies."""
+        dependencies = set()
+        
+        for func in functions:
+            # Arguments
+            for arg in func["arguments"]:
+                c_type = arg["type"].strip()
+                clean_type = c_type.replace("*", "").strip()
+                if clean_type in self.c_type_map:
+                    slug = self.c_type_map[clean_type]
+                    if slug == "ctx":
+                        continue
+                    class_name = self.types[slug]["class_name"]
+                    if class_name != self_class:
+                        dependencies.add((slug, class_name))
+            
+            # Return type
+            ret_type = func["return_type"].strip()
+            clean_ret = ret_type.replace("*", "").strip()
+            if clean_ret in self.c_type_map:
+                slug = self.c_type_map[clean_ret]
+                if slug == "ctx":
+                    continue
+                class_name = self.types[slug]["class_name"]
+                if class_name != self_class:
+                    dependencies.add((slug, class_name))
+                    
+        return dependencies
+
+    def _get_ctypes_imports(self, functions: List[Dict[str, Any]]) -> List[str]:
+        types = {"c_char_p"} # Always needed for from_str/to_str
+        
+        def add_ctype(c_type: str) -> None:
+            c_type = c_type.strip()
+            if c_type in PRIMITIVE_TYPES:
+                types.add(PRIMITIVE_TYPES[c_type][1])
+            elif c_type.startswith("enum "):
+                types.add("c_int")
+            elif "(*" in c_type:
+                types.add("c_void_p")
+            elif c_type in ("void *", "const void *", "FILE *"):
+                types.add("c_void_p")
+
+        for func in functions:
+            for arg in func["arguments"]:
+                add_ctype(arg["type"])
+            add_ctype(func["return_type"])
+            
+        return sorted(list(types))
+
+    def _get_qualifier_imports(self, functions: List[Dict[str, Any]]) -> List[str]:
+        quals = {"Keep", "Give", "Param", "Take"} # Generally used
+        for func in functions:
+            if func["return_type"].strip() == "void":
+                quals.add("Null")
+        return sorted(list(quals))
+
     def _generate_class_file(self, slug: str, class_name: str) -> str:
         functions = self.functions_by_owner[slug]
         
+        # Dependencies
+        deps = self._get_dependencies(functions, class_name)
+        sorted_deps = sorted(list(deps), key=lambda x: x[0]) # Sort by slug
+        
+        # Ctypes
+        ctypes_imports = self._get_ctypes_imports(functions)
+        qual_imports = self._get_qualifier_imports(functions)
+
         # Imports
         lines = [
             "from __future__ import annotations",
             "",
-            "from ctypes import c_int, c_long, c_ulong, c_size_t, c_double, c_char_p, c_void_p, c_uint, c_longlong, c_ulonglong",
+            f"from ctypes import {', '.join(ctypes_imports)}",
             "from typing import Any, TYPE_CHECKING",
             "",
             "from ..ffi import load_libisl",
@@ -126,15 +191,22 @@ class Generator:
             "from ..obj import ISLObject",
             "from ..mixin import ISLObjectMixin",
             "from ..registry import register_type",
-            "from ..qualifier import Give, Keep, Null, Param, Take",
+            f"from ..qualifier import {', '.join(qual_imports)}",
             "from .context import Context",
             "",
             "if TYPE_CHECKING:",
             "    from .context import Context",
+        ]
+        
+        # Add collected dependencies to TYPE_CHECKING block
+        for dep_slug, dep_class in sorted_deps:
+            lines.append(f"    from .{dep_slug} import {dep_class}")
+            
+        lines.extend([
             "",
             "_lib = load_libisl()",
             "",
-        ]
+        ])
 
         # Class definition
         lines.append(f"class {class_name}(ISLObject, ISLObjectMixin):")
@@ -221,7 +293,7 @@ class Generator:
 
         return "\n".join(lines)
 
-    def _generate_method(self, lines: List[str], func: Dict[str, Any], owner_slug: str):
+    def _generate_method(self, lines: List[str], func: Dict[str, Any], owner_slug: str) -> None:
         name = func["method"]
         
         # Sanitize method name
@@ -256,7 +328,7 @@ class Generator:
             if clean_type in self.c_type_map:
                 continue
             # Unknown type
-            print(f"Skipping {c_name} due to unknown arg type: '{c_type}'")
+            # print(f"Skipping {c_name} due to unknown arg type: '{c_type}'")
             return
 
         ret_type = func["return_type"].strip()
@@ -264,7 +336,7 @@ class Generator:
              clean_ret = ret_type.replace("*", "").strip()
              if clean_ret not in self.c_type_map:
                  # Unknown return type
-                 print(f"Skipping {c_name} due to unknown return type: '{ret_type}'")
+                 # print(f"Skipping {c_name} due to unknown return type: '{ret_type}'")
                  return
 
         return_info = func
@@ -318,10 +390,6 @@ class Generator:
             
             # Handle ctx specially? No, usually hidden.
             if arg["type"] == "isl_ctx *":
-                # context is implicit usually. 
-                # But if it's not the first arg? ISL functions usually have ctx as first if not method.
-                # If it is present in python signature, user provides it? 
-                # In `set.py`, ctx is implicit.
                 continue
                 
             if arg_type == "Any" and arg_name in ("user", "user_"):
@@ -362,7 +430,7 @@ class Generator:
         # Fallback
         return "Any"
 
-    def _generate_isl_function(self, lines: List[str], func: Dict[str, Any]):
+    def _generate_isl_function(self, lines: List[str], func: Dict[str, Any]) -> None:
         c_name = func["name"]
         
         qualifiers = []
@@ -397,10 +465,14 @@ class Generator:
                 # Object type
                 # Map qualifier string from JSON to Python class
                 q_str = arg["qualifier"]
-                if q_str == "__isl_take": qual_name = "Take"
-                elif q_str == "__isl_keep": qual_name = "Keep"
-                elif q_str == "__isl_give": qual_name = "Give"
-                else: qual_name = "Keep" # Default to Keep for objects if unspecified
+                if q_str == "__isl_take":
+                    qual_name = "Take"
+                elif q_str == "__isl_keep":
+                    qual_name = "Keep"
+                elif q_str == "__isl_give":
+                    qual_name = "Give"
+                else:
+                    qual_name = "Keep" # Default
                 
                 clean_type = c_type.replace("*", "").strip()
                 if clean_type in self.c_type_map:
@@ -408,7 +480,7 @@ class Generator:
                     target = f"\"{self.types[slug]['class_name']}\""
                 else:
                     # Unknown type - skip this function
-                    print(f"Skipping {c_name} due to unknown arg type: '{c_type}'")
+                    # print(f"Skipping {c_name} due to unknown arg type: '{c_type}'")
                     return
 
             qualifiers.append(f"{qual_name}({target}{extra})")
@@ -433,8 +505,10 @@ class Generator:
             ret_extra = ", ctype=c_int"
         else:
             q_str = func["return_qualifier"]
-            if q_str == "__isl_give": ret_qual_name = "Give"
-            else: ret_qual_name = "Give" # Default for objects returned?
+            if q_str == "__isl_give":
+                ret_qual_name = "Give"
+            else:
+                ret_qual_name = "Give" # Default
             
             clean_type = ret_type.replace("*", "").strip()
             if clean_type in self.c_type_map:
@@ -442,7 +516,7 @@ class Generator:
                 ret_target = f"\"{self.types[slug]['class_name']}\""
             else:
                  # Unknown return type - skip
-                 print(f"Skipping {c_name} due to unknown return type: '{ret_type}'")
+                 # print(f"Skipping {c_name} due to unknown return type: '{ret_type}'")
                  return
 
         if ret_qual_name == "Null":
@@ -459,7 +533,7 @@ class Generator:
         lines.append(")")
         lines.append("")
 
-    def _generate_init(self, generated_files: List[str]):
+    def _generate_init(self, generated_files: List[str]) -> None:
         lines = []
         for slug in generated_files:
             if slug in self.types:

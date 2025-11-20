@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -18,6 +13,17 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .id import Id
+    from .map import Map
+    from .multi_aff import MultiAff
+    from .multi_id import MultiId
+    from .multi_pw_aff import MultiPwAff
+    from .multi_val import MultiVal
+    from .pw_aff import PwAff
+    from .set import Set
+    from .space import Space
+    from .union_pw_multi_aff import UnionPwMultiAff
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -48,7 +54,7 @@ class PwMultiAff(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"PwMultiAff({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_pw_multi_aff_get_ctx(self)
 
     def get_domain_space(self) -> "Space":
@@ -195,7 +201,7 @@ class PwMultiAff(ISLObject, ISLObjectMixin):
     def involves_nan(self) -> bool:
         return _isl_pw_multi_aff_involves_nan(self)
 
-    def is_equal(self, pma2: "PwMultiAff") -> bool:
+    def plain_is_equal(self, pma2: "PwMultiAff") -> bool:
         return _isl_pw_multi_aff_plain_is_equal(self, pma2)
 
     def is_equal(self, pma2: "PwMultiAff") -> bool:
@@ -339,7 +345,7 @@ register_type("PwMultiAff", PwMultiAff)
 _isl_pw_multi_aff_get_ctx = ISLFunction.create(
     "isl_pw_multi_aff_get_ctx",
     Keep("PwMultiAff"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

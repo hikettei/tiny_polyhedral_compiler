@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -18,6 +13,13 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .id import Id
+    from .point import Point
+    from .qpolynomial_fold import QpolynomialFold
+    from .set import Set
+    from .space import Space
+    from .union_pw_qpolynomial_fold import UnionPwQpolynomialFold
+    from .val import Val
 
 _lib = load_libisl()
 

@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_void_p,
-)
+from ctypes import c_char_p, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -46,7 +43,7 @@ class Id(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"Id({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_id_get_ctx(self)
 
     @classmethod
@@ -68,7 +65,7 @@ register_type("Id", Id)
 _isl_id_get_ctx = ISLFunction.create(
     "isl_id_get_ctx",
     Keep("Id"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

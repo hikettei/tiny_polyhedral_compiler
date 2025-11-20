@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -16,6 +12,7 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .basic_set import BasicSet
     from .context import Context
 
 _lib = load_libisl()
@@ -39,7 +36,7 @@ class Cell(ISLObject, ISLObjectMixin):
     def free_handle(cls, handle: Any) -> None:
         _lib.isl_cell_free(handle)
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_cell_get_ctx(self)
 
     def foreach_vertex(self, fn: Any, user: Any = None) -> int:
@@ -54,7 +51,7 @@ register_type("Cell", Cell)
 _isl_cell_get_ctx = ISLFunction.create(
     "isl_cell_get_ctx",
     Keep("Cell"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

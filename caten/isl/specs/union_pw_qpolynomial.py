@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -18,6 +13,13 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .point import Point
+    from .pw_qpolynomial import PwQpolynomial
+    from .pw_qpolynomial_list import PwQpolynomialList
+    from .set import Set
+    from .space import Space
+    from .union_set import UnionSet
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -100,7 +102,7 @@ class UnionPwQpolynomial(ISLObject, ISLObjectMixin):
     def involves_nan(self) -> bool:
         return _isl_union_pw_qpolynomial_involves_nan(self)
 
-    def is_equal(self, upwqp2: "UnionPwQpolynomial") -> bool:
+    def plain_is_equal(self, upwqp2: "UnionPwQpolynomial") -> bool:
         return _isl_union_pw_qpolynomial_plain_is_equal(self, upwqp2)
 
     def domain_reverse(self) -> "UnionPwQpolynomial":

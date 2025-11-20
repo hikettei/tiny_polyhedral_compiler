@@ -1,13 +1,14 @@
 import json
 from pathlib import Path
+from typing import Any, Dict, List
 
 CATALOG_PATH = Path("caten/isl/gen/catalog.json")
 
-def fix_catalog():
+def fix_catalog() -> None:
     with open(CATALOG_PATH, "r") as f:
-        catalog = json.load(f)
+        catalog: Dict[str, Any] = json.load(f)
 
-    functions = catalog["functions"]
+    functions: List[Dict[str, Any]] = catalog["functions"]
     existing_funcs = {f["name"] for f in functions}
     
     types = catalog["types"]
@@ -53,7 +54,7 @@ def fix_catalog():
             print(f"Added {func_name}")
 
     # Add specific missing functions
-    manual_additions = [
+    manual_additions: List[Dict[str, Any]] = [
         {
             "name": "isl_constraint_copy",
             "owner_slug": "constraint",

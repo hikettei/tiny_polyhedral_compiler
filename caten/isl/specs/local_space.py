@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-)
+from ctypes import c_char_p, c_int, c_uint
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -16,7 +12,11 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .aff import Aff
+    from .basic_map import BasicMap
     from .context import Context
+    from .id import Id
+    from .space import Space
 
 _lib = load_libisl()
 
@@ -47,7 +47,7 @@ class LocalSpace(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"LocalSpace({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_local_space_get_ctx(self)
 
     def dim(self, type: int) -> int:
@@ -138,7 +138,7 @@ register_type("LocalSpace", LocalSpace)
 _isl_local_space_get_ctx = ISLFunction.create(
     "isl_local_space_get_ctx",
     Keep("LocalSpace"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

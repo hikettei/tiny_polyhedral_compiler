@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-)
+from ctypes import c_char_p, c_int, c_uint
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -16,7 +12,22 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .aff import Aff
+    from .aff_list import AffList
     from .context import Context
+    from .id import Id
+    from .id_list import IdList
+    from .map import Map
+    from .multi_aff import MultiAff
+    from .multi_id import MultiId
+    from .multi_pw_aff import MultiPwAff
+    from .multi_union_pw_aff import MultiUnionPwAff
+    from .multi_val import MultiVal
+    from .pw_aff_list import PwAffList
+    from .pw_multi_aff import PwMultiAff
+    from .set import Set
+    from .union_pw_aff_list import UnionPwAffList
+    from .val_list import ValList
 
 _lib = load_libisl()
 

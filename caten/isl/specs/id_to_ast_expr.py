@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -16,7 +12,9 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .ast_expr import ASTExpr
     from .context import Context
+    from .id import Id
 
 _lib = load_libisl()
 
@@ -47,7 +45,7 @@ class IdToAstExpr(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"IdToAstExpr({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_id_to_ast_expr_get_ctx(self)
 
     @classmethod
@@ -81,7 +79,7 @@ register_type("IdToAstExpr", IdToAstExpr)
 _isl_id_to_ast_expr_get_ctx = ISLFunction.create(
     "isl_id_to_ast_expr_get_ctx",
     Keep("IdToAstExpr"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,7 +12,16 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .aff import Aff
     from .context import Context
+    from .id import Id
+    from .pw_aff import PwAff
+    from .pw_aff_list import PwAffList
+    from .set import Set
+    from .space import Space
+    from .union_pw_multi_aff import UnionPwMultiAff
+    from .union_set import UnionSet
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -48,7 +52,7 @@ class UnionPwAff(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"UnionPwAff({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_union_pw_aff_get_ctx(self)
 
     def get_space(self) -> "Space":
@@ -123,7 +127,7 @@ class UnionPwAff(ISLObject, ISLObjectMixin):
     def involves_nan(self) -> bool:
         return _isl_union_pw_aff_involves_nan(self)
 
-    def is_equal(self, upa2: "UnionPwAff") -> bool:
+    def plain_is_equal(self, upa2: "UnionPwAff") -> bool:
         return _isl_union_pw_aff_plain_is_equal(self, upa2)
 
     def bind_id(self, id: "Id") -> "UnionSet":
@@ -219,7 +223,7 @@ register_type("UnionPwAff", UnionPwAff)
 _isl_union_pw_aff_get_ctx = ISLFunction.create(
     "isl_union_pw_aff_get_ctx",
     Keep("UnionPwAff"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

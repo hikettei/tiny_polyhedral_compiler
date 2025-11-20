@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-)
+from ctypes import c_char_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -15,6 +13,8 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .pw_aff import PwAff
+    from .set import Set
 
 _lib = load_libisl()
 

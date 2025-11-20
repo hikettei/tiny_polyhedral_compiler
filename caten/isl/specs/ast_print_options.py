@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_void_p,
-)
+from ctypes import c_char_p, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl

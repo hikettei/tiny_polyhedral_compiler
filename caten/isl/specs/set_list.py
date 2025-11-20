@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -18,6 +13,7 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .set import Set
 
 _lib = load_libisl()
 
@@ -48,7 +44,7 @@ class SetList(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"SetList({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_set_list_get_ctx(self)
 
     def union(self) -> "Set":
@@ -122,7 +118,7 @@ register_type("SetList", SetList)
 _isl_set_list_get_ctx = ISLFunction.create(
     "isl_set_list_get_ctx",
     Keep("SetList"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -39,7 +35,7 @@ class Vertices(ISLObject, ISLObjectMixin):
     def free_handle(cls, handle: Any) -> None:
         _lib.isl_vertices_free(handle)
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_vertices_get_ctx(self)
 
     def foreach_vertex(self, fn: Any, user: Any = None) -> int:
@@ -57,7 +53,7 @@ register_type("Vertices", Vertices)
 _isl_vertices_get_ctx = ISLFunction.create(
     "isl_vertices_get_ctx",
     Keep("Vertices"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

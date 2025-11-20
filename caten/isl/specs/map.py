@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,7 +12,25 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .aff import Aff
+    from .basic_map import BasicMap
+    from .basic_map_list import BasicMapList
+    from .constraint import Constraint
     from .context import Context
+    from .fixed_box import FixedBox
+    from .id import Id
+    from .id_list import IdList
+    from .map_list import MapList
+    from .multi_aff import MultiAff
+    from .multi_id import MultiId
+    from .multi_pw_aff import MultiPwAff
+    from .pw_aff import PwAff
+    from .pw_multi_aff import PwMultiAff
+    from .set import Set
+    from .space import Space
+    from .stride_info import StrideInfo
+    from .union_map import UnionMap
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -296,7 +309,7 @@ class Map(ISLObject, ISLObjectMixin):
     def is_equal(self, map2: "Map") -> bool:
         return _isl_map_is_equal(self, map2)
 
-    def is_equal(self, map2: "Map") -> bool:
+    def plain_is_equal(self, map2: "Map") -> bool:
         return _isl_map_plain_is_equal(self, map2)
 
     def is_disjoint(self, map2: "Map") -> bool:
