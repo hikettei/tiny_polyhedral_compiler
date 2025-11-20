@@ -41,10 +41,6 @@ class Restriction(ISLObject, ISLObjectMixin):
         return _isl_restriction_get_ctx(self)
 
     @classmethod
-    def input(cls, source_restr: "Set", sink_restr: "Set") -> "Restriction":
-        return _isl_restriction_input(source_restr, sink_restr)
-
-    @classmethod
     def output(cls, source_restr: "Set") -> "Restriction":
         return _isl_restriction_output(source_restr)
 
@@ -63,14 +59,6 @@ _isl_restriction_get_ctx = ISLFunction.create(
     "isl_restriction_get_ctx",
     Keep("Restriction"),
     return_=Give("Context"),
-    lib=_lib,
-)
-
-_isl_restriction_input = ISLFunction.create(
-    "isl_restriction_input",
-    Take("Set"),
-    Take("Set"),
-    return_=Give("Restriction"),
     lib=_lib,
 )
 

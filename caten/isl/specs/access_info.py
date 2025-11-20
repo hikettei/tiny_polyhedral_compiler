@@ -51,7 +51,7 @@ _isl_access_info_add_source = ISLFunction.create(
     Take("AccessInfo"),
     Take("Map"),
     Param(int, ctype=c_int),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("AccessInfo"),
     lib=_lib,
 )

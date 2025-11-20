@@ -58,11 +58,11 @@ class IdToAstExpr(ISLObject, ISLObjectMixin):
     def get(self, key: "Id") -> "ASTExpr":
         return _isl_id_to_ast_expr_get(self, key)
 
-    def foreach(self, fn: Any, user: Any = None) -> int:
-        return _isl_id_to_ast_expr_foreach(self, fn, user)
+    def foreach(self, fn: Any, val: "ASTExpr", user: Any, user_: Any = None) -> int:
+        return _isl_id_to_ast_expr_foreach(self, fn, val, user, user_)
 
-    def every(self, test: Any, user: Any = None) -> bool:
-        return _isl_id_to_ast_expr_every(self, test, user)
+    def every(self, test: Any, val: "ASTExpr", user: Any, user_: Any = None) -> bool:
+        return _isl_id_to_ast_expr_every(self, test, val, user, user_)
 
     def set(self, key: "Id", val: "ASTExpr") -> "IdToAstExpr":
         return _isl_id_to_ast_expr_set(self, key, val)
@@ -125,7 +125,9 @@ _isl_id_to_ast_expr_foreach = ISLFunction.create(
     "isl_id_to_ast_expr_foreach",
     Keep("IdToAstExpr"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Take("ASTExpr"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -134,7 +136,9 @@ _isl_id_to_ast_expr_every = ISLFunction.create(
     "isl_id_to_ast_expr_every",
     Keep("IdToAstExpr"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Keep("ASTExpr"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )

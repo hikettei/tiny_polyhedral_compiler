@@ -88,23 +88,23 @@ class ASTBuild(ISLObject, ISLObjectMixin):
     def set_iterators(self, iterators: "IdList") -> "ASTBuild":
         return _isl_ast_build_set_iterators(self, iterators)
 
-    def set_create_leaf(self, fn: Any, user: Any = None) -> "ASTBuild":
-        return _isl_ast_build_set_create_leaf(self, fn, user)
+    def set_create_leaf(self, fn: Any, user: Any, user_: Any = None) -> "ASTBuild":
+        return _isl_ast_build_set_create_leaf(self, fn, user, user_)
 
-    def set_at_each_domain(self, fn: Any, user: Any = None) -> "ASTBuild":
-        return _isl_ast_build_set_at_each_domain(self, fn, user)
+    def set_at_each_domain(self, fn: Any, build: "ASTBuild", user: Any, user_: Any = None) -> "ASTBuild":
+        return _isl_ast_build_set_at_each_domain(self, fn, build, user, user_)
 
-    def set_before_each_for(self, fn: Any, user: Any = None) -> "ASTBuild":
-        return _isl_ast_build_set_before_each_for(self, fn, user)
+    def set_before_each_for(self, fn: Any, user: Any, user_: Any = None) -> "ASTBuild":
+        return _isl_ast_build_set_before_each_for(self, fn, user, user_)
 
-    def set_after_each_for(self, fn: Any, user: Any = None) -> "ASTBuild":
-        return _isl_ast_build_set_after_each_for(self, fn, user)
+    def set_after_each_for(self, fn: Any, build: "ASTBuild", user: Any, user_: Any = None) -> "ASTBuild":
+        return _isl_ast_build_set_after_each_for(self, fn, build, user, user_)
 
-    def set_before_each_mark(self, fn: Any, user: Any = None) -> "ASTBuild":
-        return _isl_ast_build_set_before_each_mark(self, fn, user)
+    def set_before_each_mark(self, fn: Any, build: "ASTBuild", user: Any, user_: Any = None) -> "ASTBuild":
+        return _isl_ast_build_set_before_each_mark(self, fn, build, user, user_)
 
-    def set_after_each_mark(self, fn: Any, user: Any = None) -> "ASTBuild":
-        return _isl_ast_build_set_after_each_mark(self, fn, user)
+    def set_after_each_mark(self, fn: Any, build: "ASTBuild", user: Any, user_: Any = None) -> "ASTBuild":
+        return _isl_ast_build_set_after_each_mark(self, fn, build, user, user_)
 
     def get_schedule(self) -> "UnionMap":
         return _isl_ast_build_get_schedule(self)
@@ -237,7 +237,8 @@ _isl_ast_build_set_create_leaf = ISLFunction.create(
     "isl_ast_build_set_create_leaf",
     Take("ASTBuild"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("ASTBuild"),
     lib=_lib,
 )
@@ -246,7 +247,9 @@ _isl_ast_build_set_at_each_domain = ISLFunction.create(
     "isl_ast_build_set_at_each_domain",
     Take("ASTBuild"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Keep("ASTBuild"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("ASTBuild"),
     lib=_lib,
 )
@@ -255,7 +258,8 @@ _isl_ast_build_set_before_each_for = ISLFunction.create(
     "isl_ast_build_set_before_each_for",
     Take("ASTBuild"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("ASTBuild"),
     lib=_lib,
 )
@@ -264,7 +268,9 @@ _isl_ast_build_set_after_each_for = ISLFunction.create(
     "isl_ast_build_set_after_each_for",
     Take("ASTBuild"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Keep("ASTBuild"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("ASTBuild"),
     lib=_lib,
 )
@@ -273,7 +279,9 @@ _isl_ast_build_set_before_each_mark = ISLFunction.create(
     "isl_ast_build_set_before_each_mark",
     Take("ASTBuild"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Keep("ASTBuild"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("ASTBuild"),
     lib=_lib,
 )
@@ -282,7 +290,9 @@ _isl_ast_build_set_after_each_mark = ISLFunction.create(
     "isl_ast_build_set_after_each_mark",
     Take("ASTBuild"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Keep("ASTBuild"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("ASTBuild"),
     lib=_lib,
 )

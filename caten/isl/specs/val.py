@@ -311,7 +311,7 @@ _isl_val_int_from_chunks = ISLFunction.create(
     Context(),
     Param(int, ctype=c_size_t),
     Param(int, ctype=c_size_t),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("Val"),
     lib=_lib,
 )
@@ -370,7 +370,7 @@ _isl_val_get_abs_num_chunks = ISLFunction.create(
     "isl_val_get_abs_num_chunks",
     Keep("Val"),
     Param(int, ctype=c_size_t),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )

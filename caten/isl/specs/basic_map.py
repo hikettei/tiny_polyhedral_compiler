@@ -16,7 +16,6 @@ if TYPE_CHECKING:
     from .aff_list import AffList
     from .basic_set import BasicSet
     from .constraint import Constraint
-    from .constraint_list import ConstraintList
     from .context import Context
     from .id import Id
     from .local_space import LocalSpace
@@ -128,11 +127,8 @@ class BasicMap(ISLObject, ISLObjectMixin):
     def n_constraint(self) -> int:
         return _isl_basic_map_n_constraint(self)
 
-    def foreach_constraint(self, fn: Any, user: Any = None) -> int:
-        return _isl_basic_map_foreach_constraint(self, fn, user)
-
-    def get_constraint_list(self) -> "ConstraintList":
-        return _isl_basic_map_get_constraint_list(self)
+    def foreach_constraint(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_basic_map_foreach_constraint(self, fn, user, user_)
 
     def equalities_matrix(self, c1: int, c2: int, c3: int, c4: int, c5: int) -> "Mat":
         return _isl_basic_map_equalities_matrix(self, c1, c2, c3, c4, c5)
@@ -552,15 +548,9 @@ _isl_basic_map_foreach_constraint = ISLFunction.create(
     "isl_basic_map_foreach_constraint",
     Keep("BasicMap"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_basic_map_get_constraint_list = ISLFunction.create(
-    "isl_basic_map_get_constraint_list",
-    Keep("BasicMap"),
-    return_=Give("ConstraintList"),
     lib=_lib,
 )
 

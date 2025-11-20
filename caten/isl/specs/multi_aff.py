@@ -128,6 +128,10 @@ class MultiAff(ISLObject, ISLObjectMixin):
         return _isl_multi_aff_zero(space)
 
     @classmethod
+    def identity_on_domain_space(cls, space: "Space") -> "MultiAff":
+        return _isl_multi_aff_identity_on_domain_space(space)
+
+    @classmethod
     def identity(cls, space: "Space") -> "MultiAff":
         return _isl_multi_aff_identity(space)
 
@@ -170,6 +174,9 @@ class MultiAff(ISLObject, ISLObjectMixin):
 
     def size(self) -> int:
         return _isl_multi_aff_size(self)
+
+    def get_at(self, pos: int) -> "Aff":
+        return _isl_multi_aff_get_at(self, pos)
 
     def get_aff(self, pos: int) -> "Aff":
         return _isl_multi_aff_get_aff(self, pos)
@@ -317,6 +324,12 @@ class MultiAff(ISLObject, ISLObjectMixin):
 
     def sub(self, ma2: "MultiAff") -> "MultiAff":
         return _isl_multi_aff_sub(self, ma2)
+
+    def scale_val(self, v: "Val") -> "MultiAff":
+        return _isl_multi_aff_scale_val(self, v)
+
+    def scale_down_val(self, v: "Val") -> "MultiAff":
+        return _isl_multi_aff_scale_down_val(self, v)
 
     def mod_multi_val(self, mv: "MultiVal") -> "MultiAff":
         return _isl_multi_aff_mod_multi_val(self, mv)
@@ -513,6 +526,13 @@ _isl_multi_aff_zero = ISLFunction.create(
     lib=_lib,
 )
 
+_isl_multi_aff_identity_on_domain_space = ISLFunction.create(
+    "isl_multi_aff_identity_on_domain_space",
+    Take("Space"),
+    return_=Give("MultiAff"),
+    lib=_lib,
+)
+
 _isl_multi_aff_identity = ISLFunction.create(
     "isl_multi_aff_identity",
     Take("Space"),
@@ -614,6 +634,14 @@ _isl_multi_aff_size = ISLFunction.create(
     "isl_multi_aff_size",
     Keep("MultiAff"),
     return_=Param(int, ctype=c_int),
+    lib=_lib,
+)
+
+_isl_multi_aff_get_at = ISLFunction.create(
+    "isl_multi_aff_get_at",
+    Keep("MultiAff"),
+    Param(int, ctype=c_int),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
@@ -1020,6 +1048,22 @@ _isl_multi_aff_sub = ISLFunction.create(
     "isl_multi_aff_sub",
     Take("MultiAff"),
     Take("MultiAff"),
+    return_=Give("MultiAff"),
+    lib=_lib,
+)
+
+_isl_multi_aff_scale_val = ISLFunction.create(
+    "isl_multi_aff_scale_val",
+    Take("MultiAff"),
+    Take("Val"),
+    return_=Give("MultiAff"),
+    lib=_lib,
+)
+
+_isl_multi_aff_scale_down_val = ISLFunction.create(
+    "isl_multi_aff_scale_down_val",
+    Take("MultiAff"),
+    Take("Val"),
     return_=Give("MultiAff"),
     lib=_lib,
 )

@@ -65,12 +65,6 @@ class LocalSpace(ISLObject, ISLObjectMixin):
     def set_dim_name(self, type: int, pos: int, s: str) -> "LocalSpace":
         return _isl_local_space_set_dim_name(self, type, pos, s)
 
-    def has_dim_name(self, type: int, pos: int) -> bool:
-        return _isl_local_space_has_dim_name(self, type, pos)
-
-    def get_dim_name(self, type: int, pos: int) -> str:
-        return _isl_local_space_get_dim_name(self, type, pos)
-
     def find_dim_by_name(self, type: int, name: str) -> int:
         return _isl_local_space_find_dim_by_name(self, type, name)
 
@@ -185,24 +179,6 @@ _isl_local_space_set_dim_name = ISLFunction.create(
     Param(int, ctype=c_uint),
     Param(str, ctype=c_char_p),
     return_=Give("LocalSpace"),
-    lib=_lib,
-)
-
-_isl_local_space_has_dim_name = ISLFunction.create(
-    "isl_local_space_has_dim_name",
-    Keep("LocalSpace"),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_uint),
-    return_=Param(bool, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_local_space_get_dim_name = ISLFunction.create(
-    "isl_local_space_get_dim_name",
-    Keep("LocalSpace"),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_uint),
-    return_=Param(str, ctype=c_char_p),
     lib=_lib,
 )
 

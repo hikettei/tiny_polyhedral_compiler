@@ -49,8 +49,8 @@ class QpolynomialFold(ISLObject, ISLObjectMixin):
     def get_type(self) -> int:
         return _isl_qpolynomial_fold_get_type(self)
 
-    def foreach_qpolynomial(self, fn: Any, user: Any = None) -> int:
-        return _isl_qpolynomial_fold_foreach_qpolynomial(self, fn, user)
+    def foreach_qpolynomial(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_qpolynomial_fold_foreach_qpolynomial(self, fn, user, user_)
 
     def is_nan(self) -> bool:
         return _isl_qpolynomial_fold_is_nan(self)
@@ -109,7 +109,8 @@ _isl_qpolynomial_fold_foreach_qpolynomial = ISLFunction.create(
     "isl_qpolynomial_fold_foreach_qpolynomial",
     Keep("QpolynomialFold"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )

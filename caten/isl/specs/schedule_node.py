@@ -133,17 +133,17 @@ class ScheduleNode(ISLObject, ISLObjectMixin):
     def get_shared_ancestor(self, node2: "ScheduleNode") -> "ScheduleNode":
         return _isl_schedule_node_get_shared_ancestor(self, node2)
 
-    def foreach_descendant_top_down(self, fn: Any, user: Any = None) -> int:
-        return _isl_schedule_node_foreach_descendant_top_down(self, fn, user)
+    def foreach_descendant_top_down(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_schedule_node_foreach_descendant_top_down(self, fn, user, user_)
 
-    def every_descendant(self, test: Any, user: Any = None) -> bool:
-        return _isl_schedule_node_every_descendant(self, test, user)
+    def every_descendant(self, test: Any, user: Any, user_: Any = None) -> bool:
+        return _isl_schedule_node_every_descendant(self, test, user, user_)
 
-    def foreach_ancestor_top_down(self, fn: Any, user: Any = None) -> int:
-        return _isl_schedule_node_foreach_ancestor_top_down(self, fn, user)
+    def foreach_ancestor_top_down(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_schedule_node_foreach_ancestor_top_down(self, fn, user, user_)
 
-    def map_descendant_bottom_up(self, fn: Any, user: Any = None) -> "ScheduleNode":
-        return _isl_schedule_node_map_descendant_bottom_up(self, fn, user)
+    def map_descendant_bottom_up(self, fn: Any, user: Any, user_: Any = None) -> "ScheduleNode":
+        return _isl_schedule_node_map_descendant_bottom_up(self, fn, user, user_)
 
     def cut(self) -> "ScheduleNode":
         return _isl_schedule_node_cut(self)
@@ -533,7 +533,8 @@ _isl_schedule_node_foreach_descendant_top_down = ISLFunction.create(
     "isl_schedule_node_foreach_descendant_top_down",
     Keep("ScheduleNode"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -542,7 +543,8 @@ _isl_schedule_node_every_descendant = ISLFunction.create(
     "isl_schedule_node_every_descendant",
     Keep("ScheduleNode"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )
@@ -551,7 +553,8 @@ _isl_schedule_node_foreach_ancestor_top_down = ISLFunction.create(
     "isl_schedule_node_foreach_ancestor_top_down",
     Keep("ScheduleNode"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -560,7 +563,8 @@ _isl_schedule_node_map_descendant_bottom_up = ISLFunction.create(
     "isl_schedule_node_map_descendant_bottom_up",
     Take("ScheduleNode"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("ScheduleNode"),
     lib=_lib,
 )

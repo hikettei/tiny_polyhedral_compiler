@@ -110,11 +110,11 @@ class Schedule(ISLObject, ISLObjectMixin):
     def get_root(self) -> "ScheduleNode":
         return _isl_schedule_get_root(self)
 
-    def foreach_schedule_node_top_down(self, fn: Any, user: Any = None) -> int:
-        return _isl_schedule_foreach_schedule_node_top_down(self, fn, user)
+    def foreach_schedule_node_top_down(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_schedule_foreach_schedule_node_top_down(self, fn, user, user_)
 
-    def map_schedule_node_bottom_up(self, fn: Any, user: Any = None) -> "Schedule":
-        return _isl_schedule_map_schedule_node_bottom_up(self, fn, user)
+    def map_schedule_node_bottom_up(self, fn: Any, user: Any, user_: Any = None) -> "Schedule":
+        return _isl_schedule_map_schedule_node_bottom_up(self, fn, user, user_)
 
 
 register_type("Schedule", Schedule)
@@ -298,7 +298,8 @@ _isl_schedule_foreach_schedule_node_top_down = ISLFunction.create(
     "isl_schedule_foreach_schedule_node_top_down",
     Keep("Schedule"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -307,7 +308,8 @@ _isl_schedule_map_schedule_node_bottom_up = ISLFunction.create(
     "isl_schedule_map_schedule_node_bottom_up",
     Take("Schedule"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("Schedule"),
     lib=_lib,
 )

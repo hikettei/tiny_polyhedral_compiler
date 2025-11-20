@@ -56,6 +56,9 @@ class PwAff(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"PwAff({self.__str__()})"
 
+    def cond(self, pwaff_true: "PwAff", pwaff_false: "PwAff") -> "PwAff":
+        return _isl_pw_aff_cond(self, pwaff_true, pwaff_false)
+
     def get_ctx(self) -> "Context":
         return _isl_pw_aff_get_ctx(self)
 
@@ -149,11 +152,11 @@ class PwAff(ISLObject, ISLObjectMixin):
     def n_piece(self) -> int:
         return _isl_pw_aff_n_piece(self)
 
-    def foreach_piece(self, fn: Any, user: Any = None) -> int:
-        return _isl_pw_aff_foreach_piece(self, fn, user)
+    def foreach_piece(self, fn: Any, aff: "Aff", user: Any, user_: Any = None) -> int:
+        return _isl_pw_aff_foreach_piece(self, fn, aff, user, user_)
 
-    def every_piece(self, test: Any, user: Any = None) -> bool:
-        return _isl_pw_aff_every_piece(self, test, user)
+    def every_piece(self, test: Any, aff: "Aff", user: Any, user_: Any = None) -> bool:
+        return _isl_pw_aff_every_piece(self, test, aff, user, user_)
 
     def to_union_pw_aff(self) -> "UnionPwAff":
         return _isl_pw_aff_to_union_pw_aff(self)
@@ -365,11 +368,17 @@ class PwAff(ISLObject, ISLObjectMixin):
     def tdiv_r(self, pa2: "PwAff") -> "PwAff":
         return _isl_pw_aff_tdiv_r(self, pa2)
 
-    def cond(self, pwaff_true: "PwAff", pwaff_false: "PwAff") -> "PwAff":
-        return _isl_pw_aff_cond(self, pwaff_true, pwaff_false)
-
 
 register_type("PwAff", PwAff)
+
+_isl_pw_aff_cond = ISLFunction.create(
+    "isl_pw_aff_cond",
+    Take("PwAff"),
+    Take("PwAff"),
+    Take("PwAff"),
+    return_=Give("PwAff"),
+    lib=_lib,
+)
 
 _isl_pw_aff_get_ctx = ISLFunction.create(
     "isl_pw_aff_get_ctx",
@@ -607,7 +616,9 @@ _isl_pw_aff_foreach_piece = ISLFunction.create(
     "isl_pw_aff_foreach_piece",
     Keep("PwAff"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Take("Aff"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -616,7 +627,9 @@ _isl_pw_aff_every_piece = ISLFunction.create(
     "isl_pw_aff_every_piece",
     Keep("PwAff"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Keep("Aff"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )
@@ -1182,15 +1195,6 @@ _isl_pw_aff_tdiv_q = ISLFunction.create(
 
 _isl_pw_aff_tdiv_r = ISLFunction.create(
     "isl_pw_aff_tdiv_r",
-    Take("PwAff"),
-    Take("PwAff"),
-    return_=Give("PwAff"),
-    lib=_lib,
-)
-
-_isl_pw_aff_cond = ISLFunction.create(
-    "isl_pw_aff_cond",
-    Take("PwAff"),
     Take("PwAff"),
     Take("PwAff"),
     return_=Give("PwAff"),

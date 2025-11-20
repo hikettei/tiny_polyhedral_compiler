@@ -75,14 +75,14 @@ class PwQpolynomialFold(ISLObject, ISLObjectMixin):
     def n_piece(self) -> int:
         return _isl_pw_qpolynomial_fold_n_piece(self)
 
-    def foreach_piece(self, fn: Any, user: Any = None) -> int:
-        return _isl_pw_qpolynomial_fold_foreach_piece(self, fn, user)
+    def foreach_piece(self, fn: Any, fold: "QpolynomialFold", user: Any, user_: Any = None) -> int:
+        return _isl_pw_qpolynomial_fold_foreach_piece(self, fn, fold, user, user_)
 
-    def every_piece(self, test: Any, user: Any = None) -> bool:
-        return _isl_pw_qpolynomial_fold_every_piece(self, test, user)
+    def every_piece(self, test: Any, fold: "QpolynomialFold", user: Any, user_: Any = None) -> bool:
+        return _isl_pw_qpolynomial_fold_every_piece(self, test, fold, user, user_)
 
-    def foreach_lifted_piece(self, fn: Any, user: Any = None) -> int:
-        return _isl_pw_qpolynomial_fold_foreach_lifted_piece(self, fn, user)
+    def foreach_lifted_piece(self, fn: Any, fold: "QpolynomialFold", user: Any, user_: Any = None) -> int:
+        return _isl_pw_qpolynomial_fold_foreach_lifted_piece(self, fn, fold, user, user_)
 
     def to_union_pw_qpolynomial_fold(self) -> "UnionPwQpolynomialFold":
         return _isl_pw_qpolynomial_fold_to_union_pw_qpolynomial_fold(self)
@@ -237,7 +237,9 @@ _isl_pw_qpolynomial_fold_foreach_piece = ISLFunction.create(
     "isl_pw_qpolynomial_fold_foreach_piece",
     Keep("PwQpolynomialFold"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Take("QpolynomialFold"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -246,7 +248,9 @@ _isl_pw_qpolynomial_fold_every_piece = ISLFunction.create(
     "isl_pw_qpolynomial_fold_every_piece",
     Keep("PwQpolynomialFold"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Keep("QpolynomialFold"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )
@@ -255,7 +259,9 @@ _isl_pw_qpolynomial_fold_foreach_lifted_piece = ISLFunction.create(
     "isl_pw_qpolynomial_fold_foreach_lifted_piece",
     Keep("PwQpolynomialFold"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Take("QpolynomialFold"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )

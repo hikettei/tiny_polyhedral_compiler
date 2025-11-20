@@ -12,9 +12,13 @@ PRIMITIVE_TYPES = {
     "size_t": ("int", "c_size_t"),
     "double": ("float", "c_double"),
     "char *": ("str", "c_char_p"),
+    "char*": ("str", "c_char_p"),
     "const char *": ("str", "c_char_p"),
+    "const char*": ("str", "c_char_p"),
     "void *": ("Any", "c_void_p"),
+    "void*": ("Any", "c_void_p"),
     "const void *": ("Any", "c_void_p"),
+    "const void*": ("Any", "c_void_p"),
     "isl_bool": ("bool", "c_int"),
     "isl_size": ("int", "c_int"),
     "isl_stat": ("int", "c_int"),
@@ -23,6 +27,7 @@ PRIMITIVE_TYPES = {
     "long long": ("int", "c_longlong"),
     "unsigned long long": ("int", "c_ulonglong"),
     "FILE *": ("None", "c_void_p"),
+    "FILE*": ("None", "c_void_p"),
 }
 
 # Special types that are handled via Context or implicit mechanisms
@@ -316,7 +321,8 @@ class Generator:
         # Validate types - skip if any argument or return type is unknown
         for arg in args:
             c_type = arg["type"].strip()
-            if c_type == "isl_ctx *":
+            clean_type = c_type.replace("*", "").strip()
+            if clean_type == "isl_ctx":
                 continue
             if c_type in PRIMITIVE_TYPES:
                 continue
@@ -328,7 +334,7 @@ class Generator:
             if clean_type in self.c_type_map:
                 continue
             # Unknown type
-            # print(f"Skipping {c_name} due to unknown arg type: '{c_type}'")
+            print(f"Skipping {c_name} due to unknown arg type: '{c_type}'")
             return
 
         ret_type = func["return_type"].strip()
@@ -336,7 +342,7 @@ class Generator:
              clean_ret = ret_type.replace("*", "").strip()
              if clean_ret not in self.c_type_map:
                  # Unknown return type
-                 # print(f"Skipping {c_name} due to unknown return type: '{ret_type}'")
+                 print(f"Skipping {c_name} due to unknown return type: '{ret_type}'")
                  return
 
         return_info = func
@@ -353,9 +359,9 @@ class Generator:
         # Heuristic: if the first argument type matches the class C type, it's an instance method.
         # Otherwise it's a static method (classmethod).
         is_instance = False
-        class_c_type = self.types[owner_slug]["c_decl"]
+        class_c_type = self.types[owner_slug]["c_decl"].replace(" ", "")
         
-        if args and args[0]["type"] == class_c_type:
+        if args and args[0]["type"].replace(" ", "") == class_c_type:
             is_instance = True
             py_args.append("self")
             call_args.append("self")
@@ -364,7 +370,7 @@ class Generator:
         else:
             py_args.append("cls")
             
-        for arg in args[start_idx:]:
+        for i, arg in enumerate(args[start_idx:], start=start_idx):
             arg_name = arg["name"]
             
             # Try to extract name from function pointer type
@@ -386,13 +392,16 @@ class Generator:
             seen_args.add(arg_name)
             
             # Determine type hint
+            clean_type = arg["type"].replace("*", "").strip()
             arg_type = self._map_type_hint(arg["type"].strip())
             
             # Handle ctx specially? No, usually hidden.
-            if arg["type"] == "isl_ctx *":
+            if clean_type == "isl_ctx":
                 continue
-                
-            if arg_type == "Any" and arg_name in ("user", "user_"):
+            
+            # Only make 'user' optional if it's the last argument
+            is_last = (i == len(args) - 1)
+            if arg_type == "Any" and arg_name in ("user", "user_") and is_last:
                 py_args.append(f"{arg_name}: {arg_type} = None")
             else:
                 py_args.append(f"{arg_name}: {arg_type}")
@@ -436,7 +445,8 @@ class Generator:
         qualifiers = []
         for arg in func["arguments"]:
             c_type = arg["type"].strip()
-            if c_type == "isl_ctx *":
+            clean_type = c_type.replace("*", "").strip()
+            if clean_type == "isl_ctx":
                 qualifiers.append("Context()")
                 continue
                 
@@ -480,7 +490,7 @@ class Generator:
                     target = f"\"{self.types[slug]['class_name']}\""
                 else:
                     # Unknown type - skip this function
-                    # print(f"Skipping {c_name} due to unknown arg type: '{c_type}'")
+                    print(f"Skipping {c_name} due to unknown arg type: '{c_type}'")
                     return
 
             qualifiers.append(f"{qual_name}({target}{extra})")
@@ -516,7 +526,7 @@ class Generator:
                 ret_target = f"\"{self.types[slug]['class_name']}\""
             else:
                  # Unknown return type - skip
-                 # print(f"Skipping {c_name} due to unknown return type: '{ret_type}'")
+                 print(f"Skipping {c_name} due to unknown return type: '{ret_type}'")
                  return
 
         if ret_qual_name == "Null":
@@ -566,7 +576,7 @@ class Generator:
 
 if __name__ == "__main__":
     g = Generator(
-        "caten/isl/gen/catalog.json",
+        "autogen/gen/catalog.json",
         "caten/isl/specs"
     )
     g.generate()

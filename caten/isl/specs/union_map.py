@@ -120,11 +120,11 @@ class UnionMap(ISLObject, ISLObjectMixin):
     def remove_divs(self) -> "UnionMap":
         return _isl_union_map_remove_divs(self)
 
-    def foreach_map(self, fn: Any, user: Any = None) -> int:
-        return _isl_union_map_foreach_map(self, fn, user)
+    def foreach_map(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_union_map_foreach_map(self, fn, user, user_)
 
-    def every_map(self, test: Any, user: Any = None) -> bool:
-        return _isl_union_map_every_map(self, test, user)
+    def every_map(self, test: Any, user: Any, user_: Any = None) -> bool:
+        return _isl_union_map_every_map(self, test, user, user_)
 
     def n_map(self) -> int:
         return _isl_union_map_n_map(self)
@@ -229,8 +229,8 @@ class UnionMap(ISLObject, ISLObjectMixin):
     def from_domain_and_range(cls, domain: "UnionSet", range: "UnionSet") -> "UnionMap":
         return _isl_union_map_from_domain_and_range(domain, range)
 
-    def remove_map_if(self, fn: Any, user: Any = None) -> "UnionMap":
-        return _isl_union_map_remove_map_if(self, fn, user)
+    def remove_map_if(self, fn: Any, user: Any, user_: Any = None) -> "UnionMap":
+        return _isl_union_map_remove_map_if(self, fn, user, user_)
 
     def as_union_pw_multi_aff(self) -> "UnionPwMultiAff":
         return _isl_union_map_as_union_pw_multi_aff(self)
@@ -579,7 +579,8 @@ _isl_union_map_foreach_map = ISLFunction.create(
     "isl_union_map_foreach_map",
     Keep("UnionMap"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -588,7 +589,8 @@ _isl_union_map_every_map = ISLFunction.create(
     "isl_union_map_every_map",
     Keep("UnionMap"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )
@@ -859,7 +861,8 @@ _isl_union_map_remove_map_if = ISLFunction.create(
     "isl_union_map_remove_map_if",
     Take("UnionMap"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("UnionMap"),
     lib=_lib,
 )

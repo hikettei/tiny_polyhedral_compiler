@@ -73,7 +73,7 @@ _isl_id_alloc = ISLFunction.create(
     "isl_id_alloc",
     Context(),
     Param(str, ctype=c_char_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("Id"),
     lib=_lib,
 )

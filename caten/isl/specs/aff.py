@@ -94,6 +94,10 @@ class Aff(ISLObject, ISLObjectMixin):
         return _isl_aff_zero_on_domain(ls)
 
     @classmethod
+    def val_on_domain_space(cls, space: "Space", val: "Val") -> "Aff":
+        return _isl_aff_val_on_domain_space(space, val)
+
+    @classmethod
     def val_on_domain(cls, ls: "LocalSpace", val: "Val") -> "Aff":
         return _isl_aff_val_on_domain(ls, val)
 
@@ -248,6 +252,9 @@ class Aff(ISLObject, ISLObjectMixin):
     def lt_set(self, aff2: "Aff") -> "Set":
         return _isl_aff_lt_set(self, aff2)
 
+    def ge_basic_set(self, aff2: "Aff") -> "BasicSet":
+        return _isl_aff_ge_basic_set(self, aff2)
+
     def ge_set(self, aff2: "Aff") -> "Set":
         return _isl_aff_ge_set(self, aff2)
 
@@ -390,6 +397,14 @@ _isl_aff_zero_on_domain_space = ISLFunction.create(
 _isl_aff_zero_on_domain = ISLFunction.create(
     "isl_aff_zero_on_domain",
     Take("LocalSpace"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_val_on_domain_space = ISLFunction.create(
+    "isl_aff_val_on_domain_space",
+    Take("Space"),
+    Take("Val"),
     return_=Give("Aff"),
     lib=_lib,
 )
@@ -826,6 +841,14 @@ _isl_aff_lt_set = ISLFunction.create(
     Take("Aff"),
     Take("Aff"),
     return_=Give("Set"),
+    lib=_lib,
+)
+
+_isl_aff_ge_basic_set = ISLFunction.create(
+    "isl_aff_ge_basic_set",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("BasicSet"),
     lib=_lib,
 )
 

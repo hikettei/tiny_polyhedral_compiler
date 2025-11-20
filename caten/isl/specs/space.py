@@ -230,6 +230,9 @@ class Space(ISLObject, ISLObjectMixin):
     def multi_aff_on_domain_multi_val(self, mv: "MultiVal") -> "MultiAff":
         return _isl_space_multi_aff_on_domain_multi_val(self, mv)
 
+    def identity_pw_multi_aff_on_domain(self) -> "PwMultiAff":
+        return _isl_space_identity_pw_multi_aff_on_domain(self)
+
     def domain_map_pw_multi_aff(self) -> "PwMultiAff":
         return _isl_space_domain_map_pw_multi_aff(self)
 
@@ -295,6 +298,9 @@ class Space(ISLObject, ISLObjectMixin):
 
     def range_map(self) -> "Space":
         return _isl_space_range_map(self)
+
+    def add_unnamed_tuple_ui(self, dim: int) -> "Space":
+        return _isl_space_add_unnamed_tuple_ui(self, dim)
 
     def add_named_tuple_id_ui(self, tuple_id: "Id", dim: int) -> "Space":
         return _isl_space_add_named_tuple_id_ui(self, tuple_id, dim)
@@ -844,6 +850,13 @@ _isl_space_multi_aff_on_domain_multi_val = ISLFunction.create(
     lib=_lib,
 )
 
+_isl_space_identity_pw_multi_aff_on_domain = ISLFunction.create(
+    "isl_space_identity_pw_multi_aff_on_domain",
+    Take("Space"),
+    return_=Give("PwMultiAff"),
+    lib=_lib,
+)
+
 _isl_space_domain_map_pw_multi_aff = ISLFunction.create(
     "isl_space_domain_map_pw_multi_aff",
     Take("Space"),
@@ -1009,6 +1022,14 @@ _isl_space_domain_map = ISLFunction.create(
 _isl_space_range_map = ISLFunction.create(
     "isl_space_range_map",
     Take("Space"),
+    return_=Give("Space"),
+    lib=_lib,
+)
+
+_isl_space_add_unnamed_tuple_ui = ISLFunction.create(
+    "isl_space_add_unnamed_tuple_ui",
+    Take("Space"),
+    Param(int, ctype=c_uint),
     return_=Give("Space"),
     lib=_lib,
 )

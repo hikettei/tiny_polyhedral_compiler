@@ -171,8 +171,8 @@ class Set(ISLObject, ISLObjectMixin):
     def remove_unknown_divs(self) -> "Set":
         return _isl_set_remove_unknown_divs(self)
 
-    def foreach_basic_set(self, fn: Any, user: Any = None) -> int:
-        return _isl_set_foreach_basic_set(self, fn, user)
+    def foreach_basic_set(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_set_foreach_basic_set(self, fn, user, user_)
 
     def make_disjoint(self) -> "Set":
         return _isl_set_make_disjoint(self)
@@ -191,8 +191,8 @@ class Set(ISLObject, ISLObjectMixin):
     def box_from_points(cls, pnt1: "Point", pnt2: "Point") -> "Set":
         return _isl_set_box_from_points(pnt1, pnt2)
 
-    def foreach_point(self, fn: Any, user: Any = None) -> int:
-        return _isl_set_foreach_point(self, fn, user)
+    def foreach_point(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_set_foreach_point(self, fn, user, user_)
 
     def sample_point(self) -> "Point":
         return _isl_set_sample_point(self)
@@ -817,7 +817,8 @@ _isl_set_foreach_basic_set = ISLFunction.create(
     "isl_set_foreach_basic_set",
     Keep("Set"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -862,7 +863,8 @@ _isl_set_foreach_point = ISLFunction.create(
     "isl_set_foreach_point",
     Keep("Set"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )

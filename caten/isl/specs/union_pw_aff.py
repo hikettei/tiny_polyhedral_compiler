@@ -112,11 +112,11 @@ class UnionPwAff(ISLObject, ISLObjectMixin):
     def n_pw_aff(self) -> int:
         return _isl_union_pw_aff_n_pw_aff(self)
 
-    def foreach_pw_aff(self, fn: Any, user: Any = None) -> int:
-        return _isl_union_pw_aff_foreach_pw_aff(self, fn, user)
+    def foreach_pw_aff(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_union_pw_aff_foreach_pw_aff(self, fn, user, user_)
 
-    def every_pw_aff(self, test: Any, user: Any = None) -> bool:
-        return _isl_union_pw_aff_every_pw_aff(self, test, user)
+    def every_pw_aff(self, test: Any, user: Any, user_: Any = None) -> bool:
+        return _isl_union_pw_aff_every_pw_aff(self, test, user, user_)
 
     def extract_pw_aff(self, space: "Space") -> "PwAff":
         return _isl_union_pw_aff_extract_pw_aff(self, space)
@@ -368,7 +368,8 @@ _isl_union_pw_aff_foreach_pw_aff = ISLFunction.create(
     "isl_union_pw_aff_foreach_pw_aff",
     Keep("UnionPwAff"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -377,7 +378,8 @@ _isl_union_pw_aff_every_pw_aff = ISLFunction.create(
     "isl_union_pw_aff_every_pw_aff",
     Keep("UnionPwAff"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )

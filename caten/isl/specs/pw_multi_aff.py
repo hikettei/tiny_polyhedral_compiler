@@ -164,11 +164,11 @@ class PwMultiAff(ISLObject, ISLObjectMixin):
     def n_piece(self) -> int:
         return _isl_pw_multi_aff_n_piece(self)
 
-    def foreach_piece(self, fn: Any, user: Any = None) -> int:
-        return _isl_pw_multi_aff_foreach_piece(self, fn, user)
+    def foreach_piece(self, fn: Any, maff: "MultiAff", user: Any, user_: Any = None) -> int:
+        return _isl_pw_multi_aff_foreach_piece(self, fn, maff, user, user_)
 
-    def every_piece(self, test: Any, user: Any = None) -> bool:
-        return _isl_pw_multi_aff_every_piece(self, test, user)
+    def every_piece(self, test: Any, ma: "MultiAff", user: Any, user_: Any = None) -> bool:
+        return _isl_pw_multi_aff_every_piece(self, test, ma, user, user_)
 
     def get_at(self, pos: int) -> "PwAff":
         return _isl_pw_multi_aff_get_at(self, pos)
@@ -611,7 +611,9 @@ _isl_pw_multi_aff_foreach_piece = ISLFunction.create(
     "isl_pw_multi_aff_foreach_piece",
     Keep("PwMultiAff"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Take("MultiAff"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -620,7 +622,9 @@ _isl_pw_multi_aff_every_piece = ISLFunction.create(
     "isl_pw_multi_aff_every_piece",
     Keep("PwMultiAff"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Keep("MultiAff"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )
