@@ -219,6 +219,44 @@ def apply_patches(functions: List[Dict[str, Any]], types: Dict[str, Any]) -> Non
                 {"type": "unsigned", "qualifier": None, "name": "n"}
             ]
         },
+        {
+            "name": "isl_union_set_list_alloc",
+            "owner_slug": "union_set_list",
+            "method": "alloc",
+            "return_type": "isl_union_set_list *",
+            "return_qualifier": "__isl_give",
+            "arguments": [
+                {"type": "isl_ctx *", "qualifier": None, "name": "ctx"},
+                {"type": "int", "qualifier": None, "name": "n"}
+            ]
+        },
+        {
+            "name": "isl_union_set_list_add",
+            "owner_slug": "union_set_list",
+            "method": "add",
+            "return_type": "isl_union_set_list *",
+            "return_qualifier": "__isl_give",
+            "arguments": [
+                {"type": "isl_union_set_list *", "qualifier": "__isl_take", "name": "list"},
+                {"type": "isl_union_set *", "qualifier": "__isl_take", "name": "el"}
+            ]
+        },
+        {
+            "name": "isl_union_set_list_copy",
+            "owner_slug": "union_set_list",
+            "method": "copy",
+            "return_type": "isl_union_set_list *",
+            "return_qualifier": "__isl_give",
+            "arguments": [{"type": "isl_union_set_list *", "qualifier": "__isl_keep", "name": "list"}]
+        },
+        {
+            "name": "isl_union_set_list_free",
+            "owner_slug": "union_set_list",
+            "method": "free",
+            "return_type": "isl_union_set_list *",
+            "return_qualifier": "__isl_null",
+            "arguments": [{"type": "isl_union_set_list *", "qualifier": "__isl_take", "name": "list"}]
+        },
     ]
     
     for func in manual_additions:
