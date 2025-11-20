@@ -4,35 +4,35 @@ This document specifies the Intermediate Representation (IR) and the core class 
 
 ## 1. Instruction Set Architecture (`caten.ops`)
 
-The IR is designed to be minimal (RISC-style) to simplify the Backend Renderer. Complex operations (like `sin`, `cos`) should be decomposed or handled via high-level constructs in `Tensor`.
+The IR follows a strict RISC-style design, minimizing the number of primitives. Complex operations (like `SUB`, `DIV`) are composed of these primitives (e.g., `SUB(a, b)` -> `ADD(a, NEG(b))`).
 
-### Unary Operations
+### Unary Operations (7 Ops)
 *   `NEG`: Negation (`-x`)
-*   `EXP`: Exponential (`e^x`)
-*   `LOG`: Natural logarithm (`ln(x)`)
+*   `RECIP`: Reciprocal (`1/x`)
+*   `SIN`: Sine (`sin(x)`)
+*   `EXP2`: Base-2 Exponential (`2^x`)
+*   `LOG2`: Base-2 Logarithm (`log2(x)`)
 *   `SQRT`: Square root (`sqrt(x)`)
-*   `CAST`: Type casting.
+*   `NOT`: Bitwise/Logical Not (`~x`)
 
-### Binary Operations
+### Binary Operations (8 Ops)
 *   `ADD`: Addition (`x + y`)
-*   `SUB`: Subtraction (`x - y`)
 *   `MUL`: Multiplication (`x * y`)
-*   `DIV`: Division (`x / y`)
-*   `MOD`: Modulo (`x % y`)
+*   `IDIV`: Integer Division (`x // y`)
+*   `AND`: Bitwise And (`x & y`)
+*   `OR`: Bitwise Or (`x | y`)
+*   `XOR`: Bitwise Xor (`x ^ y`)
 *   `MAX`: Maximum (`max(x, y)`)
-*   `CMP`: Comparison (returns boolean/int mask).
+*   `MOVE`: Data copy/move.
 
-### Memory Operations
-*   `LOAD`: Read from memory (Tensor).
-*   `STORE`: Write to memory (Tensor).
+### Ternary / Comparison Operations (3 Ops)
+*   `NEQ`: Not Equal (`x != y`)
+*   `LT`: Less Than (`x < y`)
+*   `WHERE`: Conditional Select / Mux (`cond ? a : b`)
 
-### Reduction Operations
-*   `SUM`: Sum reduction (can be built from ADD).
-*   `PROD`: Product reduction.
-*   `MIN`/`MAX`: Min/Max reduction.
-
-### Control Flow (Implicit in Schedule)
-The Polyhedral Schedule defines the loops (`FOR`) and conditionals (`IF`). The IR blocks are the "statements" at the leaves of the schedule.
+### JIT / Memory Operations (2 Ops)
+*   `REF`: Load from memory / Reference.
+*   `STORE`: Store to memory.
 
 ---
 
