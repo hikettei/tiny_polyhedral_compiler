@@ -34,3 +34,8 @@ def test_compute_at():
         assert "Pool" in s_str
         # Should share common band
         assert "schedule" in s_str
+        
+        # Codegen
+        c_code = P.to_c(fused.schedule)
+        print(c_code)
+        assert "for" in c_code

@@ -20,6 +20,8 @@ class AstNodeList(ISLObject, ISLObjectMixin):
     def __init__(self, handle: Any = None) -> None:
         super().__init__(handle)
 
+    def copy_handle(self) -> Any:
+        raise NotImplementedError(f"{type(self).__name__} does not support copy.")
 
 
     @classmethod

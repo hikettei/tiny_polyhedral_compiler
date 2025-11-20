@@ -1,4 +1,5 @@
 from .analysis import compute_flow
+from .codegen import to_c
 from .schedule import schedule
 from .schedule_tree.band import band
 from .schedule_tree.domain import domain
@@ -14,4 +15,5 @@ __all__ = [
     "mark",
     "schedule",
     "compute_flow",
+    "to_c",
 ]

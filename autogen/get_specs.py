@@ -138,142 +138,330 @@ def parse_function(sig: str) -> Optional[Dict[str, Any]]:
     }
 
 def apply_patches(functions: List[Dict[str, Any]], types: Dict[str, Any]) -> None:
+
     existing_funcs = {f["name"] for f in functions}
+
     
+
     # 1. Add read_from_str for types if missing
+
     for slug, type_info in types.items():
+
         if slug == "ctx":
+
             continue
+
         func_name = f"isl_{slug}_read_from_str"
+
         if func_name not in existing_funcs:
+
             c_type_ptr = type_info["c_decl"]
+
             new_func = {
+
                 "name": func_name,
+
                 "owner_slug": slug,
+
                 "method": "read_from_str",
+
                 "return_type": c_type_ptr,
+
                 "return_qualifier": "__isl_give",
+
                 "arguments": [
+
                     {"qualifier": None, "type": "isl_ctx *", "name": "ctx"},
+
                     {"qualifier": None, "type": "const char *", "name": "str"}
+
                 ]
+
             }
+
             functions.append(new_func)
+
             existing_funcs.add(func_name)
 
+
+
     # 2. Manual additions
+
     manual_additions: List[Dict[str, Any]] = [
+
         {
+
             "name": "isl_constraint_copy",
+
             "owner_slug": "constraint",
+
             "method": "copy",
+
             "return_type": "isl_constraint *",
+
             "return_qualifier": "__isl_give",
+
             "arguments": [{"type": "isl_constraint *", "qualifier": "__isl_keep", "name": "c"}]
+
         },
+
         {
+
             "name": "isl_local_space_to_str",
+
             "owner_slug": "local_space",
+
             "method": "to_str",
+
             "return_type": "char *",
+
             "return_qualifier": "__isl_give",
+
             "arguments": [{"type": "isl_local_space *", "qualifier": "__isl_keep", "name": "ls"}]
+
         },
+
         {
+
             "name": "isl_basic_set_intersect",
+
             "owner_slug": "basic_set",
+
             "method": "intersect",
+
             "return_type": "isl_basic_set *",
+
             "return_qualifier": "__isl_give",
+
             "arguments": [
+
                 {"type": "isl_basic_set *", "qualifier": "__isl_take", "name": "bset1"},
+
                 {"type": "isl_basic_set *", "qualifier": "__isl_take", "name": "bset2"}
+
             ]
+
         },
+
         {
+
             "name": "isl_basic_map_remove_unknown_divs",
+
             "owner_slug": "basic_map",
+
             "method": "remove_unknown_divs",
+
             "return_type": "isl_basic_map *",
+
             "return_qualifier": "__isl_give",
+
             "arguments": [{"type": "isl_basic_map *", "qualifier": "__isl_take", "name": "bmap"}]
+
         },
+
         {
+
             "name": "isl_ast_node_list_from_ast_node",
+
             "owner_slug": "ast_node_list",
+
             "method": "from_ast_node",
+
             "return_type": "isl_ast_node_list *",
+
             "return_qualifier": "__isl_give",
+
             "arguments": [{"type": "isl_ast_node *", "qualifier": "__isl_take", "name": "node"}]
+
         },
+
         {
+
             "name": "isl_basic_set_project_out",
+
             "owner_slug": "basic_set",
+
             "method": "project_out",
+
             "return_type": "isl_basic_set *",
+
             "return_qualifier": "__isl_give",
+
             "arguments": [
+
                 {"type": "isl_basic_set *", "qualifier": "__isl_take", "name": "bset"},
+
                 {"type": "enum isl_dim_type", "qualifier": None, "name": "type"},
+
                 {"type": "unsigned", "qualifier": None, "name": "first"},
+
                 {"type": "unsigned", "qualifier": None, "name": "n"}
+
             ]
+
         },
+
         {
+
             "name": "isl_union_set_list_alloc",
+
             "owner_slug": "union_set_list",
+
             "method": "alloc",
+
             "return_type": "isl_union_set_list *",
+
             "return_qualifier": "__isl_give",
+
             "arguments": [
+
                 {"type": "isl_ctx *", "qualifier": None, "name": "ctx"},
+
                 {"type": "int", "qualifier": None, "name": "n"}
+
             ]
+
         },
+
         {
+
             "name": "isl_union_set_list_add",
+
             "owner_slug": "union_set_list",
+
             "method": "add",
+
             "return_type": "isl_union_set_list *",
+
             "return_qualifier": "__isl_give",
+
             "arguments": [
+
                 {"type": "isl_union_set_list *", "qualifier": "__isl_take", "name": "list"},
+
                 {"type": "isl_union_set *", "qualifier": "__isl_take", "name": "el"}
+
             ]
+
         },
+
         {
+
             "name": "isl_union_set_list_copy",
+
             "owner_slug": "union_set_list",
+
             "method": "copy",
+
             "return_type": "isl_union_set_list *",
+
             "return_qualifier": "__isl_give",
+
             "arguments": [{"type": "isl_union_set_list *", "qualifier": "__isl_keep", "name": "list"}]
+
         },
+
         {
+
             "name": "isl_union_set_list_free",
+
             "owner_slug": "union_set_list",
+
             "method": "free",
+
             "return_type": "isl_union_set_list *",
+
             "return_qualifier": "__isl_null",
+
             "arguments": [{"type": "isl_union_set_list *", "qualifier": "__isl_take", "name": "list"}]
+
         },
+
+        {
+
+            "name": "isl_printer_to_str",
+
+            "owner_slug": "printer",
+
+            "method": "alloc_str",
+
+            "return_type": "isl_printer *",
+
+            "return_qualifier": "__isl_give",
+
+            "arguments": [{"type": "isl_ctx *", "qualifier": None, "name": "ctx"}]
+
+        },
+
     ]
+
     
-    for func in manual_additions:
-        if func["name"] not in existing_funcs:
-            functions.append(func)
-            existing_funcs.add(func["name"])
-            
+
+    manual_funcs = {f["name"]: f for f in manual_additions}
+
+    new_functions = []
+
+    
+
+    for func in functions:
+
+        if func["name"] in manual_funcs:
+
+            new_functions.append(manual_funcs[func["name"]])
+
             # Ensure type exists
-            if "owner_slug" in func:
-                slug = func["owner_slug"]
+
+            if "owner_slug" in manual_funcs[func["name"]]:
+
+                slug = manual_funcs[func["name"]]["owner_slug"]
+
                 if slug not in types:
+
                     class_name = "".join(x.capitalize() for x in slug.split("_"))
+
                     types[slug] = {
+
                         "slug": slug,
+
                         "c_decl": f"isl_{slug} *",
+
                         "class_name": class_name
+
                     }
+
+            del manual_funcs[func["name"]]
+
+        else:
+
+            new_functions.append(func)
+
+            
+
+    for func in manual_funcs.values():
+
+        new_functions.append(func)
+
+        if "owner_slug" in func:
+
+            slug = func["owner_slug"]
+
+            if slug not in types:
+
+                class_name = "".join(x.capitalize() for x in slug.split("_"))
+
+                types[slug] = {
+
+                    "slug": slug,
+
+                    "c_decl": f"isl_{slug} *",
+
+                    "class_name": class_name
+
+                }
+
+    
+
+    functions[:] = new_functions
 
 def generate_catalog() -> None:
     html = fetch_manual()

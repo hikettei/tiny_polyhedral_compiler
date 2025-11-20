@@ -68,8 +68,35 @@ class domain(ScheduleNodeContext):
         # Ensure single valued schedule (take lexmax for late scheduling)
         prod_sched_map = prod_sched_map.lexmax()
         
-        combined_map = prod_sched_map.union(target_sched_map)
+        # Add ordering dimension: Producer -> ..., 0; Consumer -> ..., 1
+        import re
+        def extend_sched_str(s: str, val: int) -> str:
+            parts = s.strip("{} ").split("; ")
+            new_parts = []
+            for p in parts:
+                p = p.strip()
+                if "->" in p:
+                    # Replace "-> [x, y]" with "-> [x, y, val]"
+                    # Handle cases where [] might be empty or contain complex expressions
+                    p_new = re.sub(r"->\s*\[([^\]]*)\]", f"-> [\\1, {val}]", p)
+                    new_parts.append(p_new)
+                else:
+                    new_parts.append(p)
+            return "{ " + "; ".join(new_parts) + " }"
+
+        target_sched_str = str(target_sched_map)
+        prod_sched_str = str(prod_sched_map)
+        
+        target_sched_str_ext = extend_sched_str(target_sched_str, 1)
+        prod_sched_str_ext = extend_sched_str(prod_sched_str, 0)
+        
+        target_sched_map_ext = I.UnionMap(target_sched_str_ext)
+        prod_sched_map_ext = I.UnionMap(prod_sched_str_ext)
+        
+        combined_map = prod_sched_map_ext.union(target_sched_map_ext)
         mupa = I.MultiUnionPwAff.from_union_map(combined_map)
+        
+        # Combine domains
         
         new_domain_set = p_dom.union(c_dom)
         new_dom = domain(new_domain_set)
