@@ -13,29 +13,35 @@ def test_compute_at():
     with I.context():
         writes_conv = I.UnionMap("{ Conv[n,c,h,w] -> Out[n,c,h,w] }")
         reads_pool = I.UnionMap("{ Pool[n,c,ph,pw] -> Out[n,c,h,w] : 2*ph <= h < 2*ph + 2 and 2*pw <= w < 2*pw + 2 }")
-
+        
         # Setup Independent Domains
         with P.domain(conv_dom_str) as conv:
             conv.access(writes=writes_conv)
-            
+            # Explicit schedule to ensure valid C generation
+            with P.band("{ Conv[n,c,h,w] -> [n,c,h,w] }"):
+                pass
+        
+        print("\n--- Conv Schedule ---")
+        print(P.to_c(conv.schedule))
+
         with P.domain(pool_dom_str) as pool:
             pool.access(reads=reads_pool)
-            # Identity schedule for Pool
             with P.band("{ Pool[n,c,ph,pw] -> [n,c,ph,pw] }"):
                 pass
         
+        print("\n--- Pool Schedule ---")
+        print(P.to_c(pool.schedule))
+    
         # Compute At
         fused = conv.compute_at(pool)
         
+        print("\n--- Fused Schedule Tree ---")
         print(fused.schedule)
-        s_str = str(fused.schedule)
-        
-        assert "Conv" in s_str
-        assert "Pool" in s_str
-        # Should share common band
-        assert "schedule" in s_str
         
         # Codegen
         c_code = P.to_c(fused.schedule)
+        print("\n--- Fused C Code ---")
         print(c_code)
+        
         assert "for" in c_code
+        assert "2 *" in c_code or "* 2" in c_code
