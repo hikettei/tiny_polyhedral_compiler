@@ -32,8 +32,13 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 ignore_missing_imports = true
 
+[tool.coverage.run]
+omit = [
+    "caten/isl/specs/*",
+]
+
 [tool.pytest.ini_options]
-addopts = "--cov=caten --cov=test --cov-report=term-missing --cov-fail-under=60"
+addopts = "--cov=caten --cov-report=term-missing --cov-fail-under=80"
 testpaths = ["test"]
 
 [dependency-groups]
