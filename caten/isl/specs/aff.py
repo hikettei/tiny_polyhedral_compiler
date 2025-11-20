@@ -1,1364 +1,929 @@
 from __future__ import annotations
 
-from ctypes import c_int, c_void_p
+from ctypes import (
+    c_char_p,
+    c_int,
+    c_uint,
+)
+from typing import TYPE_CHECKING, Any
 
-from ..ffi import FfiPointer, load_libisl
+from ..ffi import load_libisl
 from ..func import ISLFunction
+from ..mixin import ISLObjectMixin
 from ..obj import ISLObject
-from ..qualifier import Give, Keep, Null, Param, Take
+from ..qualifier import Give, Keep, Param, Take
+from ..registry import register_type
 from .context import Context
-from .id import Id
-from .set import Set
-from .space import Space
-from .val import Val
+
+if TYPE_CHECKING:
+    from .context import Context
 
 _lib = load_libisl()
 
-
-class Aff(ISLObject):
-    """Wrapper for ``isl_aff``."""
-
+class Aff(ISLObject, ISLObjectMixin):
     __slots__ = ()
 
-    def __init__(self, handle_or_spec: str | FfiPointer) -> None:
+    def __init__(self, handle_or_spec: Any) -> None:
         if isinstance(handle_or_spec, str):
             handle = _isl_aff_read_from_str(handle_or_spec, return_raw_pointer=True)
+            super().__init__(handle)
         else:
-            handle = handle_or_spec
-        super().__init__(handle)
+            super().__init__(handle_or_spec)
 
     @classmethod
-    def from_str(cls, spec: str) -> "Aff":
+    def from_str(cls, spec: str) -> Any:
         return _isl_aff_read_from_str(spec)
 
-    def copy_handle(self) -> FfiPointer:
+    def copy_handle(self) -> Any:
         return _isl_aff_copy(self, return_raw_pointer=True)
 
     @classmethod
-    def free_handle(cls, handle: FfiPointer) -> None:
-        _isl_aff_free(handle)
+    def free_handle(cls, handle: Any) -> None:
+        _lib.isl_aff_free(handle)
 
-    def dim(self, dim_type: int) -> int:
-        return _isl_aff_dim(self, dim_type)
-
-    def get_space(self) -> Space:
-        return _isl_aff_get_space(self)
-
-    def get_domain_space(self) -> Space:
-        return _isl_aff_get_domain_space(self)
-
-    def plain_is_equal(self, other: "Aff") -> bool:
-        return _isl_aff_plain_is_equal(self, other)
-
-    def to_pw_aff(self) -> "PwAff":
-        return _isl_pw_aff_from_aff(self)
-
-    @classmethod
-    def zero_on_domain_space(cls, space: Space) -> "Aff":
-        return _isl_aff_zero_on_domain_space(space)
-
-    def __str__(self) -> str:  # pragma: no cover
+    def __str__(self) -> str:
         return _isl_aff_to_str(self)
 
-    def __repr__(self) -> str:  # pragma: no cover
+    def __repr__(self) -> str:
         return f"Aff({self.__str__()})"
 
+    def get_ctx(self) -> "Ctx":
+        return _isl_aff_get_ctx(self)
 
-class PwAff(ISLObject):
-    """Wrapper for ``isl_pw_aff``."""
+    def get_domain_space(self) -> "Space":
+        return _isl_aff_get_domain_space(self)
 
-    __slots__ = ()
+    def get_space(self) -> "Space":
+        return _isl_aff_get_space(self)
 
-    def __init__(self, handle_or_spec: str | FfiPointer) -> None:
-        if isinstance(handle_or_spec, str):
-            handle = _isl_pw_aff_read_from_str(handle_or_spec, return_raw_pointer=True)
-        else:
-            handle = handle_or_spec
-        super().__init__(handle)
+    def dim(self, type: int) -> int:
+        return _isl_aff_dim(self, type)
+
+    def set_dim_id(self, type: int, pos: int, id: "Id") -> "Aff":
+        return _isl_aff_set_dim_id(self, type, pos, id)
+
+    def set_dim_name(self, type: int, pos: int, s: str) -> "Aff":
+        return _isl_aff_set_dim_name(self, type, pos, s)
+
+    def get_dim_name(self, type: int, pos: int) -> str:
+        return _isl_aff_get_dim_name(self, type, pos)
+
+    def find_dim_by_name(self, type: int, name: str) -> int:
+        return _isl_aff_find_dim_by_name(self, type, name)
+
+    def set_tuple_id(self, type: int, id: "Id") -> "Aff":
+        return _isl_aff_set_tuple_id(self, type, id)
+
+    def get_domain_local_space(self) -> "LocalSpace":
+        return _isl_aff_get_domain_local_space(self)
+
+    def get_local_space(self) -> "LocalSpace":
+        return _isl_aff_get_local_space(self)
 
     @classmethod
-    def from_str(cls, spec: str) -> "PwAff":
-        return _isl_pw_aff_read_from_str(spec)
+    def zero_on_domain_space(cls, space: "Space") -> "Aff":
+        return _isl_aff_zero_on_domain_space(space)
 
     @classmethod
-    def from_aff(cls, aff: Aff) -> "PwAff":
-        return _isl_pw_aff_from_aff(aff)
-
-    def copy_handle(self) -> FfiPointer:
-        return _isl_pw_aff_copy(self, return_raw_pointer=True)
+    def zero_on_domain(cls, ls: "LocalSpace") -> "Aff":
+        return _isl_aff_zero_on_domain(ls)
 
     @classmethod
-    def free_handle(cls, handle: FfiPointer) -> None:
-        _isl_pw_aff_free(handle)
+    def val_on_domain(cls, ls: "LocalSpace", val: "Val") -> "Aff":
+        return _isl_aff_val_on_domain(ls, val)
 
-    def dim(self, dim_type: int) -> int:
-        return _isl_pw_aff_dim(self, dim_type)
-
-    def get_space(self) -> Space:
-        return _isl_pw_aff_get_space(self)
-
-    def get_domain_space(self) -> Space:
-        return _isl_pw_aff_get_domain_space(self)
-
-    def get_ctx(self) -> Context:
-        return _isl_pw_aff_get_ctx(self)
-
-    def get_dim_id(self, dim_type: int, pos: int) -> Id:
-        return _isl_pw_aff_get_dim_id(self, dim_type, pos)
-
-    def get_dim_name(self, dim_type: int, pos: int) -> str:
-        return _isl_pw_aff_get_dim_name(self, dim_type, pos)
-
-    def get_tuple_id(self, dim_type: int) -> Id:
-        return _isl_pw_aff_get_tuple_id(self, dim_type)
-
-    def set_dim_id(self, dim_type: int, pos: int, id: Id) -> "PwAff":
-        return _isl_pw_aff_set_dim_id(self, dim_type, pos, id)
-
-    def find_dim_by_name(self, dim_type: int, name: str) -> int:
-        return _isl_pw_aff_find_dim_by_name(self, dim_type, name)
-
-    def set_tuple_id(self, dim_type: int, id: Id) -> "PwAff":
-        return _isl_pw_aff_set_tuple_id(self, dim_type, id)
-
-    def reset_tuple_id(self, dim_type: int) -> "PwAff":
-        return _isl_pw_aff_reset_tuple_id(self, dim_type)
-
-    def reset_user(self) -> "PwAff":
-        return _isl_pw_aff_reset_user(self)
-
-    def has_dim_id(self, dim_type: int, pos: int) -> bool:
-        return _isl_pw_aff_has_dim_id(self, dim_type, pos)
-
-    def has_tuple_id(self, dim_type: int) -> bool:
-        return _isl_pw_aff_has_tuple_id(self, dim_type)
-
-    # construction / transforms
     @classmethod
-    def empty(cls, space: Space) -> "PwAff":
-        return _isl_pw_aff_empty(space)
+    def param_on_domain_space_id(cls, space: "Space", id: "Id") -> "Aff":
+        return _isl_aff_param_on_domain_space_id(space, id)
 
-    def add(self, other: "PwAff") -> "PwAff":
-        return _isl_pw_aff_add(self, other)
+    @classmethod
+    def var_on_domain(cls, ls: "LocalSpace", type: int, pos: int) -> "Aff":
+        return _isl_aff_var_on_domain(ls, type, pos)
 
-    def add_constant_val(self, val: Val) -> "PwAff":
-        return _isl_pw_aff_add_constant_val(self, val)
+    @classmethod
+    def nan_on_domain_space(cls, space: "Space") -> "Aff":
+        return _isl_aff_nan_on_domain_space(space)
 
-    def add_dims(self, dim_type: int, n: int) -> "PwAff":
-        return _isl_pw_aff_add_dims(self, dim_type, n)
+    @classmethod
+    def nan_on_domain(cls, ls: "LocalSpace") -> "Aff":
+        return _isl_aff_nan_on_domain(ls)
 
-    def align_params(self, space: Space) -> "PwAff":
-        return _isl_pw_aff_align_params(self, space)
+    def get_constant_val(self) -> "Val":
+        return _isl_aff_get_constant_val(self)
 
-    def domain(self) -> Set:
-        return _isl_pw_aff_domain(self)
+    def get_coefficient_val(self, type: int, pos: int) -> "Val":
+        return _isl_aff_get_coefficient_val(self, type, pos)
 
-    def domain_reverse(self) -> "PwAff":
-        return _isl_pw_aff_domain_reverse(self)
+    def coefficient_sgn(self, type: int, pos: int) -> int:
+        return _isl_aff_coefficient_sgn(self, type, pos)
 
-    def drop_dims(self, dim_type: int, first: int, n: int) -> "PwAff":
-        return _isl_pw_aff_drop_dims(self, dim_type, first, n)
+    def get_denominator_val(self) -> "Val":
+        return _isl_aff_get_denominator_val(self)
 
-    def drop_unused_params(self) -> "PwAff":
-        return _isl_pw_aff_drop_unused_params(self)
+    def get_div(self, pos: int) -> "Aff":
+        return _isl_aff_get_div(self, pos)
 
-    def coalesce(self) -> "PwAff":
-        return _isl_pw_aff_coalesce(self)
+    def set_constant_si(self, v: int) -> "Aff":
+        return _isl_aff_set_constant_si(self, v)
 
-    def cond(self, zero: "PwAff") -> "PwAff":
-        return _isl_pw_aff_cond(self, zero)
+    def set_constant_val(self, v: "Val") -> "Aff":
+        return _isl_aff_set_constant_val(self, v)
 
-    def div(self, aff: Aff) -> "PwAff":
-        return _isl_pw_aff_div(self, aff)
+    def set_coefficient_si(self, type: int, pos: int, v: int) -> "Aff":
+        return _isl_aff_set_coefficient_si(self, type, pos, v)
 
-    def floor(self) -> "PwAff":
-        return _isl_pw_aff_floor(self)
+    def set_coefficient_val(self, type: int, pos: int, v: "Val") -> "Aff":
+        return _isl_aff_set_coefficient_val(self, type, pos, v)
 
-    def ceil(self) -> "PwAff":
-        return _isl_pw_aff_ceil(self)
+    def add_constant_si(self, v: int) -> "Aff":
+        return _isl_aff_add_constant_si(self, v)
 
-    def mod_val(self, val: Val) -> "PwAff":
-        return _isl_pw_aff_mod_val(self, val)
+    def add_constant_val(self, v: "Val") -> "Aff":
+        return _isl_aff_add_constant_val(self, v)
 
-    def mul(self, aff: Aff) -> "PwAff":
-        return _isl_pw_aff_mul(self, aff)
+    def add_constant_num_si(self, v: int) -> "Aff":
+        return _isl_aff_add_constant_num_si(self, v)
 
-    def neg(self) -> "PwAff":
-        return _isl_pw_aff_neg(self)
+    def add_coefficient_si(self, type: int, pos: int, v: int) -> "Aff":
+        return _isl_aff_add_coefficient_si(self, type, pos, v)
 
-    def insert_dims(self, dim_type: int, first: int, n: int) -> "PwAff":
-        return _isl_pw_aff_insert_dims(self, dim_type, first, n)
+    def add_coefficient_val(self, type: int, pos: int, v: "Val") -> "Aff":
+        return _isl_aff_add_coefficient_val(self, type, pos, v)
 
-    def insert_domain(self, domain: Set) -> "PwAff":
-        return _isl_pw_aff_insert_domain(self, domain)
+    def involves_locals(self) -> bool:
+        return _isl_aff_involves_locals(self)
 
-    def intersect_domain(self, domain: Set) -> "PwAff":
-        return _isl_pw_aff_intersect_domain(self, domain)
-
-    def intersect_params(self, params: Set) -> "PwAff":
-        return _isl_pw_aff_intersect_params(self, params)
-
-    def intersect_domain_wrapped_domain(self, set_: Set) -> "PwAff":
-        return _isl_pw_aff_intersect_domain_wrapped_domain(self, set_)
-
-    def intersect_domain_wrapped_range(self, set_: Set) -> "PwAff":
-        return _isl_pw_aff_intersect_domain_wrapped_range(self, set_)
-
-    def subtract_domain(self, set_: Set) -> "PwAff":
-        return _isl_pw_aff_subtract_domain(self, set_)
-
-    def gist(self, context: Set) -> "PwAff":
-        return _isl_pw_aff_gist(self, context)
-
-    def gist_params(self, context: Set) -> "PwAff":
-        return _isl_pw_aff_gist_params(self, context)
-
-    def params(self) -> Set:
-        return _isl_pw_aff_params(self)
-
-    # predicates
-    def involves_dims(self, dim_type: int, first: int, n: int) -> bool:
-        return _isl_pw_aff_involves_dims(self, dim_type, first, n)
-
-    def involves_nan(self) -> bool:
-        return _isl_pw_aff_involves_nan(self)
-
-    def involves_param_id(self, id_: Id) -> bool:
-        return _isl_pw_aff_involves_param_id(self, id_)
+    def involves_dims(self, type: int, first: int, n: int) -> bool:
+        return _isl_aff_involves_dims(self, type, first, n)
 
     def is_cst(self) -> bool:
-        return _isl_pw_aff_is_cst(self)
+        return _isl_aff_is_cst(self)
 
-    def is_empty(self) -> bool:
-        return _isl_pw_aff_is_empty(self)
+    def is_nan(self) -> bool:
+        return _isl_aff_is_nan(self)
 
-    def is_equal(self, other: "PwAff") -> bool:
-        return _isl_pw_aff_is_equal(self, other)
+    def plain_is_zero(self) -> bool:
+        return _isl_aff_plain_is_zero(self)
 
-    # conversions / maps
-    def as_map(self) -> "Map":
-        from .map import Map
+    def is_equal(self, aff2: "Aff") -> bool:
+        return _isl_aff_plain_is_equal(self, aff2)
 
-        return _isl_pw_aff_as_map(self)
+    def domain_reverse(self) -> "Aff":
+        return _isl_aff_domain_reverse(self)
 
-    def isa_aff(self) -> bool:
-        return _isl_pw_aff_isa_aff(self)
+    def bind_id(self, id: "Id") -> "BasicSet":
+        return _isl_aff_bind_id(self, id)
 
-    def as_aff(self) -> Aff:
-        return _isl_pw_aff_as_aff(self)
+    def project_domain_on_params(self) -> "Aff":
+        return _isl_aff_project_domain_on_params(self)
 
-    @classmethod
-    def alloc(cls, set_space: Space, aff: Aff) -> "PwAff":
-        return _isl_pw_aff_alloc(set_space, aff)
+    def unbind_params_insert_domain(self, domain: "MultiId") -> "Aff":
+        return _isl_aff_unbind_params_insert_domain(self, domain)
 
-    @classmethod
-    def zero_on_domain(cls, set_space: Set) -> "PwAff":
-        return _isl_pw_aff_zero_on_domain(set_space)
+    def from_range(self) -> "Aff":
+        return _isl_aff_from_range(self)
 
-    @classmethod
-    def var_on_domain(cls, space: Space, type_: int, pos: int) -> "PwAff":
-        return _isl_pw_aff_var_on_domain(space, type_, pos)
+    def zero_basic_set(self) -> "BasicSet":
+        return _isl_aff_zero_basic_set(self)
 
-    def nan_on_domain_space(self) -> "PwAff":
-        return _isl_pw_aff_nan_on_domain_space(self)
+    def neg_basic_set(self) -> "BasicSet":
+        return _isl_aff_neg_basic_set(self)
 
-    def nan_on_domain(self) -> "PwAff":
-        return _isl_pw_aff_nan_on_domain(self)
+    def align_params(self, model: "Space") -> "Aff":
+        return _isl_aff_align_params(self, model)
 
-    def val_on_domain(self, val: Val) -> "PwAff":
-        return _isl_pw_aff_val_on_domain(self, val)
+    def neg(self) -> "Aff":
+        return _isl_aff_neg(self)
 
-    def param_on_domain_id(self, id_: Id) -> "PwAff":
-        return _isl_pw_aff_param_on_domain_id(self, id_)
+    def ceil(self) -> "Aff":
+        return _isl_aff_ceil(self)
 
-    def n_piece(self) -> int:
-        return _isl_pw_aff_n_piece(self)
+    def floor(self) -> "Aff":
+        return _isl_aff_floor(self)
 
-    def foreach_piece(self, fn: object) -> int:
-        return _isl_pw_aff_foreach_piece(self, fn, None)
+    def eval(self, pnt: "Point") -> "Val":
+        return _isl_aff_eval(self, pnt)
 
-    def every_piece(self, fn: object) -> bool:
-        return bool(_isl_pw_aff_every_piece(self, fn, None))
+    def insert_dims(self, type: int, first: int, n: int) -> "Aff":
+        return _isl_aff_insert_dims(self, type, first, n)
 
-    def to_union_pw_aff(self) -> "UnionPwAff":
-        from .union_pw_aff import UnionPwAff
+    def add_dims(self, type: int, n: int) -> "Aff":
+        return _isl_aff_add_dims(self, type, n)
 
-        return _isl_pw_aff_to_union_pw_aff(self)
+    def drop_dims(self, type: int, first: int, n: int) -> "Aff":
+        return _isl_aff_drop_dims(self, type, first, n)
 
-    def move_dims(self, dst_type: int, dst_pos: int, src_type: int, src_pos: int, n: int) -> "PwAff":
-        return _isl_pw_aff_move_dims(self, dst_type, dst_pos, src_type, src_pos, n)
+    def move_dims(self, dst_type: int, dst_pos: int, src_type: int, src_pos: int, n: int) -> "Aff":
+        return _isl_aff_move_dims(self, dst_type, dst_pos, src_type, src_pos, n)
 
-    def pullback_multi_aff(self, ma: "MultiAff") -> "PwAff":
-        return _isl_pw_aff_pullback_multi_aff(self, ma)
+    def pullback_aff(self, aff2: "Aff") -> "Aff":
+        return _isl_aff_pullback_aff(self, aff2)
 
-    def pullback_pw_multi_aff(self, pma: "PwMultiAff") -> "PwAff":
-        return _isl_pw_aff_pullback_pw_multi_aff(self, pma)
+    def pullback_multi_aff(self, ma: "MultiAff") -> "Aff":
+        return _isl_aff_pullback_multi_aff(self, ma)
 
-    def pullback_multi_pw_aff(self, mpa: "MultiPwAff") -> "PwAff":
-        return _isl_pw_aff_pullback_multi_pw_aff(self, mpa)
+    def eq_basic_set(self, aff2: "Aff") -> "BasicSet":
+        return _isl_aff_eq_basic_set(self, aff2)
 
-    def eq_set(self, set_: Set) -> Set:
-        return _isl_pw_aff_eq_set(self, set_)
+    def eq_set(self, aff2: "Aff") -> "Set":
+        return _isl_aff_eq_set(self, aff2)
 
-    def ne_set(self, set_: Set) -> Set:
-        return _isl_pw_aff_ne_set(self, set_)
+    def ne_set(self, aff2: "Aff") -> "Set":
+        return _isl_aff_ne_set(self, aff2)
 
-    def le_set(self, set_: Set) -> Set:
-        return _isl_pw_aff_le_set(self, set_)
+    def le_basic_set(self, aff2: "Aff") -> "BasicSet":
+        return _isl_aff_le_basic_set(self, aff2)
 
-    def lt_set(self, set_: Set) -> Set:
-        return _isl_pw_aff_lt_set(self, set_)
+    def le_set(self, aff2: "Aff") -> "Set":
+        return _isl_aff_le_set(self, aff2)
 
-    def ge_set(self, set_: Set) -> Set:
-        return _isl_pw_aff_ge_set(self, set_)
+    def lt_basic_set(self, aff2: "Aff") -> "BasicSet":
+        return _isl_aff_lt_basic_set(self, aff2)
 
-    def gt_set(self, set_: Set) -> Set:
-        return _isl_pw_aff_gt_set(self, set_)
+    def lt_set(self, aff2: "Aff") -> "Set":
+        return _isl_aff_lt_set(self, aff2)
 
-    def eq_map(self, other: "PwAff") -> "Map":
-        from .map import Map
+    def ge_set(self, aff2: "Aff") -> "Set":
+        return _isl_aff_ge_set(self, aff2)
 
-        return _isl_pw_aff_eq_map(self, other)
+    def gt_basic_set(self, aff2: "Aff") -> "BasicSet":
+        return _isl_aff_gt_basic_set(self, aff2)
 
-    def le_map(self, other: "PwAff") -> "Map":
-        from .map import Map
+    def gt_set(self, aff2: "Aff") -> "Set":
+        return _isl_aff_gt_set(self, aff2)
 
-        return _isl_pw_aff_le_map(self, other)
+    def gist_params(self, context: "Set") -> "Aff":
+        return _isl_aff_gist_params(self, context)
 
-    def lt_map(self, other: "PwAff") -> "Map":
-        from .map import Map
+    def gist(self, context: "Set") -> "Aff":
+        return _isl_aff_gist(self, context)
 
-        return _isl_pw_aff_lt_map(self, other)
+    def add(self, aff2: "Aff") -> "Aff":
+        return _isl_aff_add(self, aff2)
 
-    def ge_map(self, other: "PwAff") -> "Map":
-        from .map import Map
+    def sub(self, aff2: "Aff") -> "Aff":
+        return _isl_aff_sub(self, aff2)
 
-        return _isl_pw_aff_ge_map(self, other)
+    def mod_val(self, mod: "Val") -> "Aff":
+        return _isl_aff_mod_val(self, mod)
 
-    def gt_map(self, other: "PwAff") -> "Map":
-        from .map import Map
+    def scale_val(self, v: "Val") -> "Aff":
+        return _isl_aff_scale_val(self, v)
 
-        return _isl_pw_aff_gt_map(self, other)
+    def scale_down_ui(self, f: int) -> "Aff":
+        return _isl_aff_scale_down_ui(self, f)
 
-    def plain_is_equal(self, other: "PwAff") -> bool:
-        return _isl_pw_aff_plain_is_equal(self, other)
+    def scale_down_val(self, v: "Val") -> "Aff":
+        return _isl_aff_scale_down_val(self, v)
 
-    def __str__(self) -> str:  # pragma: no cover
-        return _isl_pw_aff_to_str(self)
+    def mul(self, aff2: "Aff") -> "Aff":
+        return _isl_aff_mul(self, aff2)
 
-    def __repr__(self) -> str:  # pragma: no cover
-        return f"PwAff({self.__str__()})"
+    def div(self, aff2: "Aff") -> "Aff":
+        return _isl_aff_div(self, aff2)
 
 
-class MultiAff(ISLObject):
-    """Wrapper for ``isl_multi_aff``."""
+register_type("Aff", Aff)
 
-    __slots__ = ()
-
-    def __init__(self, handle_or_spec: str | FfiPointer) -> None:
-        if isinstance(handle_or_spec, str):
-            handle = _isl_multi_aff_read_from_str(handle_or_spec, return_raw_pointer=True)
-        else:
-            handle = handle_or_spec
-        super().__init__(handle)
-
-    @classmethod
-    def from_str(cls, spec: str) -> "MultiAff":
-        return _isl_multi_aff_read_from_str(spec)
-
-    def copy_handle(self) -> FfiPointer:
-        return _isl_multi_aff_copy(self, return_raw_pointer=True)
-
-    @classmethod
-    def free_handle(cls, handle: FfiPointer) -> None:
-        _isl_multi_aff_free(handle)
-
-    def dim(self, dim_type: int) -> int:
-        return _isl_multi_aff_dim(self, dim_type)
-
-    def __str__(self) -> str:  # pragma: no cover
-        return _isl_multi_aff_to_str(self)
-
-    def __repr__(self) -> str:  # pragma: no cover
-        return f"MultiAff({self.__str__()})"
-
-
-class PwMultiAff(ISLObject):
-    """Wrapper for ``isl_pw_multi_aff``."""
-
-    __slots__ = ()
-
-    def __init__(self, handle_or_spec: str | FfiPointer) -> None:
-        if isinstance(handle_or_spec, str):
-            handle = _isl_pw_multi_aff_read_from_str(handle_or_spec, return_raw_pointer=True)
-        else:
-            handle = handle_or_spec
-        super().__init__(handle)
-
-    @classmethod
-    def from_str(cls, spec: str) -> "PwMultiAff":
-        return _isl_pw_multi_aff_read_from_str(spec)
-
-    def copy_handle(self) -> FfiPointer:
-        return _isl_pw_multi_aff_copy(self, return_raw_pointer=True)
-
-    @classmethod
-    def free_handle(cls, handle: FfiPointer) -> None:
-        _isl_pw_multi_aff_free(handle)
-
-    def dim(self, dim_type: int) -> int:
-        return _isl_pw_multi_aff_dim(self, dim_type)
-
-    def __str__(self) -> str:  # pragma: no cover
-        return _isl_pw_multi_aff_to_str(self)
-
-    def __repr__(self) -> str:  # pragma: no cover
-        return f"PwMultiAff({self.__str__()})"
-
-
-# --- Aff primitives ---
-
-_isl_aff_read_from_str = ISLFunction.create(
-    _lib.isl_aff_read_from_str,
-    Context(),
-    Param(str),
-    return_=Give(Aff),
-    lib=_lib,
-)
-
-_isl_aff_copy = ISLFunction.create(
-    _lib.isl_aff_copy,
-    Keep(Aff),
-    return_=Give(Aff),
-    lib=_lib,
-)
-
-_isl_aff_free = ISLFunction.create(
-    _lib.isl_aff_free,
-    Param(None, ctype=c_void_p),
-    return_=Null(),
-    lib=_lib,
-)
-
-_isl_aff_dim = ISLFunction.create(
-    _lib.isl_aff_dim,
-    Keep(Aff),
-    Param(int, ctype=c_int),
-    return_=Param(int, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_aff_get_space = ISLFunction.create(
-    _lib.isl_aff_get_space,
-    Keep(Aff),
-    return_=Give(Space),
+_isl_aff_get_ctx = ISLFunction.create(
+    "isl_aff_get_ctx",
+    Keep("Aff"),
+    return_=Give("Ctx"),
     lib=_lib,
 )
 
 _isl_aff_get_domain_space = ISLFunction.create(
-    _lib.isl_aff_get_domain_space,
-    Keep(Aff),
-    return_=Give(Space),
+    "isl_aff_get_domain_space",
+    Keep("Aff"),
+    return_=Give("Space"),
     lib=_lib,
 )
 
-_isl_aff_plain_is_equal = ISLFunction.create(
-    _lib.isl_aff_plain_is_equal,
-    Keep(Aff),
-    Keep(Aff),
-    return_=Param(bool, ctype=c_int),
+_isl_aff_get_space = ISLFunction.create(
+    "isl_aff_get_space",
+    Keep("Aff"),
+    return_=Give("Space"),
     lib=_lib,
 )
 
-_isl_aff_to_str = ISLFunction.create(
-    _lib.isl_aff_to_str,
-    Keep(Aff),
-    return_=Param(str),
+_isl_aff_dim = ISLFunction.create(
+    "isl_aff_dim",
+    Keep("Aff"),
+    Param(int, ctype=c_int),
+    return_=Param(int, ctype=c_int),
+    lib=_lib,
+)
+
+_isl_aff_set_dim_id = ISLFunction.create(
+    "isl_aff_set_dim_id",
+    Take("Aff"),
+    Param(int, ctype=c_int),
+    Param(int, ctype=c_uint),
+    Take("Id"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_set_dim_name = ISLFunction.create(
+    "isl_aff_set_dim_name",
+    Take("Aff"),
+    Param(int, ctype=c_int),
+    Param(int, ctype=c_uint),
+    Param(str, ctype=c_char_p),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_get_dim_name = ISLFunction.create(
+    "isl_aff_get_dim_name",
+    Keep("Aff"),
+    Param(int, ctype=c_int),
+    Param(int, ctype=c_uint),
+    return_=Param(str, ctype=c_char_p),
+    lib=_lib,
+)
+
+_isl_aff_find_dim_by_name = ISLFunction.create(
+    "isl_aff_find_dim_by_name",
+    Keep("Aff"),
+    Param(int, ctype=c_int),
+    Param(str, ctype=c_char_p),
+    return_=Param(int, ctype=c_int),
+    lib=_lib,
+)
+
+_isl_aff_set_tuple_id = ISLFunction.create(
+    "isl_aff_set_tuple_id",
+    Take("Aff"),
+    Param(int, ctype=c_int),
+    Take("Id"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_get_domain_local_space = ISLFunction.create(
+    "isl_aff_get_domain_local_space",
+    Keep("Aff"),
+    return_=Give("LocalSpace"),
+    lib=_lib,
+)
+
+_isl_aff_get_local_space = ISLFunction.create(
+    "isl_aff_get_local_space",
+    Keep("Aff"),
+    return_=Give("LocalSpace"),
     lib=_lib,
 )
 
 _isl_aff_zero_on_domain_space = ISLFunction.create(
-    _lib.isl_aff_zero_on_domain_space,
-    Take(Space),
-    return_=Give(Aff),
+    "isl_aff_zero_on_domain_space",
+    Take("Space"),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-# --- PwAff primitives ---
+_isl_aff_zero_on_domain = ISLFunction.create(
+    "isl_aff_zero_on_domain",
+    Take("LocalSpace"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
 
-_isl_pw_aff_read_from_str = ISLFunction.create(
-    _lib.isl_pw_aff_read_from_str,
+_isl_aff_val_on_domain = ISLFunction.create(
+    "isl_aff_val_on_domain",
+    Take("LocalSpace"),
+    Take("Val"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_param_on_domain_space_id = ISLFunction.create(
+    "isl_aff_param_on_domain_space_id",
+    Take("Space"),
+    Take("Id"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_var_on_domain = ISLFunction.create(
+    "isl_aff_var_on_domain",
+    Take("LocalSpace"),
+    Param(int, ctype=c_int),
+    Param(int, ctype=c_uint),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_nan_on_domain_space = ISLFunction.create(
+    "isl_aff_nan_on_domain_space",
+    Take("Space"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_nan_on_domain = ISLFunction.create(
+    "isl_aff_nan_on_domain",
+    Take("LocalSpace"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_copy = ISLFunction.create(
+    "isl_aff_copy",
+    Keep("Aff"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_free = ISLFunction.create(
+    "isl_aff_free",
+    Take("Aff"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_get_constant_val = ISLFunction.create(
+    "isl_aff_get_constant_val",
+    Keep("Aff"),
+    return_=Give("Val"),
+    lib=_lib,
+)
+
+_isl_aff_get_coefficient_val = ISLFunction.create(
+    "isl_aff_get_coefficient_val",
+    Keep("Aff"),
+    Param(int, ctype=c_int),
+    Param(int, ctype=c_int),
+    return_=Give("Val"),
+    lib=_lib,
+)
+
+_isl_aff_coefficient_sgn = ISLFunction.create(
+    "isl_aff_coefficient_sgn",
+    Keep("Aff"),
+    Param(int, ctype=c_int),
+    Param(int, ctype=c_int),
+    return_=Param(int, ctype=c_int),
+    lib=_lib,
+)
+
+_isl_aff_get_denominator_val = ISLFunction.create(
+    "isl_aff_get_denominator_val",
+    Keep("Aff"),
+    return_=Give("Val"),
+    lib=_lib,
+)
+
+_isl_aff_get_div = ISLFunction.create(
+    "isl_aff_get_div",
+    Keep("Aff"),
+    Param(int, ctype=c_int),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_set_constant_si = ISLFunction.create(
+    "isl_aff_set_constant_si",
+    Take("Aff"),
+    Param(int, ctype=c_int),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_set_constant_val = ISLFunction.create(
+    "isl_aff_set_constant_val",
+    Take("Aff"),
+    Take("Val"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_set_coefficient_si = ISLFunction.create(
+    "isl_aff_set_coefficient_si",
+    Take("Aff"),
+    Param(int, ctype=c_int),
+    Param(int, ctype=c_int),
+    Param(int, ctype=c_int),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_set_coefficient_val = ISLFunction.create(
+    "isl_aff_set_coefficient_val",
+    Take("Aff"),
+    Param(int, ctype=c_int),
+    Param(int, ctype=c_int),
+    Take("Val"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_add_constant_si = ISLFunction.create(
+    "isl_aff_add_constant_si",
+    Take("Aff"),
+    Param(int, ctype=c_int),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_add_constant_val = ISLFunction.create(
+    "isl_aff_add_constant_val",
+    Take("Aff"),
+    Take("Val"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_add_constant_num_si = ISLFunction.create(
+    "isl_aff_add_constant_num_si",
+    Take("Aff"),
+    Param(int, ctype=c_int),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_add_coefficient_si = ISLFunction.create(
+    "isl_aff_add_coefficient_si",
+    Take("Aff"),
+    Param(int, ctype=c_int),
+    Param(int, ctype=c_int),
+    Param(int, ctype=c_int),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_add_coefficient_val = ISLFunction.create(
+    "isl_aff_add_coefficient_val",
+    Take("Aff"),
+    Param(int, ctype=c_int),
+    Param(int, ctype=c_int),
+    Take("Val"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_read_from_str = ISLFunction.create(
+    "isl_aff_read_from_str",
     Context(),
-    Param(str),
-    return_=Give(PwAff),
+    Param(str, ctype=c_char_p),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_copy = ISLFunction.create(
-    _lib.isl_pw_aff_copy,
-    Keep(PwAff),
-    return_=Give(PwAff),
+_isl_aff_to_str = ISLFunction.create(
+    "isl_aff_to_str",
+    Keep("Aff"),
+    return_=Param(str, ctype=c_char_p),
     lib=_lib,
 )
 
-_isl_pw_aff_free = ISLFunction.create(
-    _lib.isl_pw_aff_free,
-    Param(None, ctype=c_void_p),
-    return_=Null(),
-    lib=_lib,
-)
-
-_isl_pw_aff_dim = ISLFunction.create(
-    _lib.isl_pw_aff_dim,
-    Keep(PwAff),
-    Param(int, ctype=c_int),
-    return_=Param(int, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_pw_aff_get_space = ISLFunction.create(
-    _lib.isl_pw_aff_get_space,
-    Keep(PwAff),
-    return_=Give(Space),
-    lib=_lib,
-)
-
-_isl_pw_aff_get_domain_space = ISLFunction.create(
-    _lib.isl_pw_aff_get_domain_space,
-    Keep(PwAff),
-    return_=Give(Space),
-    lib=_lib,
-)
-
-_isl_pw_aff_plain_is_equal = ISLFunction.create(
-    _lib.isl_pw_aff_plain_is_equal,
-    Keep(PwAff),
-    Keep(PwAff),
+_isl_aff_involves_locals = ISLFunction.create(
+    "isl_aff_involves_locals",
+    Keep("Aff"),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )
 
-_isl_pw_aff_is_equal = ISLFunction.create(
-    _lib.isl_pw_aff_is_equal,
-    Keep(PwAff),
-    Keep(PwAff),
+_isl_aff_involves_dims = ISLFunction.create(
+    "isl_aff_involves_dims",
+    Keep("Aff"),
+    Param(int, ctype=c_int),
+    Param(int, ctype=c_uint),
+    Param(int, ctype=c_uint),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )
 
-_isl_pw_aff_from_aff = ISLFunction.create(
-    _lib.isl_pw_aff_from_aff,
-    Take(Aff),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_to_str = ISLFunction.create(
-    _lib.isl_pw_aff_to_str,
-    Keep(PwAff),
-    return_=Param(str),
-    lib=_lib,
-)
-
-_isl_pw_aff_get_ctx = ISLFunction.create(
-    _lib.isl_pw_aff_get_ctx,
-    Keep(PwAff),
-    return_=Give(Context),
-    lib=_lib,
-)
-
-_isl_pw_aff_get_dim_id = ISLFunction.create(
-    _lib.isl_pw_aff_get_dim_id,
-    Keep(PwAff),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    return_=Give(Id),
-    lib=_lib,
-)
-
-_isl_pw_aff_get_dim_name = ISLFunction.create(
-    _lib.isl_pw_aff_get_dim_name,
-    Keep(PwAff),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    return_=Param(str),
-    lib=_lib,
-)
-
-_isl_pw_aff_get_tuple_id = ISLFunction.create(
-    _lib.isl_pw_aff_get_tuple_id,
-    Keep(PwAff),
-    Param(int, ctype=c_int),
-    return_=Give(Id),
-    lib=_lib,
-)
-
-_isl_pw_aff_has_dim_id = ISLFunction.create(
-    _lib.isl_pw_aff_has_dim_id,
-    Keep(PwAff),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
+_isl_aff_is_cst = ISLFunction.create(
+    "isl_aff_is_cst",
+    Keep("Aff"),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )
 
-_isl_pw_aff_has_tuple_id = ISLFunction.create(
-    _lib.isl_pw_aff_has_tuple_id,
-    Keep(PwAff),
-    Param(int, ctype=c_int),
+_isl_aff_is_nan = ISLFunction.create(
+    "isl_aff_is_nan",
+    Keep("Aff"),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )
 
-_isl_pw_aff_set_dim_id = ISLFunction.create(
-    _lib.isl_pw_aff_set_dim_id,
-    Take(PwAff),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    Take(Id),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_find_dim_by_name = ISLFunction.create(
-    _lib.isl_pw_aff_find_dim_by_name,
-    Keep(PwAff),
-    Param(int, ctype=c_int),
-    Param(str),
-    return_=Param(int, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_pw_aff_set_tuple_id = ISLFunction.create(
-    _lib.isl_pw_aff_set_tuple_id,
-    Take(PwAff),
-    Param(int, ctype=c_int),
-    Take(Id),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_reset_tuple_id = ISLFunction.create(
-    _lib.isl_pw_aff_reset_tuple_id,
-    Take(PwAff),
-    Param(int, ctype=c_int),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_reset_user = ISLFunction.create(
-    _lib.isl_pw_aff_reset_user,
-    Take(PwAff),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_empty = ISLFunction.create(
-    _lib.isl_pw_aff_empty,
-    Take(Space),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_add = ISLFunction.create(
-    _lib.isl_pw_aff_add,
-    Take(PwAff),
-    Take(PwAff),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_add_constant_val = ISLFunction.create(
-    _lib.isl_pw_aff_add_constant_val,
-    Take(PwAff),
-    Take(Val),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_add_dims = ISLFunction.create(
-    _lib.isl_pw_aff_add_dims,
-    Take(PwAff),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_align_params = ISLFunction.create(
-    _lib.isl_pw_aff_align_params,
-    Take(PwAff),
-    Take(Space),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_domain = ISLFunction.create(
-    _lib.isl_pw_aff_domain,
-    Take(PwAff),
-    return_=Give(Set),
-    lib=_lib,
-)
-
-_isl_pw_aff_domain_reverse = ISLFunction.create(
-    _lib.isl_pw_aff_domain_reverse,
-    Take(PwAff),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_drop_dims = ISLFunction.create(
-    _lib.isl_pw_aff_drop_dims,
-    Take(PwAff),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_drop_unused_params = ISLFunction.create(
-    _lib.isl_pw_aff_drop_unused_params,
-    Take(PwAff),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_coalesce = ISLFunction.create(
-    _lib.isl_pw_aff_coalesce,
-    Take(PwAff),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_cond = ISLFunction.create(
-    _lib.isl_pw_aff_cond,
-    Take(PwAff),
-    Take(PwAff),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_div = ISLFunction.create(
-    _lib.isl_pw_aff_div,
-    Take(PwAff),
-    Take(Aff),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_floor = ISLFunction.create(
-    _lib.isl_pw_aff_floor,
-    Take(PwAff),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_ceil = ISLFunction.create(
-    _lib.isl_pw_aff_ceil,
-    Take(PwAff),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_mod_val = ISLFunction.create(
-    _lib.isl_pw_aff_mod_val,
-    Take(PwAff),
-    Take(Val),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_mul = ISLFunction.create(
-    _lib.isl_pw_aff_mul,
-    Take(PwAff),
-    Take(Aff),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_neg = ISLFunction.create(
-    _lib.isl_pw_aff_neg,
-    Take(PwAff),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_insert_dims = ISLFunction.create(
-    _lib.isl_pw_aff_insert_dims,
-    Take(PwAff),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_insert_domain = ISLFunction.create(
-    _lib.isl_pw_aff_insert_domain,
-    Take(PwAff),
-    Take(Set),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_intersect_domain = ISLFunction.create(
-    _lib.isl_pw_aff_intersect_domain,
-    Take(PwAff),
-    Take(Set),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_intersect_params = ISLFunction.create(
-    _lib.isl_pw_aff_intersect_params,
-    Take(PwAff),
-    Take(Set),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_intersect_domain_wrapped_domain = ISLFunction.create(
-    _lib.isl_pw_aff_intersect_domain_wrapped_domain,
-    Take(PwAff),
-    Take(Set),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_intersect_domain_wrapped_range = ISLFunction.create(
-    _lib.isl_pw_aff_intersect_domain_wrapped_range,
-    Take(PwAff),
-    Take(Set),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_subtract_domain = ISLFunction.create(
-    _lib.isl_pw_aff_subtract_domain,
-    Take(PwAff),
-    Take(Set),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_gist = ISLFunction.create(
-    _lib.isl_pw_aff_gist,
-    Take(PwAff),
-    Take(Set),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_gist_params = ISLFunction.create(
-    _lib.isl_pw_aff_gist_params,
-    Take(PwAff),
-    Take(Set),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_params = ISLFunction.create(
-    _lib.isl_pw_aff_params,
-    Take(PwAff),
-    return_=Give(Set),
-    lib=_lib,
-)
-
-_isl_pw_aff_involves_dims = ISLFunction.create(
-    _lib.isl_pw_aff_involves_dims,
-    Keep(PwAff),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
+_isl_aff_plain_is_zero = ISLFunction.create(
+    "isl_aff_plain_is_zero",
+    Keep("Aff"),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )
 
-_isl_pw_aff_involves_nan = ISLFunction.create(
-    _lib.isl_pw_aff_involves_nan,
-    Keep(PwAff),
+_isl_aff_plain_is_equal = ISLFunction.create(
+    "isl_aff_plain_is_equal",
+    Keep("Aff"),
+    Keep("Aff"),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )
 
-_isl_pw_aff_involves_param_id = ISLFunction.create(
-    _lib.isl_pw_aff_involves_param_id,
-    Keep(PwAff),
-    Keep(Id),
-    return_=Param(bool, ctype=c_int),
+_isl_aff_domain_reverse = ISLFunction.create(
+    "isl_aff_domain_reverse",
+    Take("Aff"),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_is_cst = ISLFunction.create(
-    _lib.isl_pw_aff_is_cst,
-    Keep(PwAff),
-    return_=Param(bool, ctype=c_int),
+_isl_aff_bind_id = ISLFunction.create(
+    "isl_aff_bind_id",
+    Take("Aff"),
+    Take("Id"),
+    return_=Give("BasicSet"),
     lib=_lib,
 )
 
-_isl_pw_aff_is_empty = ISLFunction.create(
-    _lib.isl_pw_aff_is_empty,
-    Keep(PwAff),
-    return_=Param(bool, ctype=c_int),
+_isl_aff_project_domain_on_params = ISLFunction.create(
+    "isl_aff_project_domain_on_params",
+    Take("Aff"),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_is_equal = ISLFunction.create(
-    _lib.isl_pw_aff_is_equal,
-    Keep(PwAff),
-    Keep(PwAff),
-    return_=Param(bool, ctype=c_int),
+_isl_aff_unbind_params_insert_domain = ISLFunction.create(
+    "isl_aff_unbind_params_insert_domain",
+    Take("Aff"),
+    Take("MultiId"),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_isa_aff = ISLFunction.create(
-    _lib.isl_pw_aff_isa_aff,
-    Keep(PwAff),
-    return_=Param(bool, ctype=c_int),
+_isl_aff_from_range = ISLFunction.create(
+    "isl_aff_from_range",
+    Take("Aff"),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_as_aff = ISLFunction.create(
-    _lib.isl_pw_aff_as_aff,
-    Take(PwAff),
-    return_=Give(Aff),
+_isl_aff_zero_basic_set = ISLFunction.create(
+    "isl_aff_zero_basic_set",
+    Take("Aff"),
+    return_=Give("BasicSet"),
     lib=_lib,
 )
 
-_isl_pw_aff_alloc = ISLFunction.create(
-    _lib.isl_pw_aff_alloc,
-    Take(Set),
-    Take(Aff),
-    return_=Give(PwAff),
+_isl_aff_neg_basic_set = ISLFunction.create(
+    "isl_aff_neg_basic_set",
+    Take("Aff"),
+    return_=Give("BasicSet"),
     lib=_lib,
 )
 
-_isl_pw_aff_zero_on_domain = ISLFunction.create(
-    _lib.isl_pw_aff_zero_on_domain,
-    Take(Set),
-    return_=Give(PwAff),
+_isl_aff_align_params = ISLFunction.create(
+    "isl_aff_align_params",
+    Take("Aff"),
+    Take("Space"),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_var_on_domain = ISLFunction.create(
-    _lib.isl_pw_aff_var_on_domain,
-    Take(Space),
+_isl_aff_neg = ISLFunction.create(
+    "isl_aff_neg",
+    Take("Aff"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_ceil = ISLFunction.create(
+    "isl_aff_ceil",
+    Take("Aff"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_floor = ISLFunction.create(
+    "isl_aff_floor",
+    Take("Aff"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_eval = ISLFunction.create(
+    "isl_aff_eval",
+    Take("Aff"),
+    Take("Point"),
+    return_=Give("Val"),
+    lib=_lib,
+)
+
+_isl_aff_insert_dims = ISLFunction.create(
+    "isl_aff_insert_dims",
+    Take("Aff"),
     Param(int, ctype=c_int),
+    Param(int, ctype=c_uint),
+    Param(int, ctype=c_uint),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_add_dims = ISLFunction.create(
+    "isl_aff_add_dims",
+    Take("Aff"),
     Param(int, ctype=c_int),
-    return_=Give(PwAff),
+    Param(int, ctype=c_uint),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_nan_on_domain_space = ISLFunction.create(
-    _lib.isl_pw_aff_nan_on_domain_space,
-    Take(Space),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_nan_on_domain = ISLFunction.create(
-    _lib.isl_pw_aff_nan_on_domain,
-    Take(Set),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_val_on_domain = ISLFunction.create(
-    _lib.isl_pw_aff_val_on_domain,
-    Take(Set),
-    Take(Val),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_param_on_domain_id = ISLFunction.create(
-    _lib.isl_pw_aff_param_on_domain_id,
-    Take(Set),
-    Take(Id),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_n_piece = ISLFunction.create(
-    _lib.isl_pw_aff_n_piece,
-    Keep(PwAff),
-    return_=Param(int, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_pw_aff_foreach_piece = ISLFunction.create(
-    _lib.isl_pw_aff_foreach_piece,
-    Keep(PwAff),
-    Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
-    return_=Param(int, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_pw_aff_every_piece = ISLFunction.create(
-    _lib.isl_pw_aff_every_piece,
-    Keep(PwAff),
-    Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
-    return_=Param(bool, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_pw_aff_to_union_pw_aff = ISLFunction.create(
-    _lib.isl_pw_aff_to_union_pw_aff,
-    Take(PwAff),
-    return_=Give("UnionPwAff"),  # lazy import
-    lib=_lib,
-)
-
-_isl_pw_aff_balance_dummy = None  # marker to keep section consistent
-_isl_pw_aff_get_ctx = ISLFunction.create(
-    _lib.isl_pw_aff_get_ctx,
-    Keep(PwAff),
-    return_=Give(Context),
-    lib=_lib,
-)
-
-_isl_pw_aff_get_dim_id = ISLFunction.create(
-    _lib.isl_pw_aff_get_dim_id,
-    Keep(PwAff),
+_isl_aff_drop_dims = ISLFunction.create(
+    "isl_aff_drop_dims",
+    Take("Aff"),
     Param(int, ctype=c_int),
+    Param(int, ctype=c_uint),
+    Param(int, ctype=c_uint),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_move_dims = ISLFunction.create(
+    "isl_aff_move_dims",
+    Take("Aff"),
     Param(int, ctype=c_int),
-    return_=Give(Id),
-    lib=_lib,
-)
-
-_isl_pw_aff_get_dim_name = ISLFunction.create(
-    _lib.isl_pw_aff_get_dim_name,
-    Keep(PwAff),
+    Param(int, ctype=c_uint),
     Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    return_=Param(str),
+    Param(int, ctype=c_uint),
+    Param(int, ctype=c_uint),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_get_tuple_id = ISLFunction.create(
-    _lib.isl_pw_aff_get_tuple_id,
-    Keep(PwAff),
-    Param(int, ctype=c_int),
-    return_=Give(Id),
+_isl_aff_pullback_aff = ISLFunction.create(
+    "isl_aff_pullback_aff",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_has_dim_id = ISLFunction.create(
-    _lib.isl_pw_aff_has_dim_id,
-    Keep(PwAff),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    return_=Param(bool, ctype=c_int),
+_isl_aff_pullback_multi_aff = ISLFunction.create(
+    "isl_aff_pullback_multi_aff",
+    Take("Aff"),
+    Take("MultiAff"),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_has_tuple_id = ISLFunction.create(
-    _lib.isl_pw_aff_has_tuple_id,
-    Keep(PwAff),
-    Param(int, ctype=c_int),
-    return_=Param(bool, ctype=c_int),
+_isl_aff_eq_basic_set = ISLFunction.create(
+    "isl_aff_eq_basic_set",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("BasicSet"),
     lib=_lib,
 )
 
-_isl_pw_aff_empty = ISLFunction.create(
-    _lib.isl_pw_aff_empty,
-    Take(Space),
-    return_=Give(PwAff),
+_isl_aff_eq_set = ISLFunction.create(
+    "isl_aff_eq_set",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("Set"),
     lib=_lib,
 )
 
-_isl_pw_aff_add = ISLFunction.create(
-    _lib.isl_pw_aff_add,
-    Take(PwAff),
-    Take(PwAff),
-    return_=Give(PwAff),
+_isl_aff_ne_set = ISLFunction.create(
+    "isl_aff_ne_set",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("Set"),
     lib=_lib,
 )
 
-_isl_pw_aff_add_constant_val = ISLFunction.create(
-    _lib.isl_pw_aff_add_constant_val,
-    Take(PwAff),
-    Take(Val),
-    return_=Give(PwAff),
+_isl_aff_le_basic_set = ISLFunction.create(
+    "isl_aff_le_basic_set",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("BasicSet"),
     lib=_lib,
 )
 
-_isl_pw_aff_add_dims = ISLFunction.create(
-    _lib.isl_pw_aff_add_dims,
-    Take(PwAff),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    return_=Give(PwAff),
+_isl_aff_le_set = ISLFunction.create(
+    "isl_aff_le_set",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("Set"),
     lib=_lib,
 )
 
-_isl_pw_aff_align_params = ISLFunction.create(
-    _lib.isl_pw_aff_align_params,
-    Take(PwAff),
-    Take(Space),
-    return_=Give(PwAff),
+_isl_aff_lt_basic_set = ISLFunction.create(
+    "isl_aff_lt_basic_set",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("BasicSet"),
     lib=_lib,
 )
 
-_isl_pw_aff_domain = ISLFunction.create(
-    _lib.isl_pw_aff_domain,
-    Take(PwAff),
-    return_=Give(Set),
+_isl_aff_lt_set = ISLFunction.create(
+    "isl_aff_lt_set",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("Set"),
     lib=_lib,
 )
 
-_isl_pw_aff_domain_reverse = ISLFunction.create(
-    _lib.isl_pw_aff_domain_reverse,
-    Take(PwAff),
-    return_=Give(PwAff),
+_isl_aff_ge_set = ISLFunction.create(
+    "isl_aff_ge_set",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("Set"),
     lib=_lib,
 )
 
-_isl_pw_aff_drop_dims = ISLFunction.create(
-    _lib.isl_pw_aff_drop_dims,
-    Take(PwAff),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    return_=Give(PwAff),
+_isl_aff_gt_basic_set = ISLFunction.create(
+    "isl_aff_gt_basic_set",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("BasicSet"),
     lib=_lib,
 )
 
-_isl_pw_aff_drop_unused_params = ISLFunction.create(
-    _lib.isl_pw_aff_drop_unused_params,
-    Take(PwAff),
-    return_=Give(PwAff),
+_isl_aff_gt_set = ISLFunction.create(
+    "isl_aff_gt_set",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("Set"),
     lib=_lib,
 )
 
-_isl_pw_aff_coalesce = ISLFunction.create(
-    _lib.isl_pw_aff_coalesce,
-    Take(PwAff),
-    return_=Give(PwAff),
+_isl_aff_gist_params = ISLFunction.create(
+    "isl_aff_gist_params",
+    Take("Aff"),
+    Take("Set"),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_cond = ISLFunction.create(
-    _lib.isl_pw_aff_cond,
-    Take(PwAff),
-    Take(PwAff),
-    return_=Give(PwAff),
+_isl_aff_gist = ISLFunction.create(
+    "isl_aff_gist",
+    Take("Aff"),
+    Take("Set"),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_div = ISLFunction.create(
-    _lib.isl_pw_aff_div,
-    Take(PwAff),
-    Take(Aff),
-    return_=Give(PwAff),
+_isl_aff_add = ISLFunction.create(
+    "isl_aff_add",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_floor = ISLFunction.create(
-    _lib.isl_pw_aff_floor,
-    Take(PwAff),
-    return_=Give(PwAff),
+_isl_aff_sub = ISLFunction.create(
+    "isl_aff_sub",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_ceil = ISLFunction.create(
-    _lib.isl_pw_aff_ceil,
-    Take(PwAff),
-    return_=Give(PwAff),
+_isl_aff_mod_val = ISLFunction.create(
+    "isl_aff_mod_val",
+    Take("Aff"),
+    Take("Val"),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_mod_val = ISLFunction.create(
-    _lib.isl_pw_aff_mod_val,
-    Take(PwAff),
-    Take(Val),
-    return_=Give(PwAff),
+_isl_aff_scale_val = ISLFunction.create(
+    "isl_aff_scale_val",
+    Take("Aff"),
+    Take("Val"),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_mul = ISLFunction.create(
-    _lib.isl_pw_aff_mul,
-    Take(PwAff),
-    Take(Aff),
-    return_=Give(PwAff),
+_isl_aff_scale_down_ui = ISLFunction.create(
+    "isl_aff_scale_down_ui",
+    Take("Aff"),
+    Param(int, ctype=c_uint),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_neg = ISLFunction.create(
-    _lib.isl_pw_aff_neg,
-    Take(PwAff),
-    return_=Give(PwAff),
+_isl_aff_scale_down_val = ISLFunction.create(
+    "isl_aff_scale_down_val",
+    Take("Aff"),
+    Take("Val"),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_insert_dims = ISLFunction.create(
-    _lib.isl_pw_aff_insert_dims,
-    Take(PwAff),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    return_=Give(PwAff),
+_isl_aff_mul = ISLFunction.create(
+    "isl_aff_mul",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("Aff"),
     lib=_lib,
 )
 
-_isl_pw_aff_insert_domain = ISLFunction.create(
-    _lib.isl_pw_aff_insert_domain,
-    Take(PwAff),
-    Take(Set),
-    return_=Give(PwAff),
+_isl_aff_div = ISLFunction.create(
+    "isl_aff_div",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("Aff"),
     lib=_lib,
 )
-
-_isl_pw_aff_intersect_domain = ISLFunction.create(
-    _lib.isl_pw_aff_intersect_domain,
-    Take(PwAff),
-    Take(Set),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_intersect_params = ISLFunction.create(
-    _lib.isl_pw_aff_intersect_params,
-    Take(PwAff),
-    Take(Set),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_gist = ISLFunction.create(
-    _lib.isl_pw_aff_gist,
-    Take(PwAff),
-    Take(Set),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_gist_params = ISLFunction.create(
-    _lib.isl_pw_aff_gist_params,
-    Take(PwAff),
-    Take(Set),
-    return_=Give(PwAff),
-    lib=_lib,
-)
-
-_isl_pw_aff_involves_dims = ISLFunction.create(
-    _lib.isl_pw_aff_involves_dims,
-    Keep(PwAff),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_int),
-    return_=Param(bool, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_pw_aff_involves_nan = ISLFunction.create(
-    _lib.isl_pw_aff_involves_nan,
-    Keep(PwAff),
-    return_=Param(bool, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_pw_aff_involves_param_id = ISLFunction.create(
-    _lib.isl_pw_aff_involves_param_id,
-    Keep(PwAff),
-    Keep(Id),
-    return_=Param(bool, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_pw_aff_is_cst = ISLFunction.create(
-    _lib.isl_pw_aff_is_cst,
-    Keep(PwAff),
-    return_=Param(bool, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_pw_aff_is_empty = ISLFunction.create(
-    _lib.isl_pw_aff_is_empty,
-    Keep(PwAff),
-    return_=Param(bool, ctype=c_int),
-    lib=_lib,
-)
-
-# --- MultiAff primitives ---
-
-_isl_multi_aff_read_from_str = ISLFunction.create(
-    _lib.isl_multi_aff_read_from_str,
-    Context(),
-    Param(str),
-    return_=Give(MultiAff),
-    lib=_lib,
-)
-
-_isl_multi_aff_copy = ISLFunction.create(
-    _lib.isl_multi_aff_copy,
-    Keep(MultiAff),
-    return_=Give(MultiAff),
-    lib=_lib,
-)
-
-_isl_multi_aff_free = ISLFunction.create(
-    _lib.isl_multi_aff_free,
-    Param(None, ctype=c_void_p),
-    return_=Null(),
-    lib=_lib,
-)
-
-_isl_multi_aff_dim = ISLFunction.create(
-    _lib.isl_multi_aff_dim,
-    Keep(MultiAff),
-    Param(int, ctype=c_int),
-    return_=Param(int, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_multi_aff_to_str = ISLFunction.create(
-    _lib.isl_multi_aff_to_str,
-    Keep(MultiAff),
-    return_=Param(str),
-    lib=_lib,
-)
-
-# --- PwMultiAff primitives ---
-
-_isl_pw_multi_aff_read_from_str = ISLFunction.create(
-    _lib.isl_pw_multi_aff_read_from_str,
-    Context(),
-    Param(str),
-    return_=Give(PwMultiAff),
-    lib=_lib,
-)
-
-_isl_pw_multi_aff_copy = ISLFunction.create(
-    _lib.isl_pw_multi_aff_copy,
-    Keep(PwMultiAff),
-    return_=Give(PwMultiAff),
-    lib=_lib,
-)
-
-_isl_pw_multi_aff_free = ISLFunction.create(
-    _lib.isl_pw_multi_aff_free,
-    Param(None, ctype=c_void_p),
-    return_=Null(),
-    lib=_lib,
-)
-
-_isl_pw_multi_aff_dim = ISLFunction.create(
-    _lib.isl_pw_multi_aff_dim,
-    Keep(PwMultiAff),
-    Param(int, ctype=c_int),
-    return_=Param(int, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_pw_multi_aff_to_str = ISLFunction.create(
-    _lib.isl_pw_multi_aff_to_str,
-    Keep(PwMultiAff),
-    return_=Param(str),
-    lib=_lib,
-)
-
-__all__ = ["Aff", "PwAff", "MultiAff", "PwMultiAff"]

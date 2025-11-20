@@ -19,8 +19,14 @@ class Qualifier(abc.ABC):
     """
 
     requires_argument: bool = True
-    def __init__(self, target: Optional[type] = None) -> None:
+    def __init__(self, target: Optional[type | str] = None) -> None:
         self.target = target
+
+    def _resolve_target(self) -> type | None:
+        if isinstance(self.target, str):
+            from .registry import resolve_type
+            return resolve_type(self.target)
+        return self.target
 
     def prepare(self, value: Any, *, ctx: "Context" | None, name: str) -> Any:
         self._validate_type(value, name)
@@ -41,23 +47,25 @@ class Qualifier(abc.ABC):
         """Return a ctypes type used to auto-configure libisl symbols."""
 
     def _validate_type(self, value: Any, name: str) -> None:
-        if self.target is None or value is None:
+        target = self._resolve_target()
+        if target is None or value is None:
             return
-        if isinstance(self.target, tuple):
-            if not isinstance(value, self.target):
-                expected = ", ".join(t.__name__ for t in self.target)
+        if isinstance(target, tuple):
+            if not isinstance(value, target):
+                expected = ", ".join(t.__name__ for t in target)
                 raise TypeError(f"Argument '{name}' must be one of ({expected}).")
             return
-        if not isinstance(value, self.target):
-            raise TypeError(f"Argument '{name}' must be {self.target.__name__}.")
+        if not isinstance(value, target):
+            raise TypeError(f"Argument '{name}' must be {target.__name__}.")
 
 class _ISLObjectQualifier(Qualifier):
     def _expect_isl_object(self, value: Any, name: str) -> ISLObject:
         if not isinstance(value, ISLObject):
             raise TypeError(f"Argument '{name}' must be an ISLObject instance.")
-        if self.target is not None and not isinstance(value, self.target):
+        target = self._resolve_target()
+        if target is not None and not isinstance(value, target):
             raise TypeError(
-                f"Argument '{name}' expects {self.target.__name__}, got {type(value).__name__}."
+                f"Argument '{name}' expects {target.__name__}, got {type(value).__name__}."
             )
         value._assert_usable()
         return value
@@ -85,7 +93,7 @@ class Take(_ISLObjectQualifier):
 class Give(Qualifier):
     """Convert raw libisl pointers into freshly wrapped :class:`ISLObject`s."""
 
-    def __init__(self, target: Optional[type] = None) -> None:
+    def __init__(self, target: Optional[type | str] = None) -> None:
         super().__init__(target=target)
 
     def prepare(self, value: Any, *, ctx: "Context" | None, name: str) -> ISLObject:  # type: ignore[override]
@@ -97,7 +105,7 @@ class Give(Qualifier):
     def view(self, value: Any) -> ISLObject:
         if isinstance(value, ISLObject):
             return value.copy()
-        target = self.target
+        target = self._resolve_target()
         if target is None or not issubclass(target, ISLObject):
             raise TypeError("Give qualifier requires an ISLObject subclass target.")
         if not isinstance(value, FfiPointer):
@@ -133,30 +141,41 @@ class Param(Qualifier):
     }
     def __init__(
         self,
-        target: Optional[type] = None,
+        target: Optional[type | str] = None,
         *,
         ctype: Optional[Any] = None,
     ) -> None:
         super().__init__(target=target)
-        self._ctype = ctype or (target and self._PY_CTYPE_MAP.get(target))
+        self._ctype = ctype
+        # If target is a real type (not string) and ctype not provided, try to guess
+        if isinstance(target, type) and ctype is None:
+            self._ctype = self._PY_CTYPE_MAP.get(target)
     
     def wrap(self, value: Any, *, ctx: "Context" | None, name: str = "return") -> Any:
-        if self.target is bool and isinstance(value, int):
+        target = self._resolve_target()
+        if target is bool and isinstance(value, int):
             if value == -1 and ctx is not None:
                 ctx.raise_isl_error()
             return bool(value)
-        if isinstance(value, bytes) and self.target is str:
+        if isinstance(value, bytes) and target is str:
             value = value.decode("utf-8")
         self._validate_type(value, name)
         return self.view(value)
     
     def prepare(self, value: Any, *, ctx: "Context" | None, name: str) -> Any:
         self._validate_type(value, name)
-        if self.target is bool:
+        target = self._resolve_target()
+        if target is bool:
             return int(bool(value))
         if isinstance(value, str):
             value = value.encode("utf-8")
         return self.view(value)
 
     def as_ctype(self) -> Any | None:
+        # If ctype was not resolved in __init__ (because target was a string), try now
+        if self._ctype is None:
+            target = self._resolve_target()
+            if isinstance(target, type):
+                 self._ctype = self._PY_CTYPE_MAP.get(target)
         return self._ctype
+

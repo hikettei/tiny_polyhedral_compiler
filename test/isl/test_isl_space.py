@@ -33,4 +33,5 @@ def test_local_space_from_space() -> None:
         ls = I.LocalSpace.from_space(sp)
         assert ls.dim(3) == 1
         assert isinstance(str(ls), str)
-        assert "LocalSpace(" in repr(ls)
+        assert "LocalSpace" in repr(ls)
+        assert ls.get_space().is_equal(sp)

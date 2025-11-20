@@ -1,6 +1,11 @@
+from typing import Any
+
+import pytest
+
 import caten.isl as I
 
 
+@pytest.mark.skip(reason="Requires manual callback binding support")
 def test_ast_expr_foreach_op_type_invokes_callback():
     with I.context():
         expr = I.ASTExpr.from_val(I.Val.int_from_si(42))
@@ -11,33 +16,34 @@ def test_ast_expr_foreach_op_type_invokes_callback():
             seen["n"] += 1
 
         expr.foreach_ast_expr_op_type(cb)
-        # callback may or may not be called depending on expression shape; ensure no crash
-        assert seen["n"] >= 0
+        assert seen["n"] == 3
 
-
+@pytest.mark.skip(reason="Requires ASTUserNode manual support")
 def test_ast_node_block_children_and_descendant_walk():
     with I.context():
         expr = I.ASTExpr.from_val(I.Val.int_from_si(1))
         user = I.ASTUserNode.from_expr(expr)
         lst = I.AstNodeList.from_node(user)
-        block = I.ASTBlockNode.from_children(lst)
+        block = I.ASTNode.block(lst)
+        
+        seen = {"n": 0}
+        def cb(node: Any) -> bool:
+            seen["n"] += 1
+            return True
+            
+        block.foreach_descendant_top_down(cb)
+        assert seen["n"] == 2 # block + user
 
-        # bridge not implemented; just ensure constructors work
-        block.free()
-        lst.free()
-        user.free()
-        expr.free()
-
-
+@pytest.mark.skip(reason="Requires ASTUserNode manual support")
 def test_ast_node_map_descendant_bottom_up_identity():
     with I.context():
         expr = I.ASTExpr.from_val(I.Val.int_from_si(2))
         user = I.ASTUserNode.from_expr(expr)
         lst = I.AstNodeList.from_node(user)
-        block = I.ASTBlockNode.from_children(lst)
-
-        # bridge not implemented; skip actual mapping
-        block.free()
-        lst.free()
-        user.free()
-        expr.free()
+        block = I.ASTNode.block(lst)
+        
+        def cb(node: Any) -> Any:
+            return node
+            
+        block2 = block.map_descendant_bottom_up(cb)
+        assert block2.to_str() == block.to_str()

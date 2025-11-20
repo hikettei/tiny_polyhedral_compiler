@@ -83,13 +83,22 @@ class ISLFunction:
         arguments: Tuple[Qualifier, ...],
         return_spec: Optional[Qualifier],
     ) -> Callable[..., Any]:
-        if isinstance(primitive, str):
-            if lib is None:
-                raise ValueError("lib must be provided when primitive is given by name.")
-            primitive = getattr(lib, primitive)
-        elif lib is not None:
-            primitive = getattr(lib, getattr(primitive, "__name__", primitive))
+        try:
+            if isinstance(primitive, str):
+                if lib is None:
+                    raise ValueError("lib must be provided when primitive is given by name.")
+                func = getattr(lib, primitive)
+            elif lib is not None:
+                func = getattr(lib, getattr(primitive, "__name__", primitive))
+            else:
+                func = primitive
 
-        primitive.argtypes = [q.as_ctype() for q in arguments]
-        primitive.restype = return_spec.as_ctype()  # type: ignore[union-attr]
-        return primitive
+            func.argtypes = [q.as_ctype() for q in arguments]
+            func.restype = return_spec.as_ctype()  # type: ignore[union-attr]
+            return func
+        except AttributeError:
+            name = primitive if isinstance(primitive, str) else getattr(primitive, "__name__", str(primitive))
+            def missing_symbol(*args: Any) -> Any:
+                raise NotImplementedError(f"Symbol '{name}' not found in libisl.")
+            missing_symbol.__name__ = name
+            return missing_symbol
