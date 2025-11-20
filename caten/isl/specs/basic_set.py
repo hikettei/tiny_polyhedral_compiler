@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,7 +12,20 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .aff import Aff
+    from .basic_map import BasicMap
+    from .constraint import Constraint
     from .context import Context
+    from .id import Id
+    from .local_space import LocalSpace
+    from .mat import Mat
+    from .multi_aff import MultiAff
+    from .point import Point
+    from .pw_multi_aff import PwMultiAff
+    from .set import Set
+    from .space import Space
+    from .val import Val
+    from .vertices import Vertices
 
 _lib = load_libisl()
 
@@ -110,11 +118,8 @@ class BasicSet(ISLObject, ISLObjectMixin):
     def n_constraint(self) -> int:
         return _isl_basic_set_n_constraint(self)
 
-    def foreach_constraint(self, fn: Any, user: Any = None) -> int:
-        return _isl_basic_set_foreach_constraint(self, fn, user)
-
-    def get_constraint_list(self) -> "ConstraintList":
-        return _isl_basic_set_get_constraint_list(self)
+    def foreach_constraint(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_basic_set_foreach_constraint(self, fn, user, user_)
 
     def equalities_matrix(self, c1: int, c2: int, c3: int, c4: int) -> "Mat":
         return _isl_basic_set_equalities_matrix(self, c1, c2, c3, c4)
@@ -155,7 +160,7 @@ class BasicSet(ISLObject, ISLObjectMixin):
     def is_wrapping(self) -> bool:
         return _isl_basic_set_is_wrapping(self)
 
-    def is_equal(self, bset2: "BasicSet") -> bool:
+    def plain_is_equal(self, bset2: "BasicSet") -> bool:
         return _isl_basic_set_plain_is_equal(self, bset2)
 
     def is_equal(self, bset2: "BasicSet") -> bool:
@@ -166,6 +171,9 @@ class BasicSet(ISLObject, ISLObjectMixin):
 
     def is_subset(self, bset2: "BasicSet") -> bool:
         return _isl_basic_set_is_subset(self, bset2)
+
+    def project_out(self, type: int, first: int, n: int) -> "BasicSet":
+        return _isl_basic_set_project_out(self, type, first, n)
 
     def params(self) -> "BasicSet":
         return _isl_basic_set_params(self)
@@ -245,11 +253,17 @@ class BasicSet(ISLObject, ISLObjectMixin):
     def intersect_params(self, bset2: "BasicSet") -> "BasicSet":
         return _isl_basic_set_intersect_params(self, bset2)
 
+    def intersect(self, bset2: "BasicSet") -> "BasicSet":
+        return _isl_basic_set_intersect(self, bset2)
+
     def union(self, bset2: "BasicSet") -> "Set":
         return _isl_basic_set_union(self, bset2)
 
     def apply(self, bmap: "BasicMap") -> "BasicSet":
         return _isl_basic_set_apply(self, bmap)
+
+    def preimage_multi_aff(self, ma: "MultiAff") -> "BasicSet":
+        return _isl_basic_set_preimage_multi_aff(self, ma)
 
     def flat_product(self, bset2: "BasicSet") -> "BasicSet":
         return _isl_basic_set_flat_product(self, bset2)
@@ -277,12 +291,6 @@ class BasicSet(ISLObject, ISLObjectMixin):
 
     def compute_vertices(self) -> "Vertices":
         return _isl_basic_set_compute_vertices(self)
-
-    def intersect(self, bset2: "BasicSet") -> "BasicSet":
-        return _isl_basic_set_intersect(self, bset2)
-
-    def project_out(self, type: int, first: int, n: int) -> "BasicSet":
-        return _isl_basic_set_project_out(self, type, first, n)
 
 
 register_type("BasicSet", BasicSet)
@@ -455,15 +463,9 @@ _isl_basic_set_foreach_constraint = ISLFunction.create(
     "isl_basic_set_foreach_constraint",
     Keep("BasicSet"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_basic_set_get_constraint_list = ISLFunction.create(
-    "isl_basic_set_get_constraint_list",
-    Keep("BasicSet"),
-    return_=Give("ConstraintList"),
     lib=_lib,
 )
 
@@ -515,6 +517,14 @@ _isl_basic_set_read_from_file = ISLFunction.create(
     "isl_basic_set_read_from_file",
     Context(),
     Param(None, ctype=c_void_p),
+    return_=Give("BasicSet"),
+    lib=_lib,
+)
+
+_isl_basic_set_read_from_str = ISLFunction.create(
+    "isl_basic_set_read_from_str",
+    Context(),
+    Param(str, ctype=c_char_p),
     return_=Give("BasicSet"),
     lib=_lib,
 )
@@ -600,6 +610,16 @@ _isl_basic_set_is_subset = ISLFunction.create(
     Keep("BasicSet"),
     Keep("BasicSet"),
     return_=Param(bool, ctype=c_int),
+    lib=_lib,
+)
+
+_isl_basic_set_project_out = ISLFunction.create(
+    "isl_basic_set_project_out",
+    Take("BasicSet"),
+    Param(int, ctype=c_int),
+    Param(int, ctype=c_uint),
+    Param(int, ctype=c_uint),
+    return_=Give("BasicSet"),
     lib=_lib,
 )
 
@@ -820,6 +840,14 @@ _isl_basic_set_intersect_params = ISLFunction.create(
     lib=_lib,
 )
 
+_isl_basic_set_intersect = ISLFunction.create(
+    "isl_basic_set_intersect",
+    Take("BasicSet"),
+    Take("BasicSet"),
+    return_=Give("BasicSet"),
+    lib=_lib,
+)
+
 _isl_basic_set_union = ISLFunction.create(
     "isl_basic_set_union",
     Take("BasicSet"),
@@ -832,6 +860,14 @@ _isl_basic_set_apply = ISLFunction.create(
     "isl_basic_set_apply",
     Take("BasicSet"),
     Take("BasicMap"),
+    return_=Give("BasicSet"),
+    lib=_lib,
+)
+
+_isl_basic_set_preimage_multi_aff = ISLFunction.create(
+    "isl_basic_set_preimage_multi_aff",
+    Take("BasicSet"),
+    Take("MultiAff"),
     return_=Give("BasicSet"),
     lib=_lib,
 )
@@ -906,31 +942,5 @@ _isl_basic_set_compute_vertices = ISLFunction.create(
     "isl_basic_set_compute_vertices",
     Keep("BasicSet"),
     return_=Give("Vertices"),
-    lib=_lib,
-)
-
-_isl_basic_set_read_from_str = ISLFunction.create(
-    "isl_basic_set_read_from_str",
-    Context(),
-    Param(str, ctype=c_char_p),
-    return_=Give("BasicSet"),
-    lib=_lib,
-)
-
-_isl_basic_set_intersect = ISLFunction.create(
-    "isl_basic_set_intersect",
-    Take("BasicSet"),
-    Take("BasicSet"),
-    return_=Give("BasicSet"),
-    lib=_lib,
-)
-
-_isl_basic_set_project_out = ISLFunction.create(
-    "isl_basic_set_project_out",
-    Take("BasicSet"),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_uint),
-    Param(int, ctype=c_uint),
-    return_=Give("BasicSet"),
     lib=_lib,
 )

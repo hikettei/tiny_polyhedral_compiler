@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,6 +13,8 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .flow import Flow
+    from .map import Map
 
 _lib = load_libisl()
 
@@ -53,7 +51,7 @@ _isl_access_info_add_source = ISLFunction.create(
     Take("AccessInfo"),
     Take("Map"),
     Param(int, ctype=c_int),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("AccessInfo"),
     lib=_lib,
 )

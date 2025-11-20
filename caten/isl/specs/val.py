@@ -1,14 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_double,
-    c_int,
-    c_long,
-    c_size_t,
-    c_ulong,
-    c_void_p,
-)
+from ctypes import c_char_p, c_double, c_int, c_long, c_size_t, c_ulong, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -51,7 +43,7 @@ class Val(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"Val({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_val_get_ctx(self)
 
     @classmethod
@@ -252,7 +244,7 @@ register_type("Val", Val)
 _isl_val_get_ctx = ISLFunction.create(
     "isl_val_get_ctx",
     Keep("Val"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 
@@ -319,7 +311,7 @@ _isl_val_int_from_chunks = ISLFunction.create(
     Context(),
     Param(int, ctype=c_size_t),
     Param(int, ctype=c_size_t),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("Val"),
     lib=_lib,
 )
@@ -378,7 +370,7 @@ _isl_val_get_abs_num_chunks = ISLFunction.create(
     "isl_val_get_abs_num_chunks",
     Keep("Val"),
     Param(int, ctype=c_size_t),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-)
+from ctypes import c_char_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -14,7 +12,9 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .aff import Aff
     from .context import Context
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -39,7 +39,7 @@ class StrideInfo(ISLObject, ISLObjectMixin):
     def free_handle(cls, handle: Any) -> None:
         _lib.isl_stride_info_free(handle)
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_stride_info_get_ctx(self)
 
     def get_stride(self) -> "Val":
@@ -54,7 +54,7 @@ register_type("StrideInfo", StrideInfo)
 _isl_stride_info_get_ctx = ISLFunction.create(
     "isl_stride_info_get_ctx",
     Keep("StrideInfo"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

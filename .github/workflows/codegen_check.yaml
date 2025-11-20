@@ -1,0 +1,26 @@
+name: Codegen Check
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  check-codegen:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Generate specs
+      run: |
+        python3 autogen/generate_specs.py
+
+    - name: Check for changes
+      run: |
+        git diff --exit-code caten/isl/specs/

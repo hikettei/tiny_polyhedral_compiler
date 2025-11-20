@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -18,6 +13,12 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .point import Point
+    from .pw_qpolynomial_fold import PwQpolynomialFold
+    from .set import Set
+    from .space import Space
+    from .union_set import UnionSet
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -67,19 +68,16 @@ class UnionPwQpolynomialFold(ISLObject, ISLObjectMixin):
     def n_pw_qpolynomial_fold(self) -> int:
         return _isl_union_pw_qpolynomial_fold_n_pw_qpolynomial_fold(self)
 
-    def foreach_pw_qpolynomial_fold(self, fn: Any, user: Any = None) -> int:
-        return _isl_union_pw_qpolynomial_fold_foreach_pw_qpolynomial_fold(self, fn, user)
+    def foreach_pw_qpolynomial_fold(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_union_pw_qpolynomial_fold_foreach_pw_qpolynomial_fold(self, fn, user, user_)
 
-    def every_pw_qpolynomial_fold(self, test: Any, user: Any = None) -> bool:
-        return _isl_union_pw_qpolynomial_fold_every_pw_qpolynomial_fold(self, test, user)
-
-    def get_pw_qpolynomial_fold_list(self) -> "PwQpolynomialFoldList":
-        return _isl_union_pw_qpolynomial_fold_get_pw_qpolynomial_fold_list(self)
+    def every_pw_qpolynomial_fold(self, test: Any, user: Any, user_: Any = None) -> bool:
+        return _isl_union_pw_qpolynomial_fold_every_pw_qpolynomial_fold(self, test, user, user_)
 
     def involves_nan(self) -> bool:
         return _isl_union_pw_qpolynomial_fold_involves_nan(self)
 
-    def is_equal(self, upwf2: "UnionPwQpolynomialFold") -> bool:
+    def plain_is_equal(self, upwf2: "UnionPwQpolynomialFold") -> bool:
         return _isl_union_pw_qpolynomial_fold_plain_is_equal(self, upwf2)
 
     def domain(self) -> "UnionSet":
@@ -222,7 +220,8 @@ _isl_union_pw_qpolynomial_fold_foreach_pw_qpolynomial_fold = ISLFunction.create(
     "isl_union_pw_qpolynomial_fold_foreach_pw_qpolynomial_fold",
     Keep("UnionPwQpolynomialFold"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -231,15 +230,9 @@ _isl_union_pw_qpolynomial_fold_every_pw_qpolynomial_fold = ISLFunction.create(
     "isl_union_pw_qpolynomial_fold_every_pw_qpolynomial_fold",
     Keep("UnionPwQpolynomialFold"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(bool, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_union_pw_qpolynomial_fold_get_pw_qpolynomial_fold_list = ISLFunction.create(
-    "isl_union_pw_qpolynomial_fold_get_pw_qpolynomial_fold_list",
-    Keep("UnionPwQpolynomialFold"),
-    return_=Give("PwQpolynomialFoldList"),
     lib=_lib,
 )
 

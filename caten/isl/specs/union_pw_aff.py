@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,7 +12,16 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .aff import Aff
     from .context import Context
+    from .id import Id
+    from .pw_aff import PwAff
+    from .pw_aff_list import PwAffList
+    from .set import Set
+    from .space import Space
+    from .union_pw_multi_aff import UnionPwMultiAff
+    from .union_set import UnionSet
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -48,7 +52,7 @@ class UnionPwAff(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"UnionPwAff({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_union_pw_aff_get_ctx(self)
 
     def get_space(self) -> "Space":
@@ -108,11 +112,11 @@ class UnionPwAff(ISLObject, ISLObjectMixin):
     def n_pw_aff(self) -> int:
         return _isl_union_pw_aff_n_pw_aff(self)
 
-    def foreach_pw_aff(self, fn: Any, user: Any = None) -> int:
-        return _isl_union_pw_aff_foreach_pw_aff(self, fn, user)
+    def foreach_pw_aff(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_union_pw_aff_foreach_pw_aff(self, fn, user, user_)
 
-    def every_pw_aff(self, test: Any, user: Any = None) -> bool:
-        return _isl_union_pw_aff_every_pw_aff(self, test, user)
+    def every_pw_aff(self, test: Any, user: Any, user_: Any = None) -> bool:
+        return _isl_union_pw_aff_every_pw_aff(self, test, user, user_)
 
     def extract_pw_aff(self, space: "Space") -> "PwAff":
         return _isl_union_pw_aff_extract_pw_aff(self, space)
@@ -123,7 +127,7 @@ class UnionPwAff(ISLObject, ISLObjectMixin):
     def involves_nan(self) -> bool:
         return _isl_union_pw_aff_involves_nan(self)
 
-    def is_equal(self, upa2: "UnionPwAff") -> bool:
+    def plain_is_equal(self, upa2: "UnionPwAff") -> bool:
         return _isl_union_pw_aff_plain_is_equal(self, upa2)
 
     def bind_id(self, id: "Id") -> "UnionSet":
@@ -219,7 +223,7 @@ register_type("UnionPwAff", UnionPwAff)
 _isl_union_pw_aff_get_ctx = ISLFunction.create(
     "isl_union_pw_aff_get_ctx",
     Keep("UnionPwAff"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 
@@ -364,7 +368,8 @@ _isl_union_pw_aff_foreach_pw_aff = ISLFunction.create(
     "isl_union_pw_aff_foreach_pw_aff",
     Keep("UnionPwAff"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -373,7 +378,8 @@ _isl_union_pw_aff_every_pw_aff = ISLFunction.create(
     "isl_union_pw_aff_every_pw_aff",
     Keep("UnionPwAff"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )

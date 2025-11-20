@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,6 +13,13 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .multi_union_pw_aff import MultiUnionPwAff
+    from .schedule_node import ScheduleNode
+    from .set import Set
+    from .space import Space
+    from .union_map import UnionMap
+    from .union_pw_multi_aff import UnionPwMultiAff
+    from .union_set import UnionSet
 
 _lib = load_libisl()
 
@@ -47,7 +50,7 @@ class Schedule(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"Schedule({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_schedule_get_ctx(self)
 
     @classmethod
@@ -58,7 +61,7 @@ class Schedule(ISLObject, ISLObjectMixin):
     def from_domain(cls, domain: "UnionSet") -> "Schedule":
         return _isl_schedule_from_domain(domain)
 
-    def is_equal(self, schedule2: "Schedule") -> bool:
+    def plain_is_equal(self, schedule2: "Schedule") -> bool:
         return _isl_schedule_plain_is_equal(self, schedule2)
 
     def get_domain(self) -> "UnionSet":
@@ -107,11 +110,11 @@ class Schedule(ISLObject, ISLObjectMixin):
     def get_root(self) -> "ScheduleNode":
         return _isl_schedule_get_root(self)
 
-    def foreach_schedule_node_top_down(self, fn: Any, user: Any = None) -> int:
-        return _isl_schedule_foreach_schedule_node_top_down(self, fn, user)
+    def foreach_schedule_node_top_down(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_schedule_foreach_schedule_node_top_down(self, fn, user, user_)
 
-    def map_schedule_node_bottom_up(self, fn: Any, user: Any = None) -> "Schedule":
-        return _isl_schedule_map_schedule_node_bottom_up(self, fn, user)
+    def map_schedule_node_bottom_up(self, fn: Any, user: Any, user_: Any = None) -> "Schedule":
+        return _isl_schedule_map_schedule_node_bottom_up(self, fn, user, user_)
 
 
 register_type("Schedule", Schedule)
@@ -119,7 +122,7 @@ register_type("Schedule", Schedule)
 _isl_schedule_get_ctx = ISLFunction.create(
     "isl_schedule_get_ctx",
     Keep("Schedule"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 
@@ -295,7 +298,8 @@ _isl_schedule_foreach_schedule_node_top_down = ISLFunction.create(
     "isl_schedule_foreach_schedule_node_top_down",
     Keep("Schedule"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -304,7 +308,8 @@ _isl_schedule_map_schedule_node_bottom_up = ISLFunction.create(
     "isl_schedule_map_schedule_node_bottom_up",
     Take("Schedule"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("Schedule"),
     lib=_lib,
 )

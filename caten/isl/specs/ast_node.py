@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -16,7 +12,12 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .ast_expr import ASTExpr
+    from .ast_node_list import AstNodeList
+    from .ast_print_options import ASTPrintOptions
     from .context import Context
+    from .id import Id
+    from .printer import Printer
 
 _lib = load_libisl()
 
@@ -47,7 +48,7 @@ class ASTNode(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"ASTNode({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_ast_node_get_ctx(self)
 
     def get_type(self) -> int:
@@ -104,17 +105,17 @@ class ASTNode(ISLObject, ISLObjectMixin):
     def user_get_expr(self) -> "ASTExpr":
         return _isl_ast_node_user_get_expr(self)
 
-    def foreach_descendant_top_down(self, fn: Any, user: Any = None) -> int:
-        return _isl_ast_node_foreach_descendant_top_down(self, fn, user)
+    def foreach_descendant_top_down(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_ast_node_foreach_descendant_top_down(self, fn, user, user_)
 
-    def foreach_ast_expr_op_type(self, fn: Any, user: Any = None) -> int:
-        return _isl_ast_node_foreach_ast_expr_op_type(self, fn, user)
+    def foreach_ast_expr_op_type(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_ast_node_foreach_ast_expr_op_type(self, fn, user, user_)
 
-    def foreach_ast_op_type(self, fn: Any, user: Any = None) -> int:
-        return _isl_ast_node_foreach_ast_op_type(self, fn, user)
+    def foreach_ast_op_type(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_ast_node_foreach_ast_op_type(self, fn, user, user_)
 
-    def map_descendant_bottom_up(self, fn: Any, user: Any = None) -> "ASTNode":
-        return _isl_ast_node_map_descendant_bottom_up(self, fn, user)
+    def map_descendant_bottom_up(self, fn: Any, user: Any, user_: Any = None) -> "ASTNode":
+        return _isl_ast_node_map_descendant_bottom_up(self, fn, user, user_)
 
     def set_annotation(self, annotation: "Id") -> "ASTNode":
         return _isl_ast_node_set_annotation(self, annotation)
@@ -159,7 +160,7 @@ register_type("ASTNode", ASTNode)
 _isl_ast_node_get_ctx = ISLFunction.create(
     "isl_ast_node_get_ctx",
     Keep("ASTNode"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 
@@ -293,7 +294,8 @@ _isl_ast_node_foreach_descendant_top_down = ISLFunction.create(
     "isl_ast_node_foreach_descendant_top_down",
     Keep("ASTNode"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -302,7 +304,8 @@ _isl_ast_node_foreach_ast_expr_op_type = ISLFunction.create(
     "isl_ast_node_foreach_ast_expr_op_type",
     Keep("ASTNode"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -311,7 +314,8 @@ _isl_ast_node_foreach_ast_op_type = ISLFunction.create(
     "isl_ast_node_foreach_ast_op_type",
     Keep("ASTNode"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -334,7 +338,8 @@ _isl_ast_node_map_descendant_bottom_up = ISLFunction.create(
     "isl_ast_node_map_descendant_bottom_up",
     Take("ASTNode"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("ASTNode"),
     lib=_lib,
 )

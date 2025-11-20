@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -18,6 +13,7 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .set import Set
 
 _lib = load_libisl()
 
@@ -48,7 +44,7 @@ class SetList(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"SetList({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_set_list_get_ctx(self)
 
     def union(self) -> "Set":
@@ -89,11 +85,11 @@ class SetList(ISLObject, ISLObjectMixin):
     def concat(self, list2: "SetList") -> "SetList":
         return _isl_set_list_concat(self, list2)
 
-    def map(self, fn: Any, user: Any = None) -> "SetList":
-        return _isl_set_list_map(self, fn, user)
+    def map(self, fn: Any, user: Any, user_: Any = None) -> "SetList":
+        return _isl_set_list_map(self, fn, user, user_)
 
-    def sort(self, cmp: Any, user: Any = None) -> "SetList":
-        return _isl_set_list_sort(self, cmp, user)
+    def sort(self, cmp: Any, b: "Set", user: Any, user_: Any = None) -> "SetList":
+        return _isl_set_list_sort(self, cmp, b, user, user_)
 
     def size(self) -> int:
         return _isl_set_list_size(self)
@@ -107,14 +103,14 @@ class SetList(ISLObject, ISLObjectMixin):
     def get_set(self, index: int) -> "Set":
         return _isl_set_list_get_set(self, index)
 
-    def foreach(self, fn: Any, user: Any = None) -> int:
-        return _isl_set_list_foreach(self, fn, user)
+    def foreach(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_set_list_foreach(self, fn, user, user_)
 
-    def every(self, test: Any, user: Any = None) -> bool:
-        return _isl_set_list_every(self, test, user)
+    def every(self, test: Any, user: Any, user_: Any = None) -> bool:
+        return _isl_set_list_every(self, test, user, user_)
 
-    def foreach_scc(self, follows: Any, follows_user: Any, fn: Any, fn_user: Any) -> int:
-        return _isl_set_list_foreach_scc(self, follows, follows_user, fn, fn_user)
+    def foreach_scc(self, follows: Any, b: "Set", user: Any, follows_user: Any, fn: Any, user_: Any, fn_user: Any) -> int:
+        return _isl_set_list_foreach_scc(self, follows, b, user, follows_user, fn, user_, fn_user)
 
 
 register_type("SetList", SetList)
@@ -122,7 +118,7 @@ register_type("SetList", SetList)
 _isl_set_list_get_ctx = ISLFunction.create(
     "isl_set_list_get_ctx",
     Keep("SetList"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 
@@ -234,7 +230,8 @@ _isl_set_list_map = ISLFunction.create(
     "isl_set_list_map",
     Take("SetList"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("SetList"),
     lib=_lib,
 )
@@ -243,7 +240,9 @@ _isl_set_list_sort = ISLFunction.create(
     "isl_set_list_sort",
     Take("SetList"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Keep("Set"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("SetList"),
     lib=_lib,
 )
@@ -289,7 +288,8 @@ _isl_set_list_foreach = ISLFunction.create(
     "isl_set_list_foreach",
     Keep("SetList"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -298,7 +298,8 @@ _isl_set_list_every = ISLFunction.create(
     "isl_set_list_every",
     Keep("SetList"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )
@@ -307,9 +308,12 @@ _isl_set_list_foreach_scc = ISLFunction.create(
     "isl_set_list_foreach_scc",
     Keep("SetList"),
     Param(None, ctype=c_void_p),
+    Keep("Set"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )

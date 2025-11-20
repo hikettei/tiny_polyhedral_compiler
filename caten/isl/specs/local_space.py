@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-)
+from ctypes import c_char_p, c_int, c_uint
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -16,7 +12,11 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .aff import Aff
+    from .basic_map import BasicMap
     from .context import Context
+    from .id import Id
+    from .space import Space
 
 _lib = load_libisl()
 
@@ -47,7 +47,7 @@ class LocalSpace(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"LocalSpace({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_local_space_get_ctx(self)
 
     def dim(self, type: int) -> int:
@@ -64,12 +64,6 @@ class LocalSpace(ISLObject, ISLObjectMixin):
 
     def set_dim_name(self, type: int, pos: int, s: str) -> "LocalSpace":
         return _isl_local_space_set_dim_name(self, type, pos, s)
-
-    def has_dim_name(self, type: int, pos: int) -> bool:
-        return _isl_local_space_has_dim_name(self, type, pos)
-
-    def get_dim_name(self, type: int, pos: int) -> str:
-        return _isl_local_space_get_dim_name(self, type, pos)
 
     def find_dim_by_name(self, type: int, name: str) -> int:
         return _isl_local_space_find_dim_by_name(self, type, name)
@@ -138,7 +132,7 @@ register_type("LocalSpace", LocalSpace)
 _isl_local_space_get_ctx = ISLFunction.create(
     "isl_local_space_get_ctx",
     Keep("LocalSpace"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 
@@ -185,24 +179,6 @@ _isl_local_space_set_dim_name = ISLFunction.create(
     Param(int, ctype=c_uint),
     Param(str, ctype=c_char_p),
     return_=Give("LocalSpace"),
-    lib=_lib,
-)
-
-_isl_local_space_has_dim_name = ISLFunction.create(
-    "isl_local_space_has_dim_name",
-    Keep("LocalSpace"),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_uint),
-    return_=Param(bool, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_local_space_get_dim_name = ISLFunction.create(
-    "isl_local_space_get_dim_name",
-    Keep("LocalSpace"),
-    Param(int, ctype=c_int),
-    Param(int, ctype=c_uint),
-    return_=Param(str, ctype=c_char_p),
     lib=_lib,
 )
 

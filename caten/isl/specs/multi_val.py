@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-)
+from ctypes import c_char_p, c_int, c_uint
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,6 +13,10 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .id import Id
+    from .space import Space
+    from .val import Val
+    from .val_list import ValList
 
 _lib = load_libisl()
 
@@ -47,7 +47,7 @@ class MultiVal(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"MultiVal({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_multi_val_get_ctx(self)
 
     def get_space(self) -> "Space":
@@ -139,7 +139,7 @@ class MultiVal(ISLObject, ISLObjectMixin):
     def is_zero(self) -> bool:
         return _isl_multi_val_is_zero(self)
 
-    def is_equal(self, mv2: "MultiVal") -> bool:
+    def plain_is_equal(self, mv2: "MultiVal") -> bool:
         return _isl_multi_val_plain_is_equal(self, mv2)
 
     def from_range(self) -> "MultiVal":
@@ -223,7 +223,7 @@ register_type("MultiVal", MultiVal)
 _isl_multi_val_get_ctx = ISLFunction.create(
     "isl_multi_val_get_ctx",
     Keep("MultiVal"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

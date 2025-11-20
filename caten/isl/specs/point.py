@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-)
+from ctypes import c_char_p, c_int, c_uint
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,6 +13,10 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .multi_val import MultiVal
+    from .set import Set
+    from .space import Space
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -47,7 +47,7 @@ class Point(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"Point({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_point_get_ctx(self)
 
     def get_space(self) -> "Space":
@@ -84,7 +84,7 @@ register_type("Point", Point)
 _isl_point_get_ctx = ISLFunction.create(
     "isl_point_get_ctx",
     Keep("Point"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

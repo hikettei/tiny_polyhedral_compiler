@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,6 +13,10 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .id import Id
+    from .id_to_ast_expr import IdToAstExpr
+    from .printer import Printer
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -47,7 +47,7 @@ class ASTExpr(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"ASTExpr({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_ast_expr_get_ctx(self)
 
     def get_type(self) -> int:
@@ -71,11 +71,11 @@ class ASTExpr(ISLObject, ISLObjectMixin):
     def get_op_arg(self, pos: int) -> "ASTExpr":
         return _isl_ast_expr_get_op_arg(self, pos)
 
-    def foreach_ast_expr_op_type(self, fn: Any, user: Any = None) -> int:
-        return _isl_ast_expr_foreach_ast_expr_op_type(self, fn, user)
+    def foreach_ast_expr_op_type(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_ast_expr_foreach_ast_expr_op_type(self, fn, user, user_)
 
-    def foreach_ast_op_type(self, fn: Any, user: Any = None) -> int:
-        return _isl_ast_expr_foreach_ast_op_type(self, fn, user)
+    def foreach_ast_op_type(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_ast_expr_foreach_ast_op_type(self, fn, user, user_)
 
     def id_get_id(self) -> "Id":
         return _isl_ast_expr_id_get_id(self)
@@ -151,12 +151,6 @@ class ASTExpr(ISLObject, ISLObjectMixin):
     def gt(self, expr2: "ASTExpr") -> "ASTExpr":
         return _isl_ast_expr_gt(self, expr2)
 
-    def access(self, indices: "AstExprList") -> "ASTExpr":
-        return _isl_ast_expr_access(self, indices)
-
-    def call(self, arguments: "AstExprList") -> "ASTExpr":
-        return _isl_ast_expr_call(self, arguments)
-
     def set_op_arg(self, pos: int, arg: "ASTExpr") -> "ASTExpr":
         return _isl_ast_expr_set_op_arg(self, pos, arg)
 
@@ -165,14 +159,6 @@ class ASTExpr(ISLObject, ISLObjectMixin):
 
     def to_C_str(self) -> str:
         return _isl_ast_expr_to_C_str(self)
-
-    @classmethod
-    def op_type_set_print_name(cls, p: "Printer", type: int, name: str) -> "Printer":
-        return _isl_ast_expr_op_type_set_print_name(p, type, name)
-
-    @classmethod
-    def op_type_print_macro(cls, type: int, p: "Printer") -> "Printer":
-        return _isl_ast_expr_op_type_print_macro(type, p)
 
     def print_macros(self, p: "Printer") -> "Printer":
         return _isl_ast_expr_print_macros(self, p)
@@ -183,7 +169,7 @@ register_type("ASTExpr", ASTExpr)
 _isl_ast_expr_get_ctx = ISLFunction.create(
     "isl_ast_expr_get_ctx",
     Keep("ASTExpr"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 
@@ -242,7 +228,8 @@ _isl_ast_expr_foreach_ast_expr_op_type = ISLFunction.create(
     "isl_ast_expr_foreach_ast_expr_op_type",
     Keep("ASTExpr"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -251,7 +238,8 @@ _isl_ast_expr_foreach_ast_op_type = ISLFunction.create(
     "isl_ast_expr_foreach_ast_op_type",
     Keep("ASTExpr"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -454,22 +442,6 @@ _isl_ast_expr_gt = ISLFunction.create(
     lib=_lib,
 )
 
-_isl_ast_expr_access = ISLFunction.create(
-    "isl_ast_expr_access",
-    Take("ASTExpr"),
-    Take("AstExprList"),
-    return_=Give("ASTExpr"),
-    lib=_lib,
-)
-
-_isl_ast_expr_call = ISLFunction.create(
-    "isl_ast_expr_call",
-    Take("ASTExpr"),
-    Take("AstExprList"),
-    return_=Give("ASTExpr"),
-    lib=_lib,
-)
-
 _isl_ast_expr_set_op_arg = ISLFunction.create(
     "isl_ast_expr_set_op_arg",
     Take("ASTExpr"),
@@ -498,23 +470,6 @@ _isl_ast_expr_to_C_str = ISLFunction.create(
     "isl_ast_expr_to_C_str",
     Keep("ASTExpr"),
     return_=Param(str, ctype=c_char_p),
-    lib=_lib,
-)
-
-_isl_ast_expr_op_type_set_print_name = ISLFunction.create(
-    "isl_ast_expr_op_type_set_print_name",
-    Take("Printer"),
-    Param(int, ctype=c_int),
-    Param(str, ctype=c_char_p),
-    return_=Give("Printer"),
-    lib=_lib,
-)
-
-_isl_ast_expr_op_type_print_macro = ISLFunction.create(
-    "isl_ast_expr_op_type_print_macro",
-    Param(int, ctype=c_int),
-    Take("Printer"),
-    return_=Give("Printer"),
     lib=_lib,
 )
 

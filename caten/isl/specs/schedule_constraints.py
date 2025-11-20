@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_void_p,
-)
+from ctypes import c_char_p, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -16,6 +13,10 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .schedule import Schedule
+    from .set import Set
+    from .union_map import UnionMap
+    from .union_set import UnionSet
 
 _lib = load_libisl()
 
@@ -46,7 +47,7 @@ class ScheduleConstraints(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"ScheduleConstraints({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_schedule_constraints_get_ctx(self)
 
     def compute_schedule(self) -> "Schedule":
@@ -105,7 +106,7 @@ register_type("ScheduleConstraints", ScheduleConstraints)
 _isl_schedule_constraints_get_ctx = ISLFunction.create(
     "isl_schedule_constraints_get_ctx",
     Keep("ScheduleConstraints"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 
