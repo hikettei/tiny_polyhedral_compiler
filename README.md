@@ -1,68 +1,54 @@
-
 # Caten.py
 
-High Level ISL Wrapper + Polyhedral Compiler Infrastructure.
+**Caten** is a Python-based Polyhedral Compiler framework designed for deep learning and high-performance computing education and experimentation. It provides Python bindings for the [Integer Set Library (ISL)](https://libisl.sourceforge.io/) and high-level abstractions for tensor scheduling and optimization.
 
-```python
-import caten as C
-@C.kernel()
-def gemm(A: caten.Tensor[:, M, N], B: caten.Tensor[:, N, K] C: caten.Tensor[:, M, K]):
-  for i in C.band(M):
-    for j in C.band(N):
-      C.reduction(ADD, A[i:i+10], axis=-1)
-      for k in C.band(K):
-        # can place @caten.kernel function here
-        caten.gemm(A, B, C)
-# while having smth like
-import caten.polyhedral as P
-with P.domain():
-  for i in P.schedule(...):
-    for j in P.schedule(...):
-      for k in P.schedule(...):
-        P.filter(...)
-        
-import caten.isl as I
-with I.context():
-  A = I.Set("A[i, j]") + I.Constraint("0 <= i <= 512", "0 <= j <= 512")
-  B = I.Set("B[i, j]") + I.Constraint("0 <= i <= 512", "0 <= j <= 512")
-  C = I.Set("C[i, j]") + I.Constraint("0 <= i <= 512", "0 <= j <= 512")
-  with P.domain(A | B | C) as dom: # ctx = extra information to generate kernel
-    with P.filter(" { A }"):
-      with P.band("{ A[i, j] -> [(i)] }"):
-        with P.band():
-          # ...
-    kernel = dom.finalize(op_context=...) # Finalize Schedule Construction
-    C.auto_schedule(kernel)
-    result = C.retrive_kernel(kernel)
-    return result
-  # all allocated items inside I.context() is freed?
-  
-# caten.py provides extended isl schedule_tree
-# supporting:
-# - Symbolic Tile
-# - Reduction Coincidence Computation while detecting parallel legality
-# - Symbolic Band Mod (A=B*C)
-# - Memory Layout Optimization
+## Vision
 
+Caten aims to bridge the gap between high-level tensor operations (like in PyTorch/NumPy) and low-level loop optimizations (Tiling, Fusion, Vectorization). By leveraging the Polyhedral Model, Caten allows users to:
+
+*   **Visualize and manipulate** loop structures as mathematical objects (Schedule Trees).
+*   **Perform complex transformations** like *Conv+Pool Fusion* or *Symbolic Tiling* using a Pythonic API.
+*   **Generate optimized code** for various backends (CPU, CUDA, Metal).
+
+## Features
+
+*   **`caten.isl`**: Auto-generated, type-safe Python bindings for ISL. No manual C-types management required.
+*   **`caten.polyhedral`** (Planned): A high-level DSL for schedule construction and manipulation.
+*   **Implicit Context**: ISL context is managed automatically; no boilerplate code.
+*   **Operator Overloading**: Use standard Python operators (`|`, `&`, `-`, `+`) for set/map operations.
+
+## Documentation
+
+*   **[Project Overview & Architecture](docs/PROJECT.md)**
+*   **[Polyhedral Loop Transformation Spec](docs/POLYHEDRAL_SPEC.md)**
+*   **[IR & Class Design](docs/IR_AND_DESIGN.md)**
+*   **[ISL API Coverage](docs/ISL_APIS.md)**
+
+## Tutorial
+
+Check out `examples/isl_tutorial.ipynb` for a hands-on introduction to using ISL bindings in Python.
+
+## Installation
+
+*Requirements*: `libisl` must be installed (e.g., `brew install isl`).
+
+```bash
+# Clone the repository
+git clone https://github.com/hikettei/Caten.py.git
+cd Caten.py
+
+# Install dependencies
+uv sync
 ```
 
-```python
-# Design
-[caten/poly_ir] <= Translator => [caten/ops]
-^ Extended ISL Schedule Tree
+## Roadmap
 
-# Note
-- caten/polyhedral
-- 
-```
+1.  [x] **ISL Bindings**: Complete `caten.isl`.
+2.  [ ] **Polyhedral DSL**: Implement `caten.polyhedral`.
+3.  [ ] **IR & Kernel**: Implement `caten.ops` and `caten.kernel`.
+4.  [ ] **Runtime & Renderer**: Code generation for CPU/C.
+5.  [ ] **Auto-Scheduler**: Basic search for optimal schedules.
 
-- [ ] `class Kernel`
-  - [ ] `class Domain`
-- [ ] Syntax Sugar for supporting Symbolic Tile (Loop D is divided by A*B=D)
-- [ ] Loop Coalesce Support
-- [ ] Less Dependencies (except for ISL)
-- [ ] Enhancement on Symbolic Reduction Coincidence Computataion
-- [ ] AutoScheduler Infrastructure
-- [ ] Memory Layout Optimization
-- [ ] ISL Object GC Extension
-- [ ] Ruff, mypy, pytest in CI.
+## License
+
+MIT
