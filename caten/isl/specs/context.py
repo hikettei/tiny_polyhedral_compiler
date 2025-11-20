@@ -21,6 +21,16 @@ class ISLContextError(RuntimeError):
 _current_context: contextvars.ContextVar[Optional["Context"]]
 _current_context = contextvars.ContextVar("caten_isl_context", default=None)
 
+_default_context: Optional["Context"] = None
+
+def get_default_context() -> "Context":
+    global _default_context
+    if _default_context is None:
+        raw_ptr = _lib.isl_ctx_alloc()
+        _default_context = Context(raw_ptr)
+        _default_context.name = "default"
+    return _default_context
+
 class Context(ISLObject, Qualifier):
     requires_argument = False
     __slots__ = ("name", "_token", "_closed")
@@ -81,8 +91,11 @@ class Context(ISLObject, Qualifier):
         return ctx.handle
 
     def ensure_active(self) -> None:
-        if self._token is None:
-            raise ISLContextError("Context must be entered via `with` before use.")
+        global _default_context
+        if self is _default_context:
+            return
+        # if self._token is None:
+        #     raise ISLContextError("Context must be entered via `with` before use.")
         if self._closed:
             raise ISLContextError("Context was already closed.")
 
@@ -108,8 +121,8 @@ isl_ctx_free = ISLFunction.create(
 
 def current(*, required: bool = False) -> Optional[Context]:
     ctx = _current_context.get()
-    if ctx is None and required:
-        raise ISLContextError("No active ISL context; wrap code with `with I.context():`.")
+    if ctx is None:
+        return get_default_context()
     return ctx
 
 def context(
