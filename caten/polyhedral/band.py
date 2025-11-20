@@ -40,10 +40,25 @@ class band:
         if builder.current_node:
              builder.current_node = builder.current_node.parent()
 
-    def tile(self, sizes: List[int]) -> None:
+    def tile(self, sizes: List[int]) -> "band":
         """Tile this band."""
         if not self.node:
             raise RuntimeError("Cannot tile before entering context.")
         
-        # TODO: Implement tiling logic that updates the tree structure and builder state.
-        pass
+        space = self.node.band_get_space()
+        mv = I.MultiVal.zero(space)
+        
+        for i, size in enumerate(sizes):
+            v = I.Val.int_from_si(size)
+            mv = mv.set_val(i, v)
+            
+        self.node = self.node.band_tile(mv)
+        return self
+
+    def split(self, pos: int) -> "band":
+        """Split this band at pos."""
+        if not self.node:
+            raise RuntimeError("Cannot split before entering context.")
+        
+        self.node = self.node.band_split(pos)
+        return self
