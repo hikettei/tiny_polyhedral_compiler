@@ -24,3 +24,10 @@ def test_context_manager_tracks_tls_and_view() -> None:
         assert ctx.view(None) == ctx.handle
     with pytest.raises(I.ISLContextError):
         ctx.ensure_active()
+
+def test_implicit_context() -> None:
+    # Should not raise ISLContextError without with block
+    # Create a set without explicit context manager
+    s = I.Set("{ [i] : 0 <= i < 10 }")
+    assert not s.is_empty()
+    assert s.dim(I.ISLDimType.ISL_DIM_SET) == 1
