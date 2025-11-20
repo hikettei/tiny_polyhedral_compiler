@@ -1,3 +1,4 @@
+from .analysis import compute_flow
 from .band import band
 from .domain import domain
 from .filter import filter
@@ -12,4 +13,5 @@ __all__ = [
     "sequence",
     "mark",
     "schedule",
+    "compute_flow",
 ]
