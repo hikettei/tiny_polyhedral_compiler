@@ -3,7 +3,6 @@ from .aff import Aff
 from .aff_list import AffList
 from .ast_build import ASTBuild
 from .ast_expr import ASTExpr
-from .ast_expr_list import AstExprList
 from .ast_node import ASTNode, ASTUserNode
 from .ast_node_list import AstNodeList
 from .ast_print_options import ASTPrintOptions
@@ -13,7 +12,6 @@ from .basic_set import BasicSet
 from .basic_set_list import BasicSetList
 from .cell import Cell
 from .constraint import Constraint
-from .constraint_list import ConstraintList
 from .context import Context, ISLContextError, context, current
 from .fixed_box import FixedBox
 from .flow import Flow
@@ -38,8 +36,6 @@ from .pw_multi_aff import PwMultiAff
 from .pw_multi_aff_list import PwMultiAffList
 from .pw_qpolynomial import PwQpolynomial
 from .pw_qpolynomial_fold import PwQpolynomialFold
-from .pw_qpolynomial_fold_list import PwQpolynomialFoldList
-from .pw_qpolynomial_list import PwQpolynomialList
 from .qpolynomial import Qpolynomial
 from .qpolynomial_fold import QpolynomialFold
 from .restriction import Restriction
@@ -73,6 +69,9 @@ __all__ = [
     "current",
     "ISLContextError",
     "ISLDimType",
+    "Map",
+    "Qpolynomial",
+    "PwAff",
     "Val",
     "MultiVal",
     "Id",
@@ -81,7 +80,6 @@ __all__ = [
     "SetList",
     "Aff",
     "MultiAff",
-    "PwAff",
     "PwMultiAff",
     "MultiPwAff",
     "UnionPwAff",
@@ -111,33 +109,27 @@ __all__ = [
     "Set",
     "UnionSet",
     "BasicMap",
-    "Map",
     "UnionMap",
     "Constraint",
-    "Qpolynomial",
     "QpolynomialFold",
     "PwQpolynomial",
     "PwQpolynomialFold",
     "UnionPwQpolynomial",
     "UnionPwQpolynomialFold",
-    "AffList",
-    "BasicSetList",
-    "BasicMapList",
-    "MapList",
-    "ConstraintList",
     "Term",
-    "IdList",
-    "ValList",
+    "BasicSetList",
     "PwAffList",
-    "UnionPwAffList",
-    "PwMultiAffList",
-    "PwQpolynomialList",
-    "PwQpolynomialFoldList",
+    "BasicMapList",
     "UnionSetList",
+    "ValList",
+    "IdList",
+    "AffList",
+    "PwMultiAffList",
+    "UnionPwAffList",
+    "MapList",
     "AccessInfo",
     "Flow",
-    "AstNodeList",
-    "AstExprList",
     "ASTPrintOptions",
+    "AstNodeList",
     "ASTUserNode",
 ]

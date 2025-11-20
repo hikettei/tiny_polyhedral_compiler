@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_double,
-    c_int,
-    c_void_p,
-)
+from ctypes import c_char_p, c_double, c_int, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,7 +12,40 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .aff import Aff
+    from .ast_expr import ASTExpr
+    from .ast_node import ASTNode
+    from .basic_map import BasicMap
+    from .basic_set import BasicSet
     from .context import Context
+    from .fixed_box import FixedBox
+    from .id import Id
+    from .id_to_ast_expr import IdToAstExpr
+    from .map import Map
+    from .multi_aff import MultiAff
+    from .multi_id import MultiId
+    from .multi_pw_aff import MultiPwAff
+    from .multi_union_pw_aff import MultiUnionPwAff
+    from .multi_val import MultiVal
+    from .pw_aff import PwAff
+    from .pw_multi_aff import PwMultiAff
+    from .pw_qpolynomial import PwQpolynomial
+    from .pw_qpolynomial_fold import PwQpolynomialFold
+    from .qpolynomial import Qpolynomial
+    from .schedule import Schedule
+    from .schedule_constraints import ScheduleConstraints
+    from .schedule_node import ScheduleNode
+    from .set import Set
+    from .set_list import SetList
+    from .union_access_info import UnionAccessInfo
+    from .union_flow import UnionFlow
+    from .union_map import UnionMap
+    from .union_pw_aff import UnionPwAff
+    from .union_pw_multi_aff import UnionPwMultiAff
+    from .union_pw_qpolynomial import UnionPwQpolynomial
+    from .union_pw_qpolynomial_fold import UnionPwQpolynomialFold
+    from .union_set import UnionSet
+    from .val import Val
 
 _lib = load_libisl()
 

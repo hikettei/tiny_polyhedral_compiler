@@ -3,7 +3,7 @@ from __future__ import annotations
 from .func import ISLFunction
 from .obj import InPlace, ISLObject
 from .qualifier import Give, Keep, Null, Param, Qualifier, Take
-from .specs import *
+from .specs import *  # noqa: F403
 
 __all__ = [
     "ISLFunction",

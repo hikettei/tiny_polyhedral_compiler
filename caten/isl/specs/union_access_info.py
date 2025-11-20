@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_void_p,
-)
+from ctypes import c_char_p, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -16,6 +13,9 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .schedule import Schedule
+    from .union_flow import UnionFlow
+    from .union_map import UnionMap
 
 _lib = load_libisl()
 
@@ -46,7 +46,7 @@ class UnionAccessInfo(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"UnionAccessInfo({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_union_access_info_get_ctx(self)
 
     def compute_flow(self) -> "UnionFlow":
@@ -81,7 +81,7 @@ register_type("UnionAccessInfo", UnionAccessInfo)
 _isl_union_access_info_get_ctx = ISLFunction.create(
     "isl_union_access_info_get_ctx",
     Keep("UnionAccessInfo"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

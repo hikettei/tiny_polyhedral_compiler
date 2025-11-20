@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -18,6 +13,14 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .id import Id
+    from .point import Point
+    from .pw_aff import PwAff
+    from .qpolynomial import Qpolynomial
+    from .set import Set
+    from .space import Space
+    from .union_pw_qpolynomial import UnionPwQpolynomial
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -88,14 +91,14 @@ class PwQpolynomial(ISLObject, ISLObjectMixin):
     def n_piece(self) -> int:
         return _isl_pw_qpolynomial_n_piece(self)
 
-    def foreach_piece(self, fn: Any, user: Any = None) -> int:
-        return _isl_pw_qpolynomial_foreach_piece(self, fn, user)
+    def foreach_piece(self, fn: Any, qp: "Qpolynomial", user: Any, user_: Any = None) -> int:
+        return _isl_pw_qpolynomial_foreach_piece(self, fn, qp, user, user_)
 
-    def every_piece(self, test: Any, user: Any = None) -> bool:
-        return _isl_pw_qpolynomial_every_piece(self, test, user)
+    def every_piece(self, test: Any, qp: "Qpolynomial", user: Any, user_: Any = None) -> bool:
+        return _isl_pw_qpolynomial_every_piece(self, test, qp, user, user_)
 
-    def foreach_lifted_piece(self, fn: Any, user: Any = None) -> int:
-        return _isl_pw_qpolynomial_foreach_lifted_piece(self, fn, user)
+    def foreach_lifted_piece(self, fn: Any, qp: "Qpolynomial", user: Any, user_: Any = None) -> int:
+        return _isl_pw_qpolynomial_foreach_lifted_piece(self, fn, qp, user, user_)
 
     def to_union_pw_qpolynomial(self) -> "UnionPwQpolynomial":
         return _isl_pw_qpolynomial_to_union_pw_qpolynomial(self)
@@ -286,7 +289,9 @@ _isl_pw_qpolynomial_foreach_piece = ISLFunction.create(
     "isl_pw_qpolynomial_foreach_piece",
     Keep("PwQpolynomial"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Take("Qpolynomial"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -295,7 +300,9 @@ _isl_pw_qpolynomial_every_piece = ISLFunction.create(
     "isl_pw_qpolynomial_every_piece",
     Keep("PwQpolynomial"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Keep("Qpolynomial"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )
@@ -304,7 +311,9 @@ _isl_pw_qpolynomial_foreach_lifted_piece = ISLFunction.create(
     "isl_pw_qpolynomial_foreach_lifted_piece",
     Keep("PwQpolynomial"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Take("Qpolynomial"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )

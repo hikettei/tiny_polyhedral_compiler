@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,7 +12,25 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .aff import Aff
+    from .basic_map import BasicMap
+    from .basic_map_list import BasicMapList
+    from .constraint import Constraint
     from .context import Context
+    from .fixed_box import FixedBox
+    from .id import Id
+    from .id_list import IdList
+    from .map_list import MapList
+    from .multi_aff import MultiAff
+    from .multi_id import MultiId
+    from .multi_pw_aff import MultiPwAff
+    from .pw_aff import PwAff
+    from .pw_multi_aff import PwMultiAff
+    from .set import Set
+    from .space import Space
+    from .stride_info import StrideInfo
+    from .union_map import UnionMap
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -47,6 +60,10 @@ class Map(ISLObject, ISLObjectMixin):
 
     def __repr__(self) -> str:
         return f"Map({self.__str__()})"
+
+    @classmethod
+    def identity(cls, space: "Space") -> "Map":
+        return _isl_map_identity(space)
 
     def get_space(self) -> "Space":
         return _isl_map_get_space(self)
@@ -136,10 +153,6 @@ class Map(ISLObject, ISLObjectMixin):
         return _isl_map_nat_universe(space)
 
     @classmethod
-    def identity(cls, space: "Space") -> "Map":
-        return _isl_map_identity(space)
-
-    @classmethod
     def lex_lt(cls, set_space: "Space") -> "Map":
         return _isl_map_lex_lt(set_space)
 
@@ -217,8 +230,8 @@ class Map(ISLObject, ISLObjectMixin):
     def remove_unknown_divs(self) -> "Map":
         return _isl_map_remove_unknown_divs(self)
 
-    def foreach_basic_map(self, fn: Any, user: Any = None) -> int:
-        return _isl_map_foreach_basic_map(self, fn, user)
+    def foreach_basic_map(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_map_foreach_basic_map(self, fn, user, user_)
 
     def make_disjoint(self) -> "Map":
         return _isl_map_make_disjoint(self)
@@ -296,7 +309,7 @@ class Map(ISLObject, ISLObjectMixin):
     def is_equal(self, map2: "Map") -> bool:
         return _isl_map_is_equal(self, map2)
 
-    def is_equal(self, map2: "Map") -> bool:
+    def plain_is_equal(self, map2: "Map") -> bool:
         return _isl_map_plain_is_equal(self, map2)
 
     def is_disjoint(self, map2: "Map") -> bool:
@@ -444,6 +457,9 @@ class Map(ISLObject, ISLObjectMixin):
 
     def polyhedral_hull(self) -> "BasicMap":
         return _isl_map_polyhedral_hull(self)
+
+    def get_range_simple_fixed_box_hull(self) -> "FixedBox":
+        return _isl_map_get_range_simple_fixed_box_hull(self)
 
     def drop_constraints_involving_dims(self, type: int, first: int, n: int) -> "Map":
         return _isl_map_drop_constraints_involving_dims(self, type, first, n)
@@ -660,6 +676,13 @@ class Map(ISLObject, ISLObjectMixin):
 
 
 register_type("Map", Map)
+
+_isl_map_identity = ISLFunction.create(
+    "isl_map_identity",
+    Take("Space"),
+    return_=Give("Map"),
+    lib=_lib,
+)
 
 _isl_map_get_space = ISLFunction.create(
     "isl_map_get_space",
@@ -884,13 +907,6 @@ _isl_map_nat_universe = ISLFunction.create(
     lib=_lib,
 )
 
-_isl_map_identity = ISLFunction.create(
-    "isl_map_identity",
-    Take("Space"),
-    return_=Give("Map"),
-    lib=_lib,
-)
-
 _isl_map_lex_lt = ISLFunction.create(
     "isl_map_lex_lt",
     Take("Space"),
@@ -1064,7 +1080,8 @@ _isl_map_foreach_basic_map = ISLFunction.create(
     "isl_map_foreach_basic_map",
     Keep("Map"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -1666,6 +1683,13 @@ _isl_map_polyhedral_hull = ISLFunction.create(
     "isl_map_polyhedral_hull",
     Take("Map"),
     return_=Give("BasicMap"),
+    lib=_lib,
+)
+
+_isl_map_get_range_simple_fixed_box_hull = ISLFunction.create(
+    "isl_map_get_range_simple_fixed_box_hull",
+    Keep("Map"),
+    return_=Give("FixedBox"),
     lib=_lib,
 )
 

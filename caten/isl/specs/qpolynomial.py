@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,7 +12,11 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .aff import Aff
     from .context import Context
+    from .set import Set
+    from .space import Space
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -41,6 +40,10 @@ class Qpolynomial(ISLObject, ISLObjectMixin):
     @classmethod
     def free_handle(cls, handle: Any) -> None:
         _lib.isl_qpolynomial_free(handle)
+
+    @classmethod
+    def from_aff(cls, aff: "Aff") -> "Qpolynomial":
+        return _isl_qpolynomial_from_aff(aff)
 
     def get_domain_space(self) -> "Space":
         return _isl_qpolynomial_get_domain_space(self)
@@ -79,10 +82,6 @@ class Qpolynomial(ISLObject, ISLObjectMixin):
     def var_on_domain(cls, domain: "Space", type: int, pos: int) -> "Qpolynomial":
         return _isl_qpolynomial_var_on_domain(domain, type, pos)
 
-    @classmethod
-    def from_aff(cls, aff: "Aff") -> "Qpolynomial":
-        return _isl_qpolynomial_from_aff(aff)
-
     def isa_aff(self) -> bool:
         return _isl_qpolynomial_isa_aff(self)
 
@@ -92,8 +91,8 @@ class Qpolynomial(ISLObject, ISLObjectMixin):
     def get_constant_val(self) -> "Val":
         return _isl_qpolynomial_get_constant_val(self)
 
-    def foreach_term(self, fn: Any, user: Any = None) -> int:
-        return _isl_qpolynomial_foreach_term(self, fn, user)
+    def foreach_term(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_qpolynomial_foreach_term(self, fn, user, user_)
 
     def involves_dims(self, type: int, first: int, n: int) -> bool:
         return _isl_qpolynomial_involves_dims(self, type, first, n)
@@ -139,6 +138,13 @@ class Qpolynomial(ISLObject, ISLObjectMixin):
 
 
 register_type("Qpolynomial", Qpolynomial)
+
+_isl_qpolynomial_from_aff = ISLFunction.create(
+    "isl_qpolynomial_from_aff",
+    Take("Aff"),
+    return_=Give("Qpolynomial"),
+    lib=_lib,
+)
 
 _isl_qpolynomial_get_domain_space = ISLFunction.create(
     "isl_qpolynomial_get_domain_space",
@@ -216,13 +222,6 @@ _isl_qpolynomial_var_on_domain = ISLFunction.create(
     lib=_lib,
 )
 
-_isl_qpolynomial_from_aff = ISLFunction.create(
-    "isl_qpolynomial_from_aff",
-    Take("Aff"),
-    return_=Give("Qpolynomial"),
-    lib=_lib,
-)
-
 _isl_qpolynomial_isa_aff = ISLFunction.create(
     "isl_qpolynomial_isa_aff",
     Keep("Qpolynomial"),
@@ -262,7 +261,8 @@ _isl_qpolynomial_foreach_term = ISLFunction.create(
     "isl_qpolynomial_foreach_term",
     Keep("Qpolynomial"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )

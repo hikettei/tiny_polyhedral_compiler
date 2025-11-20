@@ -10,7 +10,7 @@ def test_union_pw_aff_from_aff_and_pw_aff() -> None:
         upa = I.UnionPwAff.empty(space)
         pa = I.PwAff.from_aff(I.Aff.zero_on_domain_space(space))
         merged = upa.add_pw_aff(pa)
-        assert merged.is_equal(merged.copy())
+        assert merged.plain_is_equal(merged.copy())
         assert "UnionPwAff(" in repr(merged)
 
 

@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -18,6 +13,12 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .point import Point
+    from .pw_qpolynomial import PwQpolynomial
+    from .set import Set
+    from .space import Space
+    from .union_set import UnionSet
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -85,22 +86,19 @@ class UnionPwQpolynomial(ISLObject, ISLObjectMixin):
     def n_pw_qpolynomial(self) -> int:
         return _isl_union_pw_qpolynomial_n_pw_qpolynomial(self)
 
-    def foreach_pw_qpolynomial(self, fn: Any, user: Any = None) -> int:
-        return _isl_union_pw_qpolynomial_foreach_pw_qpolynomial(self, fn, user)
+    def foreach_pw_qpolynomial(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_union_pw_qpolynomial_foreach_pw_qpolynomial(self, fn, user, user_)
 
-    def every_pw_qpolynomial(self, test: Any, user: Any = None) -> bool:
-        return _isl_union_pw_qpolynomial_every_pw_qpolynomial(self, test, user)
+    def every_pw_qpolynomial(self, test: Any, user: Any, user_: Any = None) -> bool:
+        return _isl_union_pw_qpolynomial_every_pw_qpolynomial(self, test, user, user_)
 
     def extract_pw_qpolynomial(self, space: "Space") -> "PwQpolynomial":
         return _isl_union_pw_qpolynomial_extract_pw_qpolynomial(self, space)
 
-    def get_pw_qpolynomial_list(self) -> "PwQpolynomialList":
-        return _isl_union_pw_qpolynomial_get_pw_qpolynomial_list(self)
-
     def involves_nan(self) -> bool:
         return _isl_union_pw_qpolynomial_involves_nan(self)
 
-    def is_equal(self, upwqp2: "UnionPwQpolynomial") -> bool:
+    def plain_is_equal(self, upwqp2: "UnionPwQpolynomial") -> bool:
         return _isl_union_pw_qpolynomial_plain_is_equal(self, upwqp2)
 
     def domain_reverse(self) -> "UnionPwQpolynomial":
@@ -280,7 +278,8 @@ _isl_union_pw_qpolynomial_foreach_pw_qpolynomial = ISLFunction.create(
     "isl_union_pw_qpolynomial_foreach_pw_qpolynomial",
     Keep("UnionPwQpolynomial"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -289,7 +288,8 @@ _isl_union_pw_qpolynomial_every_pw_qpolynomial = ISLFunction.create(
     "isl_union_pw_qpolynomial_every_pw_qpolynomial",
     Keep("UnionPwQpolynomial"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )
@@ -299,13 +299,6 @@ _isl_union_pw_qpolynomial_extract_pw_qpolynomial = ISLFunction.create(
     Keep("UnionPwQpolynomial"),
     Take("Space"),
     return_=Give("PwQpolynomial"),
-    lib=_lib,
-)
-
-_isl_union_pw_qpolynomial_get_pw_qpolynomial_list = ISLFunction.create(
-    "isl_union_pw_qpolynomial_get_pw_qpolynomial_list",
-    Keep("UnionPwQpolynomial"),
-    return_=Give("PwQpolynomialList"),
     lib=_lib,
 )
 

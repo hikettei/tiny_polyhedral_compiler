@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_void_p,
-)
+from ctypes import c_char_p, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -15,6 +12,7 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .ast_node import ASTNode
     from .context import Context
 
 _lib = load_libisl()
@@ -44,11 +42,11 @@ class ASTPrintOptions(ISLObject, ISLObjectMixin):
     def alloc(cls) -> "ASTPrintOptions":
         return _isl_ast_print_options_alloc()
 
-    def set_print_user(self, print_user: Any, user: Any = None) -> "ASTPrintOptions":
-        return _isl_ast_print_options_set_print_user(self, print_user, user)
+    def set_print_user(self, print_user: Any, options: "ASTPrintOptions", node: "ASTNode", user: Any, user_: Any = None) -> "ASTPrintOptions":
+        return _isl_ast_print_options_set_print_user(self, print_user, options, node, user, user_)
 
-    def set_print_for(self, print_for: Any, user: Any = None) -> "ASTPrintOptions":
-        return _isl_ast_print_options_set_print_for(self, print_for, user)
+    def set_print_for(self, print_for: Any, options: "ASTPrintOptions", node: "ASTNode", user: Any, user_: Any = None) -> "ASTPrintOptions":
+        return _isl_ast_print_options_set_print_for(self, print_for, options, node, user, user_)
 
 
 register_type("ASTPrintOptions", ASTPrintOptions)
@@ -78,7 +76,10 @@ _isl_ast_print_options_set_print_user = ISLFunction.create(
     "isl_ast_print_options_set_print_user",
     Take("ASTPrintOptions"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Take("ASTPrintOptions"),
+    Keep("ASTNode"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("ASTPrintOptions"),
     lib=_lib,
 )
@@ -87,7 +88,10 @@ _isl_ast_print_options_set_print_for = ISLFunction.create(
     "isl_ast_print_options_set_print_for",
     Take("ASTPrintOptions"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Take("ASTPrintOptions"),
+    Keep("ASTNode"),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Give("ASTPrintOptions"),
     lib=_lib,
 )

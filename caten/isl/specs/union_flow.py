@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-)
+from ctypes import c_char_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -15,6 +13,7 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .union_map import UnionMap
 
 _lib = load_libisl()
 
@@ -45,7 +44,7 @@ class UnionFlow(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"UnionFlow({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_union_flow_get_ctx(self)
 
     def get_must_dependence(self) -> "UnionMap":
@@ -72,7 +71,7 @@ register_type("UnionFlow", UnionFlow)
 _isl_union_flow_get_ctx = ISLFunction.create(
     "isl_union_flow_get_ctx",
     Keep("UnionFlow"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

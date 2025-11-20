@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-)
+from ctypes import c_char_p, c_int, c_uint
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -16,7 +12,16 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .basic_set import BasicSet
     from .context import Context
+    from .id import Id
+    from .local_space import LocalSpace
+    from .multi_aff import MultiAff
+    from .multi_id import MultiId
+    from .point import Point
+    from .set import Set
+    from .space import Space
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -47,7 +52,7 @@ class Aff(ISLObject, ISLObjectMixin):
     def __repr__(self) -> str:
         return f"Aff({self.__str__()})"
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_aff_get_ctx(self)
 
     def get_domain_space(self) -> "Space":
@@ -87,6 +92,10 @@ class Aff(ISLObject, ISLObjectMixin):
     @classmethod
     def zero_on_domain(cls, ls: "LocalSpace") -> "Aff":
         return _isl_aff_zero_on_domain(ls)
+
+    @classmethod
+    def val_on_domain_space(cls, space: "Space", val: "Val") -> "Aff":
+        return _isl_aff_val_on_domain_space(space, val)
 
     @classmethod
     def val_on_domain(cls, ls: "LocalSpace", val: "Val") -> "Aff":
@@ -165,7 +174,7 @@ class Aff(ISLObject, ISLObjectMixin):
     def plain_is_zero(self) -> bool:
         return _isl_aff_plain_is_zero(self)
 
-    def is_equal(self, aff2: "Aff") -> bool:
+    def plain_is_equal(self, aff2: "Aff") -> bool:
         return _isl_aff_plain_is_equal(self, aff2)
 
     def domain_reverse(self) -> "Aff":
@@ -243,6 +252,9 @@ class Aff(ISLObject, ISLObjectMixin):
     def lt_set(self, aff2: "Aff") -> "Set":
         return _isl_aff_lt_set(self, aff2)
 
+    def ge_basic_set(self, aff2: "Aff") -> "BasicSet":
+        return _isl_aff_ge_basic_set(self, aff2)
+
     def ge_set(self, aff2: "Aff") -> "Set":
         return _isl_aff_ge_set(self, aff2)
 
@@ -288,7 +300,7 @@ register_type("Aff", Aff)
 _isl_aff_get_ctx = ISLFunction.create(
     "isl_aff_get_ctx",
     Keep("Aff"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 
@@ -385,6 +397,14 @@ _isl_aff_zero_on_domain_space = ISLFunction.create(
 _isl_aff_zero_on_domain = ISLFunction.create(
     "isl_aff_zero_on_domain",
     Take("LocalSpace"),
+    return_=Give("Aff"),
+    lib=_lib,
+)
+
+_isl_aff_val_on_domain_space = ISLFunction.create(
+    "isl_aff_val_on_domain_space",
+    Take("Space"),
+    Take("Val"),
     return_=Give("Aff"),
     lib=_lib,
 )
@@ -821,6 +841,14 @@ _isl_aff_lt_set = ISLFunction.create(
     Take("Aff"),
     Take("Aff"),
     return_=Give("Set"),
+    lib=_lib,
+)
+
+_isl_aff_ge_basic_set = ISLFunction.create(
+    "isl_aff_ge_basic_set",
+    Take("Aff"),
+    Take("Aff"),
+    return_=Give("BasicSet"),
     lib=_lib,
 )
 

@@ -10,10 +10,10 @@ def test_aff_and_pw_aff_basic() -> None:
         aff = I.Aff.zero_on_domain_space(space)
         assert aff.dim(I.ISLDimType.ISL_DIM_SET) == 1
         assert aff.get_domain_space().dim(I.ISLDimType.ISL_DIM_SET) == 1
-        assert aff.is_equal(aff.copy())
+        assert aff.plain_is_equal(aff.copy())
         pw = I.PwAff.from_aff(aff)
         assert isinstance(pw, I.PwAff)
-        assert pw.is_equal(pw.copy())
+        assert pw.plain_is_equal(pw.copy())
         assert "Aff(" in repr(aff)
         assert "PwAff(" in repr(pw)
 

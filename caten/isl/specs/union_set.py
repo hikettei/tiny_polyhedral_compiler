@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,7 +12,20 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .basic_set import BasicSet
+    from .basic_set_list import BasicSetList
     from .context import Context
+    from .multi_aff import MultiAff
+    from .multi_union_pw_aff import MultiUnionPwAff
+    from .multi_val import MultiVal
+    from .point import Point
+    from .pw_multi_aff import PwMultiAff
+    from .schedule import Schedule
+    from .set import Set
+    from .set_list import SetList
+    from .space import Space
+    from .union_map import UnionMap
+    from .union_pw_multi_aff import UnionPwMultiAff
 
 _lib = load_libisl()
 
@@ -92,11 +100,11 @@ class UnionSet(ISLObject, ISLObjectMixin):
     def remove_divs(self) -> "UnionSet":
         return _isl_union_set_remove_divs(self)
 
-    def foreach_set(self, fn: Any, user: Any = None) -> int:
-        return _isl_union_set_foreach_set(self, fn, user)
+    def foreach_set(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_union_set_foreach_set(self, fn, user, user_)
 
-    def every_set(self, test: Any, user: Any = None) -> bool:
-        return _isl_union_set_every_set(self, test, user)
+    def every_set(self, test: Any, user: Any, user_: Any = None) -> bool:
+        return _isl_union_set_every_set(self, test, user, user_)
 
     def n_set(self) -> int:
         return _isl_union_set_n_set(self)
@@ -114,8 +122,8 @@ class UnionSet(ISLObject, ISLObjectMixin):
     def from_point(cls, pnt: "Point") -> "UnionSet":
         return _isl_union_set_from_point(pnt)
 
-    def foreach_point(self, fn: Any, user: Any = None) -> int:
-        return _isl_union_set_foreach_point(self, fn, user)
+    def foreach_point(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_union_set_foreach_point(self, fn, user, user_)
 
     def sample_point(self) -> "Point":
         return _isl_union_set_sample_point(self)
@@ -348,7 +356,8 @@ _isl_union_set_foreach_set = ISLFunction.create(
     "isl_union_set_foreach_set",
     Keep("UnionSet"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -357,7 +366,8 @@ _isl_union_set_every_set = ISLFunction.create(
     "isl_union_set_every_set",
     Keep("UnionSet"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(bool, ctype=c_int),
     lib=_lib,
 )
@@ -402,7 +412,8 @@ _isl_union_set_foreach_point = ISLFunction.create(
     "isl_union_set_foreach_point",
     Keep("UnionSet"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )

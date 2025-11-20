@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,6 +13,7 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .map import Map
 
 _lib = load_libisl()
 
@@ -39,8 +36,8 @@ class Flow(ISLObject, ISLObjectMixin):
     def free_handle(cls, handle: Any) -> None:
         _lib.isl_flow_free(handle)
 
-    def foreach(self, fn: Any, user: Any = None) -> int:
-        return _isl_flow_foreach(self, fn, user)
+    def foreach(self, fn: Any, must: int, dep_user: Any, user: Any, user_: Any = None) -> int:
+        return _isl_flow_foreach(self, fn, must, dep_user, user, user_)
 
     def get_no_source(self, must: int) -> "Map":
         return _isl_flow_get_no_source(self, must)
@@ -52,7 +49,10 @@ _isl_flow_foreach = ISLFunction.create(
     "isl_flow_foreach",
     Keep("Flow"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(int, ctype=c_int),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )

@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_uint,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_uint, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -17,7 +12,20 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
+    from .aff import Aff
+    from .aff_list import AffList
+    from .basic_set import BasicSet
+    from .constraint import Constraint
     from .context import Context
+    from .id import Id
+    from .local_space import LocalSpace
+    from .map import Map
+    from .mat import Mat
+    from .multi_aff import MultiAff
+    from .pw_multi_aff import PwMultiAff
+    from .set import Set
+    from .space import Space
+    from .val import Val
 
 _lib = load_libisl()
 
@@ -119,11 +127,8 @@ class BasicMap(ISLObject, ISLObjectMixin):
     def n_constraint(self) -> int:
         return _isl_basic_map_n_constraint(self)
 
-    def foreach_constraint(self, fn: Any, user: Any = None) -> int:
-        return _isl_basic_map_foreach_constraint(self, fn, user)
-
-    def get_constraint_list(self) -> "ConstraintList":
-        return _isl_basic_map_get_constraint_list(self)
+    def foreach_constraint(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_basic_map_foreach_constraint(self, fn, user, user_)
 
     def equalities_matrix(self, c1: int, c2: int, c3: int, c4: int, c5: int) -> "Mat":
         return _isl_basic_map_equalities_matrix(self, c1, c2, c3, c4, c5)
@@ -543,15 +548,9 @@ _isl_basic_map_foreach_constraint = ISLFunction.create(
     "isl_basic_map_foreach_constraint",
     Keep("BasicMap"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
-    lib=_lib,
-)
-
-_isl_basic_map_get_constraint_list = ISLFunction.create(
-    "isl_basic_map_get_constraint_list",
-    Keep("BasicMap"),
-    return_=Give("ConstraintList"),
     lib=_lib,
 )
 

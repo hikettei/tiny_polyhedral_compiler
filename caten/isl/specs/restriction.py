@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-)
+from ctypes import c_char_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -15,6 +13,8 @@ from .context import Context
 
 if TYPE_CHECKING:
     from .context import Context
+    from .map import Map
+    from .set import Set
 
 _lib = load_libisl()
 
@@ -37,12 +37,8 @@ class Restriction(ISLObject, ISLObjectMixin):
     def free_handle(cls, handle: Any) -> None:
         _lib.isl_restriction_free(handle)
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_restriction_get_ctx(self)
-
-    @classmethod
-    def input(cls, source_restr: "Set", sink_restr: "Set") -> "Restriction":
-        return _isl_restriction_input(source_restr, sink_restr)
 
     @classmethod
     def output(cls, source_restr: "Set") -> "Restriction":
@@ -62,15 +58,7 @@ register_type("Restriction", Restriction)
 _isl_restriction_get_ctx = ISLFunction.create(
     "isl_restriction_get_ctx",
     Keep("Restriction"),
-    return_=Give("Ctx"),
-    lib=_lib,
-)
-
-_isl_restriction_input = ISLFunction.create(
-    "isl_restriction_input",
-    Take("Set"),
-    Take("Set"),
-    return_=Give("Restriction"),
+    return_=Give("Context"),
     lib=_lib,
 )
 

@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from ctypes import (
-    c_char_p,
-    c_int,
-    c_void_p,
-)
+from ctypes import c_char_p, c_int, c_void_p
 from typing import TYPE_CHECKING, Any
 
 from ..ffi import load_libisl
@@ -39,14 +35,14 @@ class Vertices(ISLObject, ISLObjectMixin):
     def free_handle(cls, handle: Any) -> None:
         _lib.isl_vertices_free(handle)
 
-    def get_ctx(self) -> "Ctx":
+    def get_ctx(self) -> "Context":
         return _isl_vertices_get_ctx(self)
 
-    def foreach_vertex(self, fn: Any, user: Any = None) -> int:
-        return _isl_vertices_foreach_vertex(self, fn, user)
+    def foreach_vertex(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_vertices_foreach_vertex(self, fn, user, user_)
 
-    def foreach_cell(self, fn: Any, user: Any = None) -> int:
-        return _isl_vertices_foreach_cell(self, fn, user)
+    def foreach_cell(self, fn: Any, user: Any, user_: Any = None) -> int:
+        return _isl_vertices_foreach_cell(self, fn, user, user_)
 
     def get_n_vertices(self) -> int:
         return _isl_vertices_get_n_vertices(self)
@@ -57,7 +53,7 @@ register_type("Vertices", Vertices)
 _isl_vertices_get_ctx = ISLFunction.create(
     "isl_vertices_get_ctx",
     Keep("Vertices"),
-    return_=Give("Ctx"),
+    return_=Give("Context"),
     lib=_lib,
 )
 
@@ -65,7 +61,8 @@ _isl_vertices_foreach_vertex = ISLFunction.create(
     "isl_vertices_foreach_vertex",
     Keep("Vertices"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
@@ -74,7 +71,8 @@ _isl_vertices_foreach_cell = ISLFunction.create(
     "isl_vertices_foreach_cell",
     Keep("Vertices"),
     Param(None, ctype=c_void_p),
-    Param(None, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
+    Param(Any, ctype=c_void_p),
     return_=Param(int, ctype=c_int),
     lib=_lib,
 )
