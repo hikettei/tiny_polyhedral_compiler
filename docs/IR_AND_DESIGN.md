@@ -23,7 +23,6 @@ The IR follows a strict RISC-style design, minimizing the number of primitives. 
 *   `OR`: Bitwise Or (`x | y`)
 *   `XOR`: Bitwise Xor (`x ^ y`)
 *   `MAX`: Maximum (`max(x, y)`)
-*   `MOVE`: Data copy/move.
 
 ### Ternary / Comparison Operations (3 Ops)
 *   `NEQ`: Not Equal (`x != y`)
