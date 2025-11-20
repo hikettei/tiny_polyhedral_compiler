@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Optional, Union
+from typing import Union
 
 import caten.isl as I
 
-from .context import get_builder
+from ..context import get_builder
+from .base import ScheduleNodeContext
 
 
-class mark:
+class mark(ScheduleNodeContext):
     def __init__(self, mark_id: Union[str, "I.Id"]) -> None:
+        super().__init__()
         self.mark_id = mark_id
-        self.node: Optional["I.ScheduleNode"] = None
 
     def __enter__(self) -> "mark":
         builder = get_builder()
@@ -23,8 +24,3 @@ class mark:
         self.node = builder.current_node.insert_mark(self.mark_id)
         builder.current_node = self.node.child(0)
         return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        builder = get_builder()
-        if builder.current_node:
-            builder.current_node = builder.current_node.parent()

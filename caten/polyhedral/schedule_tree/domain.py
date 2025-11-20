@@ -4,11 +4,13 @@ from typing import Any, Optional, Union, cast
 
 import caten.isl as I
 
-from .context import get_builder
+from ..context import get_builder
+from .base import ScheduleNodeContext
 
 
-class domain:
+class domain(ScheduleNodeContext):
     def __init__(self, domain_set: Union[str, "I.Set", "I.UnionSet", Any] = None) -> None:
+        super().__init__()
         self.domain_set = domain_set
         self.schedule: Optional["I.Schedule"] = None
 
@@ -19,7 +21,6 @@ class domain:
         elif isinstance(self.domain_set, I.Set):
             uset = I.UnionSet.from_set(self.domain_set)
         else:
-            # Assume it is UnionSet or similar
             uset = cast("I.UnionSet", self.domain_set)
             
         self.domain_set = uset
