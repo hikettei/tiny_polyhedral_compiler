@@ -3,7 +3,9 @@ import caten.polyhedral as P
 
 
 def test_compute_at():
-    N, C, H, W = 1, 1, 4, 4
+    # Increase size to prevent ISL from unrolling/splitting into if/else blocks
+    # We want to see symbolic strides like "2 * c2"
+    N, C, H, W = 1, 1, 16, 16
     Pool_S = 2
     H_out, W_out = H // Pool_S, W // Pool_S
     
