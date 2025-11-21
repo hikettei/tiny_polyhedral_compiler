@@ -3,7 +3,7 @@ import caten.polyhedral as P
 
 
 def main():
-    print("=== Conv2D + Pool2D Fusion via Dimension-wise Scheduling ===\n")
+    print("=== Conv2D + Pool2D Register-Level Fusion ===\n")
     
     # Parameters
     N, Cin, Cout = 1, 1, 1
@@ -28,63 +28,82 @@ def main():
 
     with I.context():
         # Create Schedule from Domains
-        # Initial: Set node with both domains
         full_dom = I.UnionSet(conv_dom_str).union(I.UnionSet(pool_dom_str))
         sched = I.Schedule.from_domain(full_dom)
         
-        # 1. Fuse N and K dimensions (One-to-One)
-        # Map both to [n, k]
-        mupa_nk = I.MultiUnionPwAff("[{ S_conv[n,k,h,w,c,rh,rw] -> [(n)]; S_pool[n,k,h,w,rh,rw] -> [(n)] }, { S_conv[n,k,h,w,c,rh,rw] -> [(k)]; S_pool[n,k,h,w,rh,rw] -> [(k)] }]")
+        # --- 1. Global Tile Fusion (Outer Loop) ---
+        # Fuse N, K, and Outer H/W
+        # Conv(h) maps to Pool(floor(h/2))
         
-        root = sched.get_root() # Domain
-        # Insert Band(n, k)
-        band_nk = root.child(0).insert_partial_schedule(mupa_nk)
+        # Map [n, k, h_tile, w_tile]
+        # Conv: [n, k, floor(h/2), floor(w/2)]
+        # Pool: [n, k, h,          w         ]
         
-        # 2. Fuse H and W dimensions via Tiling
-        # Map H: Conv->floor(h/2), Pool->h
-        aff_h_str = f"[{{ S_conv[n,k,h,w,c,rh,rw] -> [(floor(h/{S_pool}))]; S_pool[n,k,h,w,rh,rw] -> [(h)] }}]"
-        mupa_h = I.MultiUnionPwAff(aff_h_str)
+        mupa_outer = I.MultiUnionPwAff(
+            f"[{{ S_conv[n,k,h,w,c,rh,rw] -> [(n)]; S_pool[n,k,h,w,rh,rw] -> [(n)] }}, "
+            f" {{ S_conv[n,k,h,w,c,rh,rw] -> [(k)]; S_pool[n,k,h,w,rh,rw] -> [(k)] }}, "
+            f" {{ S_conv[n,k,h,w,c,rh,rw] -> [(floor(h/{S_pool}))]; S_pool[n,k,h,w,rh,rw] -> [(h)] }}, "
+            f" {{ S_conv[n,k,h,w,c,rh,rw] -> [(floor(w/{S_pool}))]; S_pool[n,k,h,w,rh,rw] -> [(w)] }}]"
+        )
         
-        # Map W: Conv->floor(w/2), Pool->w
-        aff_w_str = f"[{{ S_conv[n,k,h,w,c,rh,rw] -> [(floor(w/{S_pool}))]; S_pool[n,k,h,w,rh,rw] -> [(w)] }}]"
-        mupa_w = I.MultiUnionPwAff(aff_w_str)
+        root = sched.get_root()
+        band_outer = root.child(0).insert_partial_schedule(mupa_outer)
         
-        # Insert Band(h_tile, w_tile) under Band(n, k)
-        band_hw = band_nk.child(0).insert_partial_schedule(mupa_h)
-        band_hw = band_hw.child(0).insert_partial_schedule(mupa_w)
+        # --- 2. Register Fusion (Inner Loop) ---
+        # This is the key optimization!
+        # Fuse Conv's local spatial offset with Pool's reduction window.
+        # Conv Local: h % 2, w % 2
+        # Pool Local: rh,    rw
         
-        # Create filters for the Sequence
+        mupa_inner = I.MultiUnionPwAff(
+            f"[{{ S_conv[n,k,h,w,c,rh,rw] -> [(h%{S_pool})]; S_pool[n,k,h,w,rh,rw] -> [(rh)] }}, "
+            f" {{ S_conv[n,k,h,w,c,rh,rw] -> [(w%{S_pool})]; S_pool[n,k,h,w,rh,rw] -> [(rw)] }}]"
+        )
+        
+        # Insert Inner Band under Outer Band
+        band_inner = band_outer.child(0).insert_partial_schedule(mupa_inner)
+        
+        # --- 3. Sequence (Computation Order) ---
+        # Inside the Register Loop:
+        # 1. Compute Conv Pixel (Producer)
+        # 2. Accumulate to Pool (Consumer)
+        
         filters = I.UnionSetList.alloc(2)
         filters = filters.add(I.UnionSet(conv_dom_str))
         filters = filters.add(I.UnionSet(pool_dom_str))
         
-        seq_node = band_hw.child(0).insert_sequence(filters)
+        seq_node = band_inner.child(0).insert_sequence(filters)
         
-        # 3. Inner Schedules
-        # Sequence Child 0: Conv
-        conv_inner_map = I.UnionMap("{ S_conv[n,k,h,w,c,rh,rw] -> [h, w, c, rh, rw] }")
-        mupa_conv_inner = I.MultiUnionPwAff.from_union_map(conv_inner_map)
+        # --- 4. Local Computation Schedules ---
         
-        # Insert Band for Conv inner
-        # Note: ISL objects are immutable. We get a new node in a new tree.
-        conv_band = seq_node.child(0).child(0).insert_partial_schedule(mupa_conv_inner)
+        # Conv: Schedule remaining reduction loops [c, rh, rw]
+        conv_local_map = I.UnionMap("{ S_conv[n,k,h,w,c,rh,rw] -> [c, rh, rw] }")
+        mupa_conv_local = I.MultiUnionPwAff.from_union_map(conv_local_map)
         
-        # Navigate back to Sequence node in the NEW tree
-        # Hierarchy: Sequence -> Filter -> Band(Conv)
-        new_seq_node = conv_band.parent().parent()
+        # Pool: No remaining loops! 
+        # (n, k, h, w, rh, rw) are all scheduled in Outer/Inner bands.
+        # So S_pool is a scalar statement here.
         
-        # Sequence Child 1: Pool
-        pool_inner_map = I.UnionMap("{ S_pool[n,k,h,w,rh,rw] -> [rh, rw] }")
-        mupa_pool_inner = I.MultiUnionPwAff.from_union_map(pool_inner_map)
+        # Finalize
+        # We need to get the schedule from the modified tree.
+        # seq_node -> Filter -> Band(Conv Local)
+        # But we need the root.
+        # Since ISL nodes are copies, we can't just use `sched`.
+        # But `insert` returns the new node *in the new tree*.
+        # We can traverse up to root from the last modified node?
+        # Or simpler: just grab the schedule from the last inserted node.
         
-        # Insert Band for Pool inner
-        pool_band = new_seq_node.child(1).child(0).insert_partial_schedule(mupa_pool_inner)
-        
-        # Get final schedule
-        final_sched = pool_band.get_schedule()
+        # seq_node.child(0) is Filter.
+        # seq_node.child(0).child(0) is Leaf.
+        # insert_partial_schedule returns the new Band node.
+        final_node = seq_node.child(0).child(0).insert_partial_schedule(mupa_conv_local)
+        final_sched = final_node.get_schedule()
         
         # Codegen
-        print("\n=== Generated C Code ===")
+        print("\n=== Schedule Tree ===")
+        print(final_sched)
+        
+        print("\n=== Generated C Code (Register Fusion) ===")
         c_code = P.to_c(final_sched)
         print(c_code)
 
