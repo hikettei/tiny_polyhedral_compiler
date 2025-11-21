@@ -1,6 +1,6 @@
 import caten.isl as I
 import caten.polyhedral as P
-from caten.polyhedral.poly_schedule import schedule_sequence
+from caten.polyhedral.stmt import stmt
 from caten.polyhedral.transformations import schedule_node_sequence_full_fuse
 
 
@@ -11,7 +11,7 @@ def create_conv_schedule(N, K_out, H_out, W_out, Cin, KH, KW):
     with P.domain(dom_str) as conv:
         with P.band("{ S_conv[n, k, h, w, c, kh, kw] -> [n, k, h, w, c, kh, kw] }"):
             # Automatic Access Relation Inference using P.stmt
-            P.stmt("Out[n, k, h, w] = Out[n, k, h, w], In[n, c, h, w], W[k, c, kh, kw]")
+            stmt("Out[n, k, h, w] = Out[n, k, h, w], In[n, c, h, w], W[k, c, kh, kw]")
             
     return conv.finalize()
 
@@ -22,12 +22,12 @@ def create_pool_schedule(N, K_out, H_pool, W_pool, S_pool, KH_pool, KW_pool):
     with P.domain(dom_str) as pool:
         with P.band("{ S_pool[n, k, h, w, rh, rw] -> [n, k, h, w, rh, rw] }"):
             # P.stmt with f-string for parameters
-            P.stmt(f"PoolBuf[n, k, h, w] = PoolBuf[n, k, h, w], Out[n, k, h*{S_pool} + rh, w*{S_pool} + rw]")
+            stmt(f"PoolBuf[n, k, h, w] = PoolBuf[n, k, h, w], Out[n, k, h*{S_pool} + rh, w*{S_pool} + rw]")
             
     return pool.finalize()
 
 def main():
-    print("=== Conv2D + Pool2D Fusion (PolyhedralSchedule API + P.stmt) ===\n")
+    print("=== Conv2D + Pool2D Fusion (PolyhedralSchedule API) ===\n")
     
     # Parameters
     N = 10
@@ -56,14 +56,10 @@ def main():
     print("--- Initial Separate Schedules Created ---")
     
     # Combine Schedules
-    psched = schedule_sequence([conv, pool])
+    psched = conv.sequence(pool)
     
     # --- Transformations ---
-
-    # Helper to find sequence under a band
-    def get_seq_from_band(band):
-        return band.parent().parent()
-        
+    
     root = psched.get_root()
     # root -> Domain -> Sequence
     seq_node = root.child(0)
@@ -75,7 +71,7 @@ def main():
     conv_band_2 = conv_band.child(0)
     conv_band_2 = conv_band_2.band_split(2) # [h, w]
     
-    # conv_band_2 is Band(HW). Parent is Band(NK). Parent is Filter. Parent is Sequence.
+    # conv_band_2 -> Band(HW). Parent -> Band(NK). Parent -> Filter. Parent -> Sequence.
     seq_node = conv_band_2.parent().parent().parent()
     
     # Pool (Child 1): [n, k, h, w, rh, rw]

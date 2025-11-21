@@ -1,6 +1,5 @@
 import caten.isl as I
 import caten.polyhedral as P
-from caten.polyhedral.poly_schedule import schedule_sequence
 from caten.polyhedral.transformations import schedule_node_sequence_full_fuse
 
 
@@ -41,7 +40,7 @@ def test_conv2d_pool2d_fusion():
     conv = create_conv_schedule(N, Cout, H_conv, W_conv, Cin, KH_conv, KW_conv)
     pool = create_pool_schedule(N, Cout, H_pool, W_pool, S_pool, KH_pool, KW_pool)
     
-    psched = schedule_sequence([conv, pool])
+    psched = conv.sequence(pool)
     
     root = psched.get_root()
     seq_node = root.child(0)

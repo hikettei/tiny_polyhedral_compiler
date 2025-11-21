@@ -42,36 +42,24 @@ class PolyhedralSchedule:
         """Update the internal schedule from a modified schedule node."""
         self.isl_schedule = node.get_schedule()
 
-def schedule_sequence(schedules: list[PolyhedralSchedule]) -> PolyhedralSchedule:
-    """
-    Combine multiple PolyhedralSchedules into a single sequence using ISL API.
-    """
-    if not schedules:
-        raise ValueError("No schedules provided")
-    
-    # Start with the first schedule
-    res_sched = schedules[0].isl_schedule
-    all_reads = schedules[0].reads
-    all_writes = schedules[0].writes
-    
-    # Iteratively sequence subsequent schedules
-    for i in range(1, len(schedules)):
-        next_sched_wrapper = schedules[i]
+    def sequence(self, other: "PolyhedralSchedule") -> "PolyhedralSchedule":
+        """Combine this schedule with another using isl_schedule_sequence."""
+        new_sched = self.isl_schedule.sequence(other.isl_schedule)
         
-        # Use ISL's schedule_sequence to combine
-        res_sched = res_sched.sequence(next_sched_wrapper.isl_schedule)
-        
-        # Combine access relations
-        if next_sched_wrapper.reads:
-            if all_reads is None:
-                all_reads = next_sched_wrapper.reads
-            else:
-                all_reads = all_reads.union(next_sched_wrapper.reads)
+        new_reads = None
+        if self.reads and other.reads:
+            new_reads = self.reads.union(other.reads)
+        elif self.reads:
+            new_reads = self.reads
+        elif other.reads:
+            new_reads = other.reads
             
-        if next_sched_wrapper.writes:
-            if all_writes is None:
-                all_writes = next_sched_wrapper.writes
-            else:
-                all_writes = all_writes.union(next_sched_wrapper.writes)
-
-    return PolyhedralSchedule(res_sched, reads=all_reads, writes=all_writes)
+        new_writes = None
+        if self.writes and other.writes:
+            new_writes = self.writes.union(other.writes)
+        elif self.writes:
+            new_writes = self.writes
+        elif other.writes:
+            new_writes = other.writes
+            
+        return PolyhedralSchedule(new_sched, reads=new_reads, writes=new_writes)
