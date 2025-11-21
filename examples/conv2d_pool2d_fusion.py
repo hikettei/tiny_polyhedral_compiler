@@ -11,7 +11,7 @@ def create_conv_schedule(N, K_out, H_out, W_out, Cin, KH, KW):
     with P.domain(dom_str) as conv:
         with P.band("{ S_conv[n, k, h, w, c, kh, kw] -> [n, k, h, w, c, kh, kw] }"):
             # Automatic Access Relation Inference using P.stmt
-            P.stmt("Out[n, k, h, w] += In[n, c, h, w] * W[k, c, kh, kw]")
+            P.stmt("Out[n, k, h, w] = Out[n, k, h, w], In[n, c, h, w], W[k, c, kh, kw]")
             
     return conv.finalize()
 
@@ -22,7 +22,7 @@ def create_pool_schedule(N, K_out, H_pool, W_pool, S_pool, KH_pool, KW_pool):
     with P.domain(dom_str) as pool:
         with P.band("{ S_pool[n, k, h, w, rh, rw] -> [n, k, h, w, rh, rw] }"):
             # P.stmt with f-string for parameters
-            P.stmt(f"PoolBuf[n, k, h, w] += Out[n, k, h*{S_pool} + rh, w*{S_pool} + rw]")
+            P.stmt(f"PoolBuf[n, k, h, w] = PoolBuf[n, k, h, w], Out[n, k, h*{S_pool} + rh, w*{S_pool} + rw]")
             
     return pool.finalize()
 

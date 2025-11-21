@@ -11,22 +11,10 @@ def stmt(expr: str) -> None:
     if dom is None:
         raise RuntimeError("stmt() must be used within a P.domain context")
         
-    # Determine operator
-    operator = "="
-    is_update = False
-    # Check for compound operators first
-    for op in ["+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="]:
-        if op in expr:
-            operator = op
-            is_update = True
-            break
-            
-    if operator in expr:
-        lhs_str, rhs_str = expr.split(operator, 1)
-    elif "=" in expr:
-        lhs_str, rhs_str = expr.split("=", 1)
-    else:
-        raise ValueError(f"Invalid statement expression (must contain assignment): {expr}")
+    if "=" not in expr:
+        raise ValueError(f"Invalid statement expression (must contain assignment '='): {expr}")
+        
+    lhs_str, rhs_str = expr.split("=", 1)
         
     def extract_accesses(s: str) -> List[Tuple[str, str]]:
         return re.findall(r"([a-zA-Z_]\w*)\s*\[(.*?)\]", s)
@@ -34,9 +22,6 @@ def stmt(expr: str) -> None:
     writes = extract_accesses(lhs_str)
     reads = extract_accesses(rhs_str)
     
-    if is_update:
-        reads.extend(writes)
-        
     uset = dom.domain_set
     if isinstance(uset, str):
         uset = I.UnionSet(uset)
