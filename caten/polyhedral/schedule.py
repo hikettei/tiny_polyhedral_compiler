@@ -1,7 +1,9 @@
-from typing import Optional
+from typing import List, Optional
 
 import caten.isl as I
 
+from ..ops import Node
+from .converter import AstToGraphConverter
 from .scop import Computation, Scop
 
 
@@ -38,12 +40,17 @@ class PolyhedralSchedule:
             return None
             
         # Build AST
-        # We need to ensure params are available in context if needed, 
-        # though from_context usually handles parameters automatically.
         build = I.ASTBuild.from_context(self.schedule.get_domain().params())
         ast_node = build.node_from_schedule(self.schedule)
         return ast_node
 
-    def finalize(self, comp: Computation) -> str:
-        # Legacy method kept just in case, but we use ASTVisitor now
-        raise NotImplementedError("Use get_ast() and ASTVisitor instead.")
+    def to_graph(self, comp: Computation) -> List[Node]:
+        """
+        Converts the scheduled AST into a Caten Ops Graph.
+        """
+        ast_root = self.get_ast()
+        if not ast_root:
+            return []
+        
+        converter = AstToGraphConverter(self.scop, comp)
+        return converter.convert(ast_root)
