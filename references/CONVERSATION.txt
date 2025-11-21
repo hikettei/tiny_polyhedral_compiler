@@ -1,3 +1,129 @@
+## Polyhedral Model
+
+ご指摘の通りです。大変失礼しました。
+Conv2DのNaiveな実装（im2colなどを使わない直接畳み込み）は、バッチ・出力チャネル・出力縦・出力横の4次元に加え、入力チャネル・カーネル縦・カーネル横の3次元の削減ループを持つため、**合計7次元のループネスト**になります。
+
+ご要望の **ISL (Integer Set Library)** 形式での Polyhedral Model 定義（Domain, Read, Write）を作成しました。
+パラメータ（画像の大きさなど）はシンボル `[...]` として定義し、Stride（ストライド）も考慮に入れています。
+
+-----
+
+### 1\. Conv2D (NCHW format)
+
+  * **ループ構成:** 7次元 (N, Cout, H\_out, W\_out, Cin, KH, KW)
+  * **計算式:** `Out[n, k, h, w] += In[n, c, h*S + rh, w*S + rw] * W[k, c, rh, rw]`
+
+#### Domain (UnionSet)
+
+反復空間の定義です。
+
+```text
+[N, Cout, H_out, W_out, Cin, KH, KW] -> {
+    S_conv[n, k, h, w, c, rh, rw] :
+        0 <= n < N and
+        0 <= k < Cout and
+        0 <= h < H_out and
+        0 <= w < W_out and
+        0 <= c < Cin and
+        0 <= rh < KH and
+        0 <= rw < KW
+}
+```
+
+#### Read Access (UnionMap)
+
+入力テンソル(`In`)と重みテンソル(`Weight`)、およびアキュムレーションのための出力テンソル(`Out`)の読み込みです。
+※ `S` はストライド幅です。
+
+```text
+[N, Cout, H_out, W_out, Cin, KH, KW, S] -> {
+    S_conv[n, k, h, w, c, rh, rw] -> In[n, c, h * S + rh, w * S + rw];
+    S_conv[n, k, h, w, c, rh, rw] -> Weight[k, c, rh, rw];
+    S_conv[n, k, h, w, c, rh, rw] -> Out[n, k, h, w]
+}
+```
+
+#### Write Access (UnionMap)
+
+出力テンソル(`Out`)への書き込みです。
+
+```text
+[N, Cout, H_out, W_out, Cin, KH, KW] -> {
+    S_conv[n, k, h, w, c, rh, rw] -> Out[n, k, h, w]
+}
+```
+
+-----
+
+### 2\. Pool2D (Max Pooling, NCHW)
+
+  * **ループ構成:** 6次元 (N, C, H\_out, W\_out, KH, KW)
+  * **計算式:** `Pool[n, c, h, w] = max(..., Out[n, c, h*Sp + rh, w*Sp + rw])`
+
+#### Domain (UnionSet)
+
+```text
+[N, C, Pool_H, Pool_W, Pool_KH, Pool_KW] -> {
+    S_pool[n, c, h, w, rh, rw] :
+        0 <= n < N and
+        0 <= c < C and
+        0 <= h < Pool_H and
+        0 <= w < Pool_W and
+        0 <= rh < Pool_KH and
+        0 <= rw < Pool_KW
+}
+```
+
+#### Read Access (UnionMap)
+
+Convの出力（ここでは `Out`）を読み込みます。Reductionのための自己参照（`Pool` の読み込み）も含みます。
+
+```text
+[N, C, Pool_H, Pool_W, Pool_KH, Pool_KW, Sp] -> {
+    S_pool[n, c, h, w, rh, rw] -> Out[n, c, h * Sp + rh, w * Sp + rw];
+    S_pool[n, c, h, w, rh, rw] -> Pool[n, c, h, w]
+}
+```
+
+#### Write Access (UnionMap)
+
+Pooling結果(`Pool`)への書き込みです。
+
+```text
+[N, C, Pool_H, Pool_W, Pool_KH, Pool_KW] -> {
+    S_pool[n, c, h, w, rh, rw] -> Pool[n, c, h, w]
+}
+```
+
+-----
+
+### 3\. 全体のモデル (Conv + Pool)
+
+これらを1つのコンテキストで扱う場合の `UnionMap` 形式です。
+Fusionを検討する場合、これらの `Read` と `Write` の間の **RAW依存 (Read After Write)** を解析することになります。
+
+#### Combined Domain
+
+```text
+{
+    S_conv[n, k, h, w, c, rh, rw] : ... (Conv constraints) ...;
+    S_pool[n, c, h, w, rh, rw]    : ... (Pool constraints) ...
+}
+```
+
+#### Flow Dependence (RAW) の発生箇所
+
+Convの **Write** と Poolの **Read** の間で依存が発生します。
+
+$$
+\text{Write}_{Conv} \cap \text{Read}_{Pool} \neq \emptyset
+$$具体的には、Convの出力 `Out[n, k, h_c, w_c]` が、Poolの入力 `Out[n, c, h_p * Sp + rh, w_p * Sp + rw]` として読み込まれる時、
+$$k = c \quad \land \quad h_c = h_p \cdot Sp + rh \quad \land \quad w_c = w_p \cdot Sp + rw$$
+という関係式（Affine Constraints）が成り立ちます。これをISLが解析して、Fusionのためのスケジュールを導出します。
+$$
+
+## Conversation
+
 C言語で，
 Conv2D
 Pooling

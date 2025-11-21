@@ -84,12 +84,16 @@ class domain(ScheduleNodeContext):
         # Use lexmax to schedule producer as late as possible (closest to consumer use)
         prod_outer = prod_outer.lexmax()
         
+        # Restrict P domain to instances that are actually used (Active Domain)
+        # This avoids "band node is not allowed to drop statement instances" error
+        active_p_dom = prod_outer.domain()
+        
         # 4. Construct Fused Schedule Tree
         # Outer Band: { P -> T_c; C -> T_c }
         common_sched = prod_outer.union(target_sched_map)
         mupa_outer = I.MultiUnionPwAff.from_union_map(common_sched)
         
-        new_domain_set = p_dom.union(c_dom)
+        new_domain_set = active_p_dom.union(c_dom)
         
         sched = I.Schedule.from_domain(new_domain_set)
         root = sched.get_root()
@@ -104,7 +108,7 @@ class domain(ScheduleNodeContext):
         
         # Create UnionSetList
         filters = I.UnionSetList.alloc(2)
-        filters = filters.add(p_dom)
+        filters = filters.add(active_p_dom)
         filters = filters.add(c_dom)
         
         seq_node = band_node.child(0).insert_sequence(filters)

@@ -4,9 +4,7 @@ from caten.polyhedral.analysis import compute_dependence_relation, schedule_is_l
 from caten.polyhedral.transformations import schedule_node_sequence_full_fuse
 
 
-def main():
-    print("=== Conv2D + Pool2D Fusion (Robust Implementation) ===\n")
-    
+def test_conv2d_pool2d_fusion():
     # Parameters
     N = 10
     Cin = 16
@@ -23,8 +21,6 @@ def main():
     H_pool = (H_conv - KH_pool) // S_pool + 1
     W_pool = (W_conv - KW_pool) // S_pool + 1
     
-    print(f"Conv: {H_conv}x{W_conv}, Pool: {H_pool}x{W_pool}")
-
     # Domains
     conv_dom_str = f"{{ S_conv[n, k, h, w, c, kh, kw] : 0<=n<{N} and 0<=k<{Cout} and 0<=h<{H_conv} and 0<=w<{W_conv} and 0<=c<{Cin} and 0<=kh<{KH_conv} and 0<=kw<{KW_conv} }}"
     pool_dom_str = f"{{ S_pool[n, k, h, w, rh, rw] : 0<=n<{N} and 0<=k<{Cout} and 0<=h<{H_pool} and 0<=w<{W_pool} and 0<=rh<{KH_pool} and 0<=rw<{KW_pool} }}"
@@ -41,7 +37,6 @@ def main():
             f"0<=n<{N} and 0<=k<{Cout} and 0<=h<{H_pool} and 0<=w<{W_pool} and 0<=rh<{KH_pool} and 0<=rw<{KW_pool} }}"
         )
         
-        # Initial Schedule
         filters = I.UnionSetList.alloc(2)
         filters = filters.add(I.UnionSet(conv_dom_str))
         filters = filters.add(I.UnionSet(pool_dom_str))
@@ -62,21 +57,16 @@ def main():
         pool_node = pool_filter.child(0).insert_partial_schedule(pool_mupa)
         
         initial_sched = pool_node.get_schedule()
-        print("--- Initial Schedule ---")
         
-        # --- Dependence Analysis ---
-        print("Computing Dependence...")
         total_dep, raw, waw, war = compute_dependence_relation(
             read=reads_pool,
             write=writes_conv,
             schedule=initial_sched
         )
-        print(f"RAW Dependencies Empty? {raw.is_empty()}")
+        assert not raw.is_empty()
         
         legal = schedule_is_legal_p(initial_sched, raw)
-        print(f"Initial Schedule Legal? {legal}")
-        
-        # --- Transformations ---
+        assert legal
         
         # Split Bands
         seq_node = pool_node.parent().parent()
@@ -94,7 +84,6 @@ def main():
         seq_node = pool_band_2.parent().parent().parent()
         
         # Fuse NK
-        print("--- Fusing NK ---")
         nk_band = schedule_node_sequence_full_fuse(seq_node)
         
         # Tile Conv HW
@@ -108,8 +97,7 @@ def main():
         mv = mv.set_val(1, I.Val.int_from_si(2))
         
         conv_tiled = conv_hw.band_tile(mv)
-        # Scale down tile loops to make them 0..N-1 instead of 0, S, 2S...
-        # This matches Pool's H loop (0..N-1).
+        # Scale down
         conv_tiled = conv_tiled.band_scale_down(mv)
         
         # Replace Inner Band
@@ -121,23 +109,18 @@ def main():
         seq_node = conv_tiled_inner.parent().parent().parent()
         
         # Fuse HW Tiles
-        print("--- Fusing HW Tiles ---")
         hw_tile_band = schedule_node_sequence_full_fuse(seq_node)
         
         # Fuse Inner
         seq_node = hw_tile_band.child(0)
-        print("--- Fusing Inner ---")
         inner_band = schedule_node_sequence_full_fuse(seq_node)
         
         final_sched = inner_band.get_schedule()
         
-        print("\n=== Generated C Code ===")
-        print(P.to_c(final_sched))
-        
-        # --- Validation ---
-        print("\n=== Validation ===")
+        # Validate
         legal_fused = schedule_is_legal_p(final_sched, raw)
-        print(f"Fused Schedule Legal? {legal_fused}")
-
-if __name__ == "__main__":
-    main()
+        assert legal_fused
+        
+        c_code = P.to_c(final_sched)
+        assert "S_conv" in c_code
+        assert "S_pool" in c_code
