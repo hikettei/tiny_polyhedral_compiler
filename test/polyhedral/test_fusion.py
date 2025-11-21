@@ -21,22 +21,39 @@ def test_conv2d_pool2d_fusion():
     H_pool = (H_conv - KH_pool) // S_pool + 1
     W_pool = (W_conv - KW_pool) // S_pool + 1
     
+    Tile_H = S_pool
+    Tile_W = S_pool
+    
     # Domains
     conv_dom_str = f"{{ S_conv[n, k, h, w, c, kh, kw] : 0<=n<{N} and 0<=k<{Cout} and 0<=h<{H_conv} and 0<=w<{W_conv} and 0<=c<{Cin} and 0<=kh<{KH_conv} and 0<=kw<{KW_conv} }}"
     pool_dom_str = f"{{ S_pool[n, k, h, w, rh, rw] : 0<=n<{N} and 0<=k<{Cout} and 0<=h<{H_pool} and 0<=w<{W_pool} and 0<=rh<{KH_pool} and 0<=rw<{KW_pool} }}"
 
     with I.context():
-        # Access Relations
+        # Access Relations (including Reduction Dependencies)
         writes_conv = I.UnionMap(
             f"{{ S_conv[n, k, h, w, c, kh, kw] -> Out[n, k, h, w] : "
-            f"0<=n<{N} and 0<=k<{Cout} and 0<=h<{H_conv} and 0<=w<{W_conv} and 0<=c<{Cin} and 0<=kh<{KH_conv} and 0<=kw<{KW_conv} }}"
+            f"0<=n<{N} and 0<=k<{Cout} and 0<=h<{H_conv} and 0<=w<{W_conv} }}"
+        )
+        reads_conv_acc = I.UnionMap(
+            f"{{ S_conv[n, k, h, w, c, kh, kw] -> Out[n, k, h, w] : "
+            f"0<=n<{N} and 0<=k<{Cout} and 0<=h<{H_conv} and 0<=w<{W_conv} }}"
         )
         
         reads_pool = I.UnionMap(
             f"{{ S_pool[n, k, h, w, rh, rw] -> Out[n, k, h*{S_pool} + rh, w*{S_pool} + rw] : "
             f"0<=n<{N} and 0<=k<{Cout} and 0<=h<{H_pool} and 0<=w<{W_pool} and 0<=rh<{KH_pool} and 0<=rw<{KW_pool} }}"
         )
+        writes_pool = I.UnionMap(
+            "{ S_pool[n, k, h, w, rh, rw] -> PoolBuf[n, k, h, w] }"
+        )
+        reads_pool_acc = I.UnionMap(
+            "{ S_pool[n, k, h, w, rh, rw] -> PoolBuf[n, k, h, w] }"
+        )
         
+        all_writes = writes_conv.union(writes_pool)
+        all_reads = reads_pool.union(reads_conv_acc).union(reads_pool_acc)
+        
+        # Initial Schedule
         filters = I.UnionSetList.alloc(2)
         filters = filters.add(I.UnionSet(conv_dom_str))
         filters = filters.add(I.UnionSet(pool_dom_str))
@@ -59,23 +76,28 @@ def test_conv2d_pool2d_fusion():
         initial_sched = pool_node.get_schedule()
         
         total_dep, raw, waw, war = compute_dependence_relation(
-            read=reads_pool,
-            write=writes_conv,
+            read=all_reads,
+            write=all_writes,
             schedule=initial_sched
         )
-        assert not raw.is_empty()
         
-        legal = schedule_is_legal_p(initial_sched, raw)
+        legal = schedule_is_legal_p(initial_sched, total_dep)
         assert legal
         
+        # --- Transformations ---
+        def get_seq_from_band(band):
+            return band.parent().parent()
+            
         # Split Bands
-        seq_node = pool_node.parent().parent()
+        seq_node = get_seq_from_band(pool_node)
         conv_band = seq_node.child(0).child(0)
         conv_band = conv_band.band_split(2)
         conv_band_2 = conv_band.child(0)
         conv_band_2 = conv_band_2.band_split(2)
         
+        # Use correct navigation for nested bands
         seq_node = conv_band_2.parent().parent().parent()
+        
         pool_band = seq_node.child(1).child(0)
         pool_band = pool_band.band_split(2)
         pool_band_2 = pool_band.child(0)
@@ -93,17 +115,16 @@ def test_conv2d_pool2d_fusion():
         space = conv_hw.band_get_space()
         
         mv = I.MultiVal.zero(space)
-        mv = mv.set_val(0, I.Val.int_from_si(2))
-        mv = mv.set_val(1, I.Val.int_from_si(2))
+        mv = mv.set_val(0, I.Val.int_from_si(Tile_H))
+        mv = mv.set_val(1, I.Val.int_from_si(Tile_W))
         
         conv_tiled = conv_hw.band_tile(mv)
-        # Scale down
         conv_tiled = conv_tiled.band_scale_down(mv)
         
         # Replace Inner Band
         inner = conv_tiled.child(0)
         replaced = inner.delete()
-        new_mupa = I.MultiUnionPwAff.from_union_map(I.UnionMap("{ S_conv[n, k, h, w, c, kh, kw] -> [(h%2), (w%2)] }"))
+        new_mupa = I.MultiUnionPwAff.from_union_map(I.UnionMap(f"{{ S_conv[n, k, h, w, c, kh, kw] -> [(h%{Tile_H}), (w%{Tile_W})] }}"))
         conv_tiled_inner = replaced.insert_partial_schedule(new_mupa) # noqa: F841
         
         seq_node = conv_tiled_inner.parent().parent().parent()
@@ -117,8 +138,7 @@ def test_conv2d_pool2d_fusion():
         
         final_sched = inner_band.get_schedule()
         
-        # Validate
-        legal_fused = schedule_is_legal_p(final_sched, raw)
+        legal_fused = schedule_is_legal_p(final_sched, total_dep)
         assert legal_fused
         
         c_code = P.to_c(final_sched)
