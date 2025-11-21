@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Set, Tuple
 
-from caten.ops import Node, OpType
+from caten.ops import ControlOps, MemoryOps, MetaOps, Node
 
 
 class ScopStatementInfo:
@@ -15,6 +15,7 @@ class Scop:
     def __init__(self) -> None:
         self.statements: List[ScopStatementInfo] = []
         self.params: Set[str] = set()
+        self.node_to_id: Dict[Node, str] = {} # Map Node object to S_k ID
 
 class Computation:
     def __init__(self) -> None:
@@ -33,8 +34,8 @@ def build_scop(graph: List[Node]) -> Tuple[Scop, Computation]:
 
 def _traverse(nodes: List[Node], loop_stack: List[Tuple[str, str, str]], scop: Scop, comp: Computation) -> None:
     for node in nodes:
-        if node.op == OpType.RANGE:
-            iter_sym, args, body = node.arg
+        if node.op == ControlOps.RANGE:
+            iter_sym, args, body, directives = node.arg
             start, stop = "0", "0"
             
             def _fmt(x: Any) -> str:
@@ -53,8 +54,9 @@ def _traverse(nodes: List[Node], loop_stack: List[Tuple[str, str, str]], scop: S
             _traverse(body, loop_stack, scop, comp)
             loop_stack.pop()
             
-        elif node.op == OpType.STORE:
+        elif node.op == MemoryOps.STORE:
             stmt_id = f"S_{len(scop.statements)}"
+            scop.node_to_id[node] = stmt_id
             iters = [loop[0] for loop in loop_stack]
             params_list = sorted(list(scop.params))
             params_str = f"[{', '.join(params_list)}]" if params_list else ""
@@ -80,7 +82,7 @@ def _create_body_lambda(store_node: Node) -> Callable[[Dict[str, Any]], Node]:
 
 def _replace_node(node: Node, mapping: Dict[str, Any]) -> Node:
     # If VAR/Symbol matches mapping, return mapped value (which should be a Node or leaf)
-    if node.op == OpType.VAR:
+    if node.op == MetaOps.VAR:
         if node.arg.name in mapping:
             val = mapping[node.arg.name]
             if isinstance(val, Node):
@@ -91,20 +93,20 @@ def _replace_node(node: Node, mapping: Dict[str, Any]) -> Node:
             return _to_node(val)
         return node
     
-    if node.op == OpType.CONST:
+    if node.op == MetaOps.CONST:
         return node
     
-    if node.op == OpType.PLACEHOLDER:
+    if node.op == MetaOps.PLACEHOLDER:
         return node
 
     # Recursively replace children
     # LOAD arg is index (tuple/scalar). We need to replace symbols inside it.
-    if node.op == OpType.LOAD:
+    if node.op == MemoryOps.LOAD:
         new_src = tuple(_replace_node(s, mapping) for s in node.src)
         new_arg = _replace_index(node.arg, mapping)
         return Node(node.op, new_src, arg=new_arg, name=node.name)
     
-    if node.op == OpType.STORE:
+    if node.op == MemoryOps.STORE:
         new_src = tuple(_replace_node(s, mapping) for s in node.src)
         new_arg = _replace_index(node.arg, mapping)
         return Node(node.op, new_src, arg=new_arg, name=node.name)
@@ -130,4 +132,4 @@ def _replace_val(val: Any, mapping: Dict[str, Any]) -> Any:
 def _to_node(obj: Any) -> Node:
     if isinstance(obj, Node):
         return obj
-    return Node(OpType.CONST, (), arg=obj)
+    return Node(MetaOps.CONST, (), arg=obj)

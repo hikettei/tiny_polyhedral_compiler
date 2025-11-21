@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextvars
 from typing import Any, List, Optional, Set
 
-from .ops import Node, OpType
+from .ops import ControlOps, Node
 
 
 class GraphBuilder:
@@ -60,7 +60,7 @@ class GraphBuilder:
             for s in n.src:
                 visit(s)
             # Special handling for control flow nodes that have sub-graphs in 'arg'
-            if n.op in (OpType.RANGE, OpType.IF):
+            if n.op in (ControlOps.RANGE, ControlOps.IF):
                  # n.arg is the sub-block (List[Node])
                  # We need to visit nodes inside the block to mark them as used?
                  # Actually, if the Range node is used, its body is implicitly used.

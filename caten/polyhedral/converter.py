@@ -3,7 +3,7 @@ from typing import List
 import caten.isl as I
 
 from ..kernel import Symbol
-from ..ops import Node, OpType
+from ..ops import ControlOps, MetaOps, Node
 from .ast_visitor import ASTVisitor
 from .scop import Computation, Scop
 
@@ -57,12 +57,12 @@ class AstToGraphConverter(ASTVisitor):
         body_block = self.graph
         self.graph = parent_graph
         
-        # RANGE arg for polyhedral loop: (iter_sym, (init, cond, inc), body)
+        # RANGE arg for polyhedral loop: (iter_sym, (init, cond, inc), body, directives)
         # We distinguish this from simple range by the structure of args tuple
         range_node = Node(
-            OpType.RANGE, 
+            ControlOps.RANGE, 
             (), 
-            arg=(iter_sym, (init_sym, cond_sym, inc_sym), body_block), 
+            arg=(iter_sym, (init_sym, cond_sym, inc_sym), body_block, []), 
             name=iter_sym.name
         )
         self.graph.append(range_node)
@@ -84,7 +84,7 @@ class AstToGraphConverter(ASTVisitor):
             
         self.graph = parent_graph
         
-        if_node = Node(OpType.IF, (), arg=(cond_sym, then_block, else_block))
+        if_node = Node(ControlOps.IF, (), arg=(cond_sym, then_block, else_block))
         self.graph.append(if_node)
 
     def visit_user(self, node: I.ASTNode):
@@ -97,7 +97,7 @@ class AstToGraphConverter(ASTVisitor):
         for i in range(1, n_args):
             arg_expr = expr.get_op_arg(i)
             # Pass iterators as VAR nodes with symbol string
-            args.append(Node(OpType.VAR, (), arg=self._expr_to_symbol(arg_expr)))
+            args.append(Node(MetaOps.VAR, (), arg=self._expr_to_symbol(arg_expr)))
             
         stmt_info = self.stmt_map.get(stmt_name)
         body_func = self.comp.bodies.get(stmt_name)

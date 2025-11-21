@@ -7,8 +7,12 @@ from .kernel import (
     i32,
     int32,
     kernel,
+    parallel,
     range,
+    unroll,
     vars,
+    vectorize,
+    when,
 )
 
 __all__ = [
@@ -22,4 +26,8 @@ __all__ = [
     "f32",
     "i32",
     "DType",
+    "when",
+    "parallel",
+    "vectorize",
+    "unroll",
 ]
