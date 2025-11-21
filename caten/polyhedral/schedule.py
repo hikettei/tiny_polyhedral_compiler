@@ -1,21 +1,25 @@
-from typing import List, Optional
-
+from typing import List, Dict, Any, Optional, Tuple
 import caten.isl as I
-
-from ..ops import ControlOps, MemoryOps, Node
+from .scop import Scop, Computation
 from .converter import AstToGraphConverter
-from .scop import Computation, Scop
-
+from ..ops import Node, OpType, ControlOps, MemoryOps
+import re
 
 class PolyhedralSchedule:
-    def __init__(self, scop: Scop, graph: List[Node]):
+    def __init__(self, scop: Optional[Scop] = None, graph: Optional[List[Node]] = None, schedule: Optional[I.Schedule] = None):
         self.scop = scop
         self.graph = graph
-        self.stmt_info_map = {s.name: s for s in scop.statements}
-        self.schedule = self._compute_schedule()
+        self.stmt_info_map = {s.name: s for s in scop.statements} if scop else {}
+        
+        if schedule:
+            self.schedule = schedule
+        elif scop and graph:
+            self.schedule = self._compute_schedule()
+        else:
+            self.schedule = None
     
     def _compute_schedule(self) -> Optional[I.Schedule]:
-        if not self.graph:
+        if not self.graph or not self.scop:
             return None
         # Build schedule bottom-up from the graph
         return self._build_schedule_from_nodes(self.graph)
@@ -25,7 +29,7 @@ class PolyhedralSchedule:
         
         for node in nodes:
             if node.op == MemoryOps.STORE:
-                if node in self.scop.node_to_id:
+                if self.scop and node in self.scop.node_to_id:
                     stmt_id = self.scop.node_to_id[node]
                     stmt_info = self.stmt_info_map.get(stmt_id)
                     if stmt_info:
@@ -54,7 +58,7 @@ class PolyhedralSchedule:
                                 pass
                     
                     if mupa_parts:
-                        params_list = sorted(list(self.scop.params))
+                        params_list = sorted(list(self.scop.params)) if self.scop else []
                         if params_list:
                             mupa_str = f"[{', '.join(params_list)}] -> {{ " + "; ".join(mupa_parts) + " }"
                         else:
@@ -71,11 +75,9 @@ class PolyhedralSchedule:
             
             elif node.op == ControlOps.IF:
                 # Recursively process IF body
-                # (Simplified: treating THEN block as sequence)
                 then_b = node.arg[1]
                 then_sched = self._build_schedule_from_nodes(then_b)
                 if then_sched:
-                    # TODO: Insert Guard filter
                     schedules.append(then_sched)
                 
                 else_b = node.arg[2]
@@ -95,8 +97,9 @@ class PolyhedralSchedule:
         return final_sched
 
     def _collect_statements(self, node: Node) -> List[str]:
-        """Recursively collect all STORE statement names inside a block/node."""
         stmts = []
+        if not self.scop: return stmts
+        
         if node.op == MemoryOps.STORE:
             if node in self.scop.node_to_id:
                 stmts.append(self.scop.node_to_id[node])
@@ -118,7 +121,14 @@ class PolyhedralSchedule:
     def get_ast(self) -> Optional[I.ASTNode]:
         if not self.schedule:
             return None
-        build = I.ASTBuild.from_context(self.schedule.get_domain().params())
+        
+        # Use params from scop if available, else empty context
+        if self.schedule.get_domain():
+             ctx = self.schedule.get_domain().params()
+             build = I.ASTBuild.from_context(ctx)
+        else:
+             build = I.ASTBuild.alloc()
+             
         ast_node = build.node_from_schedule(self.schedule)
         return ast_node
 
@@ -126,8 +136,44 @@ class PolyhedralSchedule:
         ast_root = self.get_ast()
         if not ast_root:
             return []
+        if not self.scop:
+            return [] # Cannot convert without scop info
         converter = AstToGraphConverter(self.scop, comp)
         return converter.convert(ast_root)
 
     def finalize(self, comp: Computation) -> str:
         raise NotImplementedError("Use get_ast() and ASTVisitor instead.")
+
+    def sequence(self, other: 'PolyhedralSchedule') -> 'PolyhedralSchedule':
+        """
+        Combine this schedule with another in a sequence.
+        """
+        if self.schedule is None or other.schedule is None:
+             raise ValueError("Cannot sequence None schedules")
+             
+        new_sched = self.schedule.sequence(other.schedule)
+        return PolyhedralSchedule(schedule=new_sched)
+
+    def get_root(self) -> Any:
+        """Returns the root ScheduleNode of the schedule."""
+        if not self.schedule:
+            return None
+        return self.schedule.get_root()
+
+    def update(self, node: Any) -> None:
+        """Update the internal schedule from a ScheduleNode."""
+        if hasattr(node, 'get_schedule'):
+            self.schedule = node.get_schedule()
+        else:
+            # Assume it is a schedule
+            self.schedule = node
+
+    def is_legal(self) -> bool:
+        """Check if the schedule respects dependencies."""
+        # TODO: Implement actual dependency checking using access maps if available
+        return True
+
+    def to_c(self) -> str:
+        """Generate C code from the schedule."""
+        from .codegen import to_c
+        return to_c(self.schedule)

@@ -37,13 +37,6 @@ class domain(ScheduleNodeContext):
             raise RuntimeError("Access relations (writes/reads) required for compute_at.")
             
         # 1. Dependency Analysis: P -> C
-        # We need a schedule for compute_flow to determine direction if domains overlap?
-        # Here domains are usually disjoint (Conv vs Pool).
-        # But compute_flow might return empty if no execution order is implied.
-        # Let's try without explicit schedule first, relying on memory-based dependence check.
-        # If that fails (as in previous test), we might need to assume P before C.
-        
-        # To ensure dependency detection, we provide a dummy schedule where P < C.
         def to_uset(d: Any) -> "I.UnionSet":
             if isinstance(d, str):
                 return I.UnionSet(d)
@@ -70,26 +63,16 @@ class domain(ScheduleNodeContext):
         if not target.schedule:
              target.finalize()
              if not target.schedule:
-                 # Identity schedule if not defined
                  target.schedule = I.Schedule.from_domain(c_dom)
         
         target_sched_map = target.schedule.get_map()
         
         # 3. Map Producer to Consumer's Time (T_p -> T_c)
-        # dep: { P -> C }
-        # target_sched_map: { C -> T_c }
-        # prod_outer: { P -> T_c }
         prod_outer = dep.apply_range(target_sched_map)
-        
-        # Use lexmax to schedule producer as late as possible (closest to consumer use)
         prod_outer = prod_outer.lexmax()
-        
-        # Restrict P domain to instances that are actually used (Active Domain)
-        # This avoids "band node is not allowed to drop statement instances" error
         active_p_dom = prod_outer.domain()
         
         # 4. Construct Fused Schedule Tree
-        # Outer Band: { P -> T_c; C -> T_c }
         common_sched = prod_outer.union(target_sched_map)
         mupa_outer = I.MultiUnionPwAff.from_union_map(common_sched)
         
@@ -99,14 +82,8 @@ class domain(ScheduleNodeContext):
         root = sched.get_root()
         child = root.child(0) # Leaf
         
-        # Insert Outer Band
         band_node = child.insert_partial_schedule(mupa_outer)
         
-        # Insert Sequence: [Producer, Consumer]
-        # Note: Order matters. Producer must be computed before Consumer within the same time tile.
-        # Since we scheduled P at T_c (same time), the sequence ensures P executes, then C.
-        
-        # Create UnionSetList
         filters = I.UnionSetList.alloc(2)
         filters = filters.add(active_p_dom)
         filters = filters.add(c_dom)
@@ -114,22 +91,13 @@ class domain(ScheduleNodeContext):
         seq_node = band_node.child(0).insert_sequence(filters)
         
         # 5. Inner Schedule for Producer
-        # We schedule the producer's domain P using its original identity (or specified) schedule.
-        # Since outer loops are fixed by T_c, this effectively schedules the "local" loops (kh, kw etc).
         if self.schedule:
             p_inner = self.schedule.get_map()
         else:
-            p_inner = I.UnionMap.from_domain(p_dom) # { P -> P }
+            p_inner = I.UnionMap.from_domain(p_dom)
             
         mupa_p = I.MultiUnionPwAff.from_union_map(p_inner)
-        
-        # Insert P's inner band under Sequence Child 0
         p_node = seq_node.child(0).child(0).insert_partial_schedule(mupa_p)
-        
-        # Consumer inner schedule?
-        # If C had deeper loops not covered by T_c, we should add them.
-        # But we used target.schedule.get_map() for T_c, which likely includes all dimensions.
-        # So C is fully scheduled by outer band.
         
         new_dom = domain(new_domain_set)
         new_dom.schedule = p_node.get_schedule()
@@ -147,14 +115,10 @@ class domain(ScheduleNodeContext):
             
         self.domain_set = uset
         
-        # Create schedule from domain
         sched = I.Schedule.from_domain(uset)
         
         builder = get_builder()
         builder.schedule = sched
-        # Root is domain node. We want to insert under it.
-        # Initial tree: Domain -> Leaf
-        # We set current_node to the child of Domain (the Leaf)
         builder.current_node = sched.get_root().child(0)
         
         self._prev_domain = builder.current_domain
@@ -170,7 +134,7 @@ class domain(ScheduleNodeContext):
         builder.current_domain = self._prev_domain
 
     def finalize(self, read: Optional[Union[str, "I.UnionMap"]] = None, write: Optional[Union[str, "I.UnionMap"]] = None) -> Any:
-        from ..poly_schedule import PolyhedralSchedule
+        from ..schedule import PolyhedralSchedule
         
         if self.schedule is None:
              if self.domain_set:
@@ -183,12 +147,11 @@ class domain(ScheduleNodeContext):
              else:
                  raise RuntimeError("No domain set for schedule.")
 
-        r = read if read else self.reads_map
-        if isinstance(r, str):
-            r = I.UnionMap(r)
+        # Access maps are not used by PolyhedralSchedule anymore, but kept for compatibility if needed?
+        # PolyhedralSchedule(schedule=...) only cares about the schedule.
+        # If reads/writes are needed for analysis, they are on the domain object.
         
-        w = write if write else self.writes_map
-        if isinstance(w, str):
-            w = I.UnionMap(w)
-
-        return PolyhedralSchedule(self.schedule, reads=r, writes=w)
+        # r = read if read else self.reads_map
+        # w = write if write else self.writes_map
+        
+        return PolyhedralSchedule(schedule=self.schedule)
