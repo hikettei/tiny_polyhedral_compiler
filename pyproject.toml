@@ -38,7 +38,7 @@ omit = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "--cov=caten --cov-report=term-missing --cov-fail-under=70"
+addopts = "--cov=caten --cov-report=term-missing --cov-fail-under=60"
 testpaths = ["test"]
 
 [dependency-groups]

@@ -6,6 +6,7 @@ from .schedule_tree.domain import domain
 from .schedule_tree.filter import filter
 from .schedule_tree.mark import mark
 from .schedule_tree.sequence import sequence
+from .stmt import stmt
 
 __all__ = [
     "domain",
@@ -16,4 +17,5 @@ __all__ = [
     "schedule",
     "compute_flow",
     "to_c",
+    "stmt",
 ]
