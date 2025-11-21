@@ -157,6 +157,9 @@ class domain(ScheduleNodeContext):
         # We set current_node to the child of Domain (the Leaf)
         builder.current_node = sched.get_root().child(0)
         
+        self._prev_domain = builder.current_domain
+        builder.current_domain = self
+        
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -164,6 +167,7 @@ class domain(ScheduleNodeContext):
         if builder.current_node:
             self.schedule = builder.current_node.get_schedule()
         builder.current_node = None
+        builder.current_domain = self._prev_domain
 
     def finalize(self, read: Optional[Union[str, "I.UnionMap"]] = None, write: Optional[Union[str, "I.UnionMap"]] = None) -> Any:
         from ..poly_schedule import PolyhedralSchedule

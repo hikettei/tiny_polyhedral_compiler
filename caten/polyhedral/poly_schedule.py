@@ -44,68 +44,34 @@ class PolyhedralSchedule:
 
 def schedule_sequence(schedules: list[PolyhedralSchedule]) -> PolyhedralSchedule:
     """
-    Combine multiple PolyhedralSchedules into a single sequence.
+    Combine multiple PolyhedralSchedules into a single sequence using ISL API.
     """
     if not schedules:
         raise ValueError("No schedules provided")
+    
+    # Start with the first schedule
+    res_sched = schedules[0].isl_schedule
+    all_reads = schedules[0].reads
+    all_writes = schedules[0].writes
+    
+    # Iteratively sequence subsequent schedules
+    for i in range(1, len(schedules)):
+        next_sched_wrapper = schedules[i]
         
-    # Combine domains
-    combined_domain: Optional["I.UnionSet"] = None
-    filters = I.UnionSetList.alloc(len(schedules))
-    
-    all_reads: Optional["I.UnionMap"] = None
-    all_writes: Optional["I.UnionMap"] = None
-    
-    for sched in schedules:
-        dom = sched.isl_schedule.get_domain()
-        if combined_domain is None:
-            combined_domain = dom
-        else:
-            combined_domain = combined_domain.union(dom)
-            
-        filters = filters.add(dom)
+        # Use ISL's schedule_sequence to combine
+        res_sched = res_sched.sequence(next_sched_wrapper.isl_schedule)
         
         # Combine access relations
-        if sched.reads:
+        if next_sched_wrapper.reads:
             if all_reads is None:
-                all_reads = sched.reads
+                all_reads = next_sched_wrapper.reads
             else:
-                all_reads = all_reads.union(sched.reads)
+                all_reads = all_reads.union(next_sched_wrapper.reads)
             
-        if sched.writes:
+        if next_sched_wrapper.writes:
             if all_writes is None:
-                all_writes = sched.writes
+                all_writes = next_sched_wrapper.writes
             else:
-                all_writes = all_writes.union(sched.writes)
+                all_writes = all_writes.union(next_sched_wrapper.writes)
 
-    if combined_domain is None:
-        raise ValueError("Could not compute combined domain")
-
-    # Create new schedule from combined domain
-    new_sched = I.Schedule.from_domain(combined_domain)
-    root = new_sched.get_root()
-    
-    # Insert sequence
-    seq_node = root.child(0).insert_sequence(filters)
-    
-    # Insert original schedules as children
-    TYPE_BAND = 0
-    
-    current_node = seq_node
-    for i, sched in enumerate(schedules):
-        # Navigate to child i of CURRENT sequence node
-        child = sched.isl_schedule.get_root().child(0)
-        if child.get_type() == TYPE_BAND:
-            mupa = child.band_get_partial_schedule()
-            
-            # current_node is Sequence.
-            filter_node = current_node.child(i)
-            new_band = filter_node.child(0).insert_partial_schedule(mupa)
-            
-            # new_band is the inserted band.
-            # Parent is Filter. Parent is Sequence.
-            current_node = new_band.parent().parent()
-            
-    # Create result
-    res_sched = current_node.get_schedule()
     return PolyhedralSchedule(res_sched, reads=all_reads, writes=all_writes)

@@ -35,6 +35,9 @@
 - 既存コードへの余計な修正禁止。Set 単体で完結する API は `caten/isl/specs/set.py` 内で完結させる。UnionSet 依存 API は関数名だけ置いて保留可。自動生成手法は禁止。
 - 進捗と作業計画を常に本ファイルに記録し更新すること（型ごとに完了状況や今後の順番を明記）。最新の計画がここに存在する状態を保つ。
 
+## Polyhedral DSL Guidelines
+- Prefer using Mixin operator overloads (e.g., `A | B` instead of `A.union(B)`) for cleaner code in user scripts and DSL implementations.
+
 ## 作業計画と進捗 (2025-11-16)
 直近のギャップ集計: `docs/ISL_missing_apis.md`（2025-11-16 再生成、欠落API 2047件）。map 残 2 件（tuple_name系シンボル未提供のみ、libisl非存在）。
 優先順とステータス（✅完了 / 🚧着手中 / ⏳未着手）

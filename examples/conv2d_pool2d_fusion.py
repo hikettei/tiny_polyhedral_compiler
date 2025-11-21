@@ -8,44 +8,26 @@ def create_conv_schedule(N, K_out, H_out, W_out, Cin, KH, KW):
     # Conv Domain
     dom_str = f"{{ S_conv[n, k, h, w, c, kh, kw] : 0<=n<{N} and 0<=k<{K_out} and 0<=h<{H_out} and 0<=w<{W_out} and 0<=c<{Cin} and 0<=kh<{KH} and 0<=kw<{KW} }}"
     
-    # Access Relations
-    writes = I.UnionMap(
-        f"{{ S_conv[n, k, h, w, c, kh, kw] -> Out[n, k, h, w] : "
-        f"0<=n<{N} and 0<=k<{K_out} and 0<=h<{H_out} and 0<=w<{W_out} }}"
-    )
-    reads = I.UnionMap(
-        f"{{ S_conv[n, k, h, w, c, kh, kw] -> Out[n, k, h, w] : "
-        f"0<=n<{N} and 0<=k<{K_out} and 0<=h<{H_out} and 0<=w<{W_out} }}"
-    )
-    
     with P.domain(dom_str) as conv:
         with P.band("{ S_conv[n, k, h, w, c, kh, kw] -> [n, k, h, w, c, kh, kw] }"):
-            pass
+            # Automatic Access Relation Inference using P.stmt
+            P.stmt("Out[n, k, h, w] += In[n, c, h, w] * W[k, c, kh, kw]")
             
-    return conv.finalize(read=reads, write=writes)
+    return conv.finalize()
 
 def create_pool_schedule(N, K_out, H_pool, W_pool, S_pool, KH_pool, KW_pool):
     # Pool Domain
     dom_str = f"{{ S_pool[n, k, h, w, rh, rw] : 0<=n<{N} and 0<=k<{K_out} and 0<=h<{H_pool} and 0<=w<{W_pool} and 0<=rh<{KH_pool} and 0<=rw<{KW_pool} }}"
     
-    # Access Relations
-    reads = I.UnionMap(
-        f"{{ S_pool[n, k, h, w, rh, rw] -> Out[n, k, h*{S_pool} + rh, w*{S_pool} + rw] : "
-        f"0<=n<{N} and 0<=k<{K_out} and 0<=h<{H_pool} and 0<=w<{W_pool} and 0<=rh<{KH_pool} and 0<=rw<{KW_pool} }}"
-    )
-    writes = I.UnionMap("{ S_pool[n, k, h, w, rh, rw] -> PoolBuf[n, k, h, w] }")
-    reads_acc = I.UnionMap("{ S_pool[n, k, h, w, rh, rw] -> PoolBuf[n, k, h, w] }")
-    
-    full_reads = reads.union(reads_acc)
-    
     with P.domain(dom_str) as pool:
         with P.band("{ S_pool[n, k, h, w, rh, rw] -> [n, k, h, w, rh, rw] }"):
-            pass
+            # P.stmt with f-string for parameters
+            P.stmt(f"PoolBuf[n, k, h, w] += Out[n, k, h*{S_pool} + rh, w*{S_pool} + rw]")
             
-    return pool.finalize(read=full_reads, write=writes)
+    return pool.finalize()
 
 def main():
-    print("=== Conv2D + Pool2D Fusion (PolyhedralSchedule API) ===\n")
+    print("=== Conv2D + Pool2D Fusion (PolyhedralSchedule API + P.stmt) ===\n")
     
     # Parameters
     N = 10
@@ -76,7 +58,12 @@ def main():
     # Combine Schedules
     psched = schedule_sequence([conv, pool])
     
-    # Transformations
+    # --- Transformations ---
+
+    # Helper to find sequence under a band
+    def get_seq_from_band(band):
+        return band.parent().parent()
+        
     root = psched.get_root()
     # root -> Domain -> Sequence
     seq_node = root.child(0)
@@ -88,8 +75,7 @@ def main():
     conv_band_2 = conv_band.child(0)
     conv_band_2 = conv_band_2.band_split(2) # [h, w]
     
-    # Re-navigate to Sequence
-    # conv_band_2 -> Band(HW) -> Band(NK) -> Filter -> Sequence
+    # conv_band_2 is Band(HW). Parent is Band(NK). Parent is Filter. Parent is Sequence.
     seq_node = conv_band_2.parent().parent().parent()
     
     # Pool (Child 1): [n, k, h, w, rh, rw]
@@ -98,7 +84,6 @@ def main():
     pool_band_2 = pool_band.child(0)
     pool_band_2 = pool_band_2.band_split(2) # [h, w]
     
-    # Re-navigate
     seq_node = pool_band_2.parent().parent().parent()
     
     # 2. Fuse NK

@@ -1,37 +1,26 @@
 import caten.isl as I
-from caten.polyhedral.poly_schedule import PolyhedralSchedule, schedule_sequence
+import caten.polyhedral as P
+from caten.polyhedral.poly_schedule import schedule_sequence
 from caten.polyhedral.transformations import schedule_node_sequence_full_fuse
 
 
 def create_conv_schedule(N, K_out, H_out, W_out, Cin, KH, KW):
     dom_str = f"{{ S_conv[n, k, h, w, c, kh, kw] : 0<=n<{N} and 0<=k<{K_out} and 0<=h<{H_out} and 0<=w<{W_out} and 0<=c<{Cin} and 0<=kh<{KH} and 0<=kw<{KW} }}"
-    writes = I.UnionMap(
-        f"{{ S_conv[n, k, h, w, c, kh, kw] -> Out[n, k, h, w] : "
-        f"0<=n<{N} and 0<=k<{K_out} and 0<=h<{H_out} and 0<=w<{W_out} }}"
-    )
-    reads_acc = I.UnionMap(
-        f"{{ S_conv[n, k, h, w, c, kh, kw] -> Out[n, k, h, w] : "
-        f"0<=n<{N} and 0<=k<{K_out} and 0<=h<{H_out} and 0<=w<{W_out} }}"
-    )
-    full_reads = reads_acc 
-    sched_obj = I.Schedule.from_domain(I.UnionSet(dom_str))
-    mupa = I.MultiUnionPwAff.from_union_map(I.UnionMap("{ S_conv[n, k, h, w, c, kh, kw] -> [n, k, h, w, c, kh, kw] }"))
-    sched_obj = sched_obj.get_root().child(0).insert_partial_schedule(mupa).get_schedule()
-    return PolyhedralSchedule(sched_obj, reads=full_reads, writes=writes)
+    
+    with P.domain(dom_str) as conv:
+        with P.band("{ S_conv[n, k, h, w, c, kh, kw] -> [n, k, h, w, c, kh, kw] }"):
+            P.stmt("Out[n, k, h, w] += In[n, c, h, w] * W[k, c, kh, kw]")
+            
+    return conv.finalize()
 
 def create_pool_schedule(N, K_out, H_pool, W_pool, S_pool, KH_pool, KW_pool):
     dom_str = f"{{ S_pool[n, k, h, w, rh, rw] : 0<=n<{N} and 0<=k<{K_out} and 0<=h<{H_pool} and 0<=w<{W_pool} and 0<=rh<{KH_pool} and 0<=rw<{KW_pool} }}"
-    reads = I.UnionMap(
-        f"{{ S_pool[n, k, h, w, rh, rw] -> Out[n, k, h*{S_pool} + rh, w*{S_pool} + rw] : "
-        f"0<=n<{N} and 0<=k<{K_out} and 0<=h<{H_pool} and 0<=w<{W_pool} and 0<=rh<{KH_pool} and 0<=rw<{KW_pool} }}"
-    )
-    writes = I.UnionMap("{ S_pool[n, k, h, w, rh, rw] -> PoolBuf[n, k, h, w] }")
-    reads_acc = I.UnionMap("{ S_pool[n, k, h, w, rh, rw] -> PoolBuf[n, k, h, w] }")
-    full_reads = reads.union(reads_acc)
-    sched_obj = I.Schedule.from_domain(I.UnionSet(dom_str))
-    mupa = I.MultiUnionPwAff.from_union_map(I.UnionMap("{ S_pool[n, k, h, w, rh, rw] -> [n, k, h, w, rh, rw] }"))
-    sched_obj = sched_obj.get_root().child(0).insert_partial_schedule(mupa).get_schedule()
-    return PolyhedralSchedule(sched_obj, reads=full_reads, writes=writes)
+    
+    with P.domain(dom_str) as pool:
+        with P.band("{ S_pool[n, k, h, w, rh, rw] -> [n, k, h, w, rh, rw] }"):
+            P.stmt(f"PoolBuf[n, k, h, w] += Out[n, k, h*{S_pool} + rh, w*{S_pool} + rw]")
+            
+    return pool.finalize()
 
 def test_conv2d_pool2d_fusion():
     N = 10
@@ -49,60 +38,63 @@ def test_conv2d_pool2d_fusion():
     Tile_H = S_pool
     Tile_W = S_pool
     
-    with I.context():
-        conv = create_conv_schedule(N, Cout, H_conv, W_conv, Cin, KH_conv, KW_conv)
-        pool = create_pool_schedule(N, Cout, H_pool, W_pool, S_pool, KH_pool, KW_pool)
-        
-        psched = schedule_sequence([conv, pool])
-        
-        root = psched.get_root()
-        seq_node = root.child(0)
-        
-        conv_band = seq_node.child(0).child(0)
-        conv_band = conv_band.band_split(2)
-        conv_band_2 = conv_band.child(0)
-        conv_band_2 = conv_band_2.band_split(2)
-        
-        seq_node = conv_band_2.parent().parent().parent()
-        
-        pool_band = seq_node.child(1).child(0)
-        pool_band = pool_band.band_split(2)
-        pool_band_2 = pool_band.child(0)
-        pool_band_2 = pool_band_2.band_split(2)
-        
-        seq_node = pool_band_2.parent().parent().parent()
-        
-        nk_band = schedule_node_sequence_full_fuse(seq_node)
-        psched.update(nk_band)
-        
-        seq_node = nk_band.child(0)
-        conv_hw = seq_node.child(0).child(0)
-        
-        conv_hw = conv_hw.band_set_permutable(1)
-        space = conv_hw.band_get_space()
-        mv = I.MultiVal.zero(space)
-        mv = mv.set_val(0, I.Val.int_from_si(Tile_H))
-        mv = mv.set_val(1, I.Val.int_from_si(Tile_W))
-        
-        conv_tiled = conv_hw.band_tile(mv)
-        conv_tiled = conv_tiled.band_scale_down(mv)
-        
-        inner = conv_tiled.child(0)
-        replaced = inner.delete()
-        new_mupa = I.MultiUnionPwAff.from_union_map(I.UnionMap(f"{{ S_conv[n, k, h, w, c, kh, kw] -> [(h%{Tile_H}), (w%{Tile_W})] }}"))
-        conv_tiled_inner = replaced.insert_partial_schedule(new_mupa) # noqa: F841
-        
-        seq_node = conv_tiled_inner.parent().parent().parent()
-        
-        hw_tile_band = schedule_node_sequence_full_fuse(seq_node)
-        psched.update(hw_tile_band)
-        
-        seq_node = hw_tile_band.child(0)
-        inner_band = schedule_node_sequence_full_fuse(seq_node)
-        psched.update(inner_band)
-        
-        assert psched.is_legal()
-        
-        c_code = psched.to_c()
-        assert "S_conv" in c_code
-        assert "S_pool" in c_code
+    conv = create_conv_schedule(N, Cout, H_conv, W_conv, Cin, KH_conv, KW_conv)
+    pool = create_pool_schedule(N, Cout, H_pool, W_pool, S_pool, KH_pool, KW_pool)
+    
+    psched = schedule_sequence([conv, pool])
+    
+    root = psched.get_root()
+    seq_node = root.child(0)
+    
+    # 1. Split Bands
+    conv_band = seq_node.child(0).child(0)
+    conv_band = conv_band.band_split(2) # [n, k]
+    conv_band_2 = conv_band.child(0)
+    conv_band_2 = conv_band_2.band_split(2) # [h, w]
+    
+    seq_node = conv_band_2.parent().parent().parent()
+    
+    pool_band = seq_node.child(1).child(0)
+    pool_band = pool_band.band_split(2) # [n, k]
+    pool_band_2 = pool_band.child(0)
+    pool_band_2 = pool_band_2.band_split(2) # [h, w]
+    
+    seq_node = pool_band_2.parent().parent().parent()
+    
+    # 2. Fuse NK
+    nk_band = schedule_node_sequence_full_fuse(seq_node)
+    psched.update(nk_band)
+    
+    # 3. Tile Conv HW
+    seq_node = nk_band.child(0)
+    conv_hw = seq_node.child(0).child(0)
+    conv_hw = conv_hw.band_set_permutable(1)
+    space = conv_hw.band_get_space()
+    mv = I.MultiVal.zero(space)
+    mv = mv.set_val(0, I.Val.int_from_si(Tile_H))
+    mv = mv.set_val(1, I.Val.int_from_si(Tile_W))
+    
+    conv_tiled = conv_hw.band_tile(mv)
+    conv_tiled = conv_tiled.band_scale_down(mv)
+    
+    # Replace Inner Band with Relative
+    inner = conv_tiled.child(0)
+    replaced = inner.delete()
+    new_mupa = I.MultiUnionPwAff.from_union_map(I.UnionMap(f"{{ S_conv[n, k, h, w, c, kh, kw] -> [(h%{Tile_H}), (w%{Tile_W})] }}"))
+    conv_tiled_inner = replaced.insert_partial_schedule(new_mupa) # noqa: F841
+    
+    seq_node = conv_tiled_inner.parent().parent().parent()
+    
+    # 4. Fuse HW Tiles
+    hw_tile_band = schedule_node_sequence_full_fuse(seq_node)
+    psched.update(hw_tile_band)
+    
+    # 5. Fuse Inner
+    seq_node = hw_tile_band.child(0)
+    inner_band = schedule_node_sequence_full_fuse(seq_node)
+    psched.update(inner_band)
+    
+    assert psched.is_legal()
+    c_code = psched.to_c()
+    assert "S_conv" in c_code
+    assert "S_pool" in c_code
