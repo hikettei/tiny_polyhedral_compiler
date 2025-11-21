@@ -35,6 +35,9 @@ class PolyhedralSchedule:
     def to_c(self) -> str:
         return to_c(self.isl_schedule)
 
+    def __str__(self) -> str:
+        return str(self.isl_schedule)
+
     def update(self, node: "I.ScheduleNode") -> None:
         """Update the internal schedule from a modified schedule node."""
         self.isl_schedule = node.get_schedule()
