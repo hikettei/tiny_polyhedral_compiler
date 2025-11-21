@@ -9,6 +9,7 @@ from ..ffi import FfiPointer, load_libisl
 from ..func import ISLFunction
 from ..obj import ISLObject
 from ..qualifier import Give, Null, Param, Qualifier
+from ..registry import register_type
 
 _lib = load_libisl()
 
@@ -105,6 +106,8 @@ class Context(ISLObject, Qualifier):
     @classmethod
     def alloc(cls) -> "Context":
         return isl_ctx_alloc()
+
+register_type("Context", Context)
 
 isl_ctx_alloc = ISLFunction.create(
     "isl_ctx_alloc",
