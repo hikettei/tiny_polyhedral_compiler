@@ -63,16 +63,12 @@ class Printer(ISLObject, ISLObjectMixin):
     def from_str(cls, spec: str) -> Any:
         return _isl_printer_read_from_str(spec)
 
+    def copy_handle(self) -> Any:
+        raise NotImplementedError(f"{type(self).__name__} does not support copy.")
 
     @classmethod
     def free_handle(cls, handle: Any) -> None:
         _lib.isl_printer_free(handle)
-
-    def __str__(self) -> str:
-        return _isl_printer_to_str(self)
-
-    def __repr__(self) -> str:
-        return f"Printer({self.__str__()})"
 
     def print_id(self, id: "Id") -> "Printer":
         return _isl_printer_print_id(self, id)
@@ -80,6 +76,10 @@ class Printer(ISLObject, ISLObjectMixin):
     @classmethod
     def to_file(cls, file: None) -> "Printer":
         return _isl_printer_to_file(file)
+
+    @classmethod
+    def alloc_str(cls) -> "Printer":
+        return _isl_printer_to_str()
 
     def get_str(self) -> str:
         return _isl_printer_get_str(self)

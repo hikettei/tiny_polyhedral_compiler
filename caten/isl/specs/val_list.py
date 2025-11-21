@@ -30,6 +30,8 @@ class ValList(ISLObject, ISLObjectMixin):
     def from_str(cls, spec: str) -> Any:
         return _isl_val_list_read_from_str(spec)
 
+    def copy_handle(self) -> Any:
+        raise NotImplementedError(f"{type(self).__name__} does not support copy.")
 
 
 

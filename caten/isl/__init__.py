@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from . import specs
 from .func import ISLFunction
 from .obj import InPlace, ISLObject
 from .qualifier import Give, Keep, Null, Param, Qualifier, Take
 from .specs import *  # noqa: F403
+
+# Constants
+ISL_FORMAT_C = 4
 
 __all__ = [
     "ISLFunction",
@@ -15,9 +19,7 @@ __all__ = [
     "Keep",
     "Null",
     "Param",
+    "ISL_FORMAT_C",
 ]
-# Add specs exports to __all__
-from . import specs
 
 __all__.extend(specs.__all__)
-

@@ -250,7 +250,8 @@ class Generator:
             lines.append("    def copy_handle(self) -> Any:")
             lines.append(f"        return _{copy_func['name']}(self, return_raw_pointer=True)")
         else:
-             pass 
+            lines.append("    def copy_handle(self) -> Any:")
+            lines.append('        raise NotImplementedError(f"{type(self).__name__} does not support copy.")')
 
         lines.append("")
 

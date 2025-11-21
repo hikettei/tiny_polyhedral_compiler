@@ -1,0 +1,43 @@
+site_name: Caten.py
+site_description: Polyhedral Compiler Framework in Python
+site_author: hikettei
+repo_url: https://github.com/hikettei/Caten.py
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - toc.integrate
+    - content.code.copy
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: google
+            show_root_heading: true
+            show_source: true
+
+nav:
+  - Home: index.md
+  - Specs:
+    - Polyhedral Transformation: POLYHEDRAL_SPEC.md
+    - Project Architecture: PROJECT.md
+    - IR Design: IR_AND_DESIGN.md
+    - ISL APIs: ISL_APIS.md

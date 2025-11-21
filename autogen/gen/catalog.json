@@ -16818,18 +16818,17 @@
     },
     {
       "name": "isl_printer_to_str",
+      "owner_slug": "printer",
+      "method": "alloc_str",
       "return_type": "isl_printer *",
       "return_qualifier": "__isl_give",
       "arguments": [
         {
-          "name": "ctx",
-          "type": "isl_ctx*",
-          "qualifier": null
+          "type": "isl_ctx *",
+          "qualifier": null,
+          "name": "ctx"
         }
-      ],
-      "original_sig": "__isl_give isl_printer *isl_printer_to_str(isl_ctx *ctx)",
-      "owner_slug": "printer",
-      "method": "to_str"
+      ]
     },
     {
       "name": "isl_printer_free",
@@ -21838,33 +21837,32 @@
     },
     {
       "name": "isl_basic_set_project_out",
+      "owner_slug": "basic_set",
+      "method": "project_out",
       "return_type": "isl_basic_set *",
       "return_qualifier": "__isl_give",
       "arguments": [
         {
-          "name": "bset",
-          "type": "isl_basic_set*",
-          "qualifier": "__isl_take"
+          "type": "isl_basic_set *",
+          "qualifier": "__isl_take",
+          "name": "bset"
         },
         {
-          "name": "type",
           "type": "enum isl_dim_type",
-          "qualifier": null
+          "qualifier": null,
+          "name": "type"
         },
         {
-          "name": "first",
           "type": "unsigned",
-          "qualifier": null
+          "qualifier": null,
+          "name": "first"
         },
         {
-          "name": "n",
           "type": "unsigned",
-          "qualifier": null
+          "qualifier": null,
+          "name": "n"
         }
-      ],
-      "original_sig": "__isl_give isl_basic_set *isl_basic_set_project_out( __isl_take isl_basic_set *bset, enum isl_dim_type type, unsigned first, unsigned n)",
-      "owner_slug": "basic_set",
-      "method": "project_out"
+      ]
     },
     {
       "name": "isl_set_project_out_param_id",
@@ -30230,23 +30228,22 @@
     },
     {
       "name": "isl_basic_set_intersect",
+      "owner_slug": "basic_set",
+      "method": "intersect",
       "return_type": "isl_basic_set *",
       "return_qualifier": "__isl_give",
       "arguments": [
         {
-          "name": "bset1",
-          "type": "isl_basic_set*",
-          "qualifier": "__isl_take"
+          "type": "isl_basic_set *",
+          "qualifier": "__isl_take",
+          "name": "bset1"
         },
         {
-          "name": "bset2",
-          "type": "isl_basic_set*",
-          "qualifier": "__isl_take"
+          "type": "isl_basic_set *",
+          "qualifier": "__isl_take",
+          "name": "bset2"
         }
-      ],
-      "original_sig": "__isl_give isl_basic_set *isl_basic_set_intersect( __isl_take isl_basic_set *bset1, __isl_take isl_basic_set *bset2)",
-      "owner_slug": "basic_set",
-      "method": "intersect"
+      ]
     },
     {
       "name": "isl_basic_set_list_intersect",
@@ -48327,6 +48324,72 @@
           "type": "isl_ast_node *",
           "qualifier": "__isl_take",
           "name": "node"
+        }
+      ]
+    },
+    {
+      "name": "isl_union_set_list_alloc",
+      "owner_slug": "union_set_list",
+      "method": "alloc",
+      "return_type": "isl_union_set_list *",
+      "return_qualifier": "__isl_give",
+      "arguments": [
+        {
+          "type": "isl_ctx *",
+          "qualifier": null,
+          "name": "ctx"
+        },
+        {
+          "type": "int",
+          "qualifier": null,
+          "name": "n"
+        }
+      ]
+    },
+    {
+      "name": "isl_union_set_list_add",
+      "owner_slug": "union_set_list",
+      "method": "add",
+      "return_type": "isl_union_set_list *",
+      "return_qualifier": "__isl_give",
+      "arguments": [
+        {
+          "type": "isl_union_set_list *",
+          "qualifier": "__isl_take",
+          "name": "list"
+        },
+        {
+          "type": "isl_union_set *",
+          "qualifier": "__isl_take",
+          "name": "el"
+        }
+      ]
+    },
+    {
+      "name": "isl_union_set_list_copy",
+      "owner_slug": "union_set_list",
+      "method": "copy",
+      "return_type": "isl_union_set_list *",
+      "return_qualifier": "__isl_give",
+      "arguments": [
+        {
+          "type": "isl_union_set_list *",
+          "qualifier": "__isl_keep",
+          "name": "list"
+        }
+      ]
+    },
+    {
+      "name": "isl_union_set_list_free",
+      "owner_slug": "union_set_list",
+      "method": "free",
+      "return_type": "isl_union_set_list *",
+      "return_qualifier": "__isl_null",
+      "arguments": [
+        {
+          "type": "isl_union_set_list *",
+          "qualifier": "__isl_take",
+          "name": "list"
         }
       ]
     }
