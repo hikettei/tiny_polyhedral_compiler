@@ -16,6 +16,7 @@ def matmul(A: C.Tensor[N, K], B: C.Tensor[K, M], Out: C.Tensor[N, M]):
             Out[i, j] = 0.0
             with C.range(K) as k:
                 Out[i, j] = Out[i, j] + A[i, k] * B[k, j]
+    return Out
 
 if __name__ == "__main__":
     print("Compiling Kernel...")
