@@ -55,9 +55,6 @@ def test_conv2d_pool2d_fusion():
         
         psched = schedule_sequence([conv, pool])
         
-        def get_seq_from_band(band):
-            return band.parent().parent()
-            
         root = psched.get_root()
         seq_node = root.child(0)
         
@@ -80,6 +77,7 @@ def test_conv2d_pool2d_fusion():
         
         seq_node = nk_band.child(0)
         conv_hw = seq_node.child(0).child(0)
+        
         conv_hw = conv_hw.band_set_permutable(1)
         space = conv_hw.band_get_space()
         mv = I.MultiVal.zero(space)
