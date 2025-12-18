@@ -11,8 +11,7 @@ if TYPE_CHECKING:
 class ScheduleBuilder:
     def __init__(self) -> None:
         self.current_node: Optional["I.ScheduleNode"] = None
-        self.schedule: Optional["I.Schedule"] = None
-        self.current_domain: Any = None
+        self.domain: Any = None
 
 _builder_ctx: contextvars.ContextVar[Optional[ScheduleBuilder]] = contextvars.ContextVar("schedule_builder", default=None)
 
@@ -23,17 +22,18 @@ def get_builder() -> ScheduleBuilder:
         _builder_ctx.set(b)
     return b
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-class ScheduleNodeContext(metaclass=abc.ABCMeta):
+class ScheduleNodeBase(metaclass=abc.ABCMeta):
     """
-    Base class for schedule tree nodes that can be used as context managers.
+    A base class for ScheduleNode.
+    with P.<schedule_node_type>(initargs) as node:
+       pass
     """
     def __init__(self, node_type: str) -> None:
         self.node: Optional["I.ScheduleNode"] = None
         self.node_type: str = node_type
 
     @abc.abstractmethod
-    def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
-        pass
+    def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode": pass
 
     def get_node(self) -> "I.ScheduleNode":
         if not self.node:
@@ -47,6 +47,9 @@ class ScheduleNodeContext(metaclass=abc.ABCMeta):
         self.node = self.realize(builder.current_node)
         # TODO: schedule_node_sequence/set
         builder.current_node = self[0]
+        if isinstance(self, domain):
+            assert builder.domain is None, "Domain node cannot be nested!"
+            builder.domain = self
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -60,21 +63,61 @@ class ScheduleNodeContext(metaclass=abc.ABCMeta):
             return self.node.to_str()
         else:
             return "ScheduleNode(Not Realized)"
+
+    def to_c(self) -> str:
+        ast_node = I.ASTBuild.alloc().node_from_schedule(self.get_node().get_schedule())
+        # Print to C
+        p = I.Printer.alloc_str()
+        p.request_inplace()
+        p = p.set_output_format(4) # ISL_FORMAT_C
+        p.request_inplace()
+        p = p.print_ast_node(ast_node)
+        return p.get_str()
+    # TODO: child, n_len, etc
     # TODO: getitem setitem
     def __getitem__(self, idx: int) -> "I.ScheduleNode":
         return self.node.child(idx)
     # TODO: setitem delitem
 ## ~~ Specs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+class domain(ScheduleNodeBase):
+    """
+    A root of schedule node.
+    (TODO: Can padding, resize, reshape, etc)
+    """
+    def __init__(self, domain_set: Union[str, "I.Set", "I.UnionSet"]):
+        super().__init__()
+        # read/write access relation which updated by P.stmt
+        self.reads_map: Optional["I.UnionMap"] = None
+        self.writes_map: Optional["I.UnionMap"] = None
+        match domain_set:
+            case str():
+                self.uset = I.UnionSet(domain_set)
+            case I.Set():
+                self.uset = I.UnionSet.from_set(domain_set)
+            case I.UnionSet():
+                self.uset = domain_set
+            case _:
+                raise TypeError("P.domain(domain_set) should be Set or UnionSet")
+    # TODO compute_flow dependence_relation
+    # Visualize dependence_relation in notebook
+    def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
+        assert parent is None, f"P.domain should be the root of the schedule tree."
+        return I.Schedule.from_domain(self.uset)
+    
+    def finalize(self):
+        pass
 # ScheduleNodeBand TODO List
 # - Force Isolation Option (Loop Reminder) GPU Guard or Reminder Generation
 # - Insert Mark
 # - Paddingができるようにする
 # NotebookにTransformationの一覧を記述する
 # Symbolic Tileどこ？
+# Building Mode vs After Build Mode
+# - 両方で，統一的に，ループ変換を行える抽象化は何？
 # https://dl.acm.org/doi/epdf/10.1145/3178372.3179509
 # https://inria.hal.science/hal-02493164v2/document
 # 後もう一本読むべき論文があったはず・・・
-class band(ScheduleNodeContext):
+class band(ScheduleNodeBase):
     """
     TODO: Decent docs?
     """
@@ -142,3 +185,15 @@ class band(ScheduleNodeContext):
     def __add__(self, other):      return self.shift(other)
     def __sub__(self, other):      return self.shift([-x for x in other] if isinstance(other, list) else -other)
     def __matmul__(self, other):   return self.tile(other)
+
+class filter(ScheduleNodeBase):
+    pass
+
+class sequence(ScheduleNodeBase):
+    pass
+
+class set(ScheduleNodeBase):
+    pass
+
+class mark(ScheduleNodeBase):
+    pass

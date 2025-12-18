@@ -2,11 +2,10 @@ import re
 from typing import List, Optional, Tuple
 
 import caten.isl as I
-from .schedule_tree.context import get_builder
-
+from caten.polyhedral.schedule_tree import get_builder
 
 def stmt(expr: str) -> None:
-    dom = get_builder().current_domain
+    dom = get_builder().domain
     if dom is None:
         raise RuntimeError("stmt() must be used within a P.domain context")
         
