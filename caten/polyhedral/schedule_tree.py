@@ -65,9 +65,18 @@ class ScheduleNodeContext(metaclass=abc.ABCMeta):
         return self.node.child(idx)
     # TODO: setitem delitem
 ## ~~ Specs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ScheduleNodeBand TODO List
+# - Force Isolation Option (Loop Reminder) GPU Guard or Reminder Generation
+# - Insert Mark
+# - Paddingができるようにする
+# NotebookにTransformationの一覧を記述する
+# Symbolic Tileどこ？
+# https://dl.acm.org/doi/epdf/10.1145/3178372.3179509
+# https://inria.hal.science/hal-02493164v2/document
+# 後もう一本読むべき論文があったはず・・・
 class band(ScheduleNodeContext):
     """
-    TODO: Docs
+    TODO: Decent docs?
     """
     def __init__(self, schedule: Union[str, "I.MultiUnionPwAff"]) -> None:
         super().__init__("ScheduleNodeBand")
@@ -78,13 +87,13 @@ class band(ScheduleNodeContext):
                 self.schedule = schedule
             case _:
                 raise TypeError("P.band: schedule should be MultiUnionPwAff.")
+
     def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
         assert parent is not None, "band"
         return parent.insert_partial_schedule(self.schedule)
 
     def get_tiling_sizes(self, sizes: Union[int, List[int]]) -> "I.MultiVal":
         "Convert sizes into MultiVal, broadcast if sizes is integer."
-        # [TODO] Support Symbolic Tile
         depth = (band := self.get_node()).band_get_space().dim(3)
         sizes = [sizes] * depth if isinstance(sizes, int) else sizes
         if not len(sizes) == depth:
@@ -97,10 +106,6 @@ class band(ScheduleNodeContext):
     @property
     def depth(self) -> int:
         return self.get_node().band_get_space().dim(3)
-    
-    # [TODO] Force isolation
-    # [TODO] Insert marks
-    # [TODO] Tile Padding
     
     def scale(self, sizes: Union[int, List[int]]) -> "band":
         self.node = self.node.band_scale(self.get_tiling_sizes(sizes))

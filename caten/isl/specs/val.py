@@ -23,6 +23,8 @@ class Val(ISLObject, ISLObjectMixin):
         if isinstance(handle_or_spec, str):
             handle = _isl_val_read_from_str(handle_or_spec, return_raw_pointer=True)
             super().__init__(handle)
+        if isinstance(handle_or_spec, int):
+            handle = _isl_val_int_from_si(handle_or_spec, return_raw_pointer=True)
         else:
             super().__init__(handle_or_spec)
 

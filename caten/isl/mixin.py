@@ -1,5 +1,5 @@
 from typing import Any
-
+from .obj import InPlace
 
 class ISLObjectMixin:
     """
@@ -96,3 +96,7 @@ class ISLObjectMixin:
         if hasattr(self, "neg"):
             return self.neg()
         return NotImplemented
+
+    def __setitem__(self, key: Any, value: Any) -> Any:
+        if hasattr(self, "set_val"):
+            return InPlace(self).set_val(key, Value)

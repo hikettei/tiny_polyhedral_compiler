@@ -2,8 +2,7 @@ import re
 from typing import List, Optional, Tuple
 
 import caten.isl as I
-
-from .context import get_builder
+from .schedule_tree.context import get_builder
 
 
 def stmt(expr: str) -> None:
