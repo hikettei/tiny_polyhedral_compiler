@@ -10,12 +10,12 @@ from ..obj import ISLObject
 from ..qualifier import Give, Keep, Param, Take
 from ..registry import register_type
 from .context import Context
+from .enums import _ISL_AST_EXPR_OP_TYPE_MAP, _ISL_AST_EXPR_TYPE_MAP
 
 if TYPE_CHECKING:
+    from .ast_expr_list import ASTExprList
     from .context import Context
     from .id import Id
-    from .id_to_ast_expr import IdToAstExpr
-    from .printer import Printer
     from .val import Val
 
 _lib = load_libisl()
@@ -29,6 +29,14 @@ class ASTExpr(ISLObject, ISLObjectMixin):
             super().__init__(handle)
         else:
             super().__init__(handle_or_spec)
+            
+def get_type_name(self) -> str:
+        """Helper to get the string name of the expr type."""
+        return _ISL_AST_EXPR_TYPE_MAP.get(self.get_type(), "unknown")
+
+    def op_get_type_name(self) -> str:
+        """Helper to get the string name of the expr op type."""
+        return _ISL_AST_EXPR_OP_TYPE_MAP.get(self.op_get_type(), "unknown")
 
     @classmethod
     def from_str(cls, spec: str) -> Any:
