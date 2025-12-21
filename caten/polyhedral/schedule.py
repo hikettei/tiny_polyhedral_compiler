@@ -6,7 +6,6 @@ import contextvars
 
 if TYPE_CHECKING:
     import caten.isl as I
-
 ## ~~ ScheduleBuilder ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 class ScheduleBuilder:
     def __init__(self) -> None:
@@ -77,15 +76,13 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
     # TODO: getitem setitem
     def __getitem__(self, idx: int) -> "I.ScheduleNode":
         return self.node.child(idx)
-    # TODO: setitem delitem
 ## ~~ Specs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 class domain(ScheduleNodeBase):
     """
     A root of schedule node.
-    (TODO: Can padding, resize, reshape, etc)
     """
     def __init__(self, domain_set: Union[str, "I.Set", "I.UnionSet"]):
-        super().__init__()
+        super().__init__("ScheduleNodeDomain")
         # read/write access relation which updated by P.stmt
         self.reads_map: Optional["I.UnionMap"] = None
         self.writes_map: Optional["I.UnionMap"] = None
@@ -104,6 +101,7 @@ class domain(ScheduleNodeBase):
         assert parent is None, f"P.domain should be the root of the schedule tree."
         return I.Schedule.from_domain(self.uset)
 
+    # TODO
     def __getitem__(self, transformation: str) -> "domain":
         """
         s["ijk -> ikj"] will reshape the domain space
@@ -112,35 +110,10 @@ class domain(ScheduleNodeBase):
 
     def padding(self, transformation: str) -> "domain":
         pass
-    
+    # TODO
     def finalize(self):
         pass
-# ConstraintedScheduleModel
-# Parametric Tiling
-# finalize() -> Schedule
-# s.permute("ijk -> ikj") | s["ijk -> ikj"]
-# domain.reshape is needed
-# ScheduleNodeBand TODO List
-# - Force Isolation Option (Loop Reminder) GPU Guard or Reminder Generation
-# - Insert Mark
-# - Paddingができるようにする
-# NotebookにTransformationの一覧を記述する
-# Symbolic Tileどこ？
-# Building Mode vs After Build Mode
-# - 両方で，統一的に，ループ変換を行える抽象化は何？
-# Construction Phase => Optimization Phase
-# with (P.directive("gpu") | P.domain(...)) as f:
-#   f = (f @ [3, 3])
-#   同じStyleを2回繰り返して書く
-# with P.domain(...) as f: # BEAM Searchするから，こっちもTree, directive.py
-#   pass
-# Polyhedral Scalar Representation
-# Directive, Baseの二つのデータ構造はある
-# - or, transformationをlazy evalする
-# https://dl.acm.org/doi/epdf/10.1145/3178372.3179509
-# https://inria.hal.science/hal-02493164v2/document
-# 後もう一本読むべき論文があったはず・・・
-# Symbolic Tileを実現するには，Domain <-> Bandの間で，計算グラフを構築する必要がある。
+
 class band(ScheduleNodeBase):
     """
     TODO: Decent docs?
@@ -159,6 +132,7 @@ class band(ScheduleNodeBase):
         assert parent is not None, "band"
         return parent.insert_partial_schedule(self.schedule)
 
+    # TODO: Loop Transformation
     def get_tiling_sizes(self, sizes: Union[int, List[int]]) -> "I.MultiVal":
         "Convert sizes into MultiVal, broadcast if sizes is integer."
         depth = (band := self.get_node()).band_get_space().dim(3)
@@ -211,13 +185,89 @@ class band(ScheduleNodeBase):
     def __matmul__(self, other):   return self.tile(other)
 
 class filter(ScheduleNodeBase):
-    pass
+    def __init__(self, filter_set: Union[str, "I.UnionSet"]) -> None:
+        super().__init__("ScheduleNodeFilter")
+        match filter_set:
+            case str():
+                self.filter_set = I.UnionSet(filter_set)
+            case I.UnionSet():
+                self.filter_set = filter_set
+            case _:
+                raise TypeError("P.filter: filter should be union set")
 
-class sequence(ScheduleNodeBase):
-    pass
+    def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
+        assert parent is not None, "band"
+        return parent.insert_partial_schedule(self.schedule)
 
-class set(ScheduleNodeBase):
-    pass
+def stmt(expr: str) -> None:
+    """
+    TODO: DOCS
+    """
+    dom = get_builder().domain
+    if dom is None:
+        raise RuntimeError("stmt() must be used within a P.domain context")
+        
+    if "=" not in expr:
+        raise ValueError(f"Invalid statement expression (must contain assignment '='): {expr}")
+        
+    lhs_str, rhs_str = expr.split("=", 1)
+        
+    def extract_accesses(s: str) -> List[Tuple[str, str]]:
+        return re.findall(r"([a-zA-Z_]\w*)\s*\[(.*?)\]", s)
+        
+    writes = extract_accesses(lhs_str)
+    reads = extract_accesses(rhs_str)
+    
+    uset = dom.domain_set
+    if isinstance(uset, str):
+        uset = I.UnionSet(uset)
+    elif isinstance(uset, I.Set):
+        uset = I.UnionSet.from_set(uset)
+    
+    new_reads: Optional["I.UnionMap"] = None
+    new_writes: Optional["I.UnionMap"] = None
+    
+    def process_set(s: "I.Set") -> None:
+        nonlocal new_reads, new_writes
+        s_str = str(s)
+        if ":" in s_str:
+            tuple_part = s_str.split(":")[0].strip()
+            if tuple_part.startswith("{"):
+                tuple_part = tuple_part[1:].strip()
+        else:
+            tuple_part = s_str.strip()
+            if tuple_part.startswith("{") and tuple_part.endswith("}"):
+                tuple_part = tuple_part[1:-1].strip()
+                
+        for (name, indices) in writes:
+            m_str = f"{{ {tuple_part} -> {name}[{indices}] }}"
+            m = I.UnionMap(m_str)
+            if new_writes is None:
+                new_writes = m
+            else:
+                new_writes = new_writes.union(m)
+            
+        for (name, indices) in reads:
+            m_str = f"{{ {tuple_part} -> {name}[{indices}] }}"
+            m = I.UnionMap(m_str)
+            if new_reads is None:
+                new_reads = m
+            else:
+                new_reads = new_reads.union(m)
 
-class mark(ScheduleNodeBase):
-    pass
+    set_list = uset.get_set_list()
+    n = set_list.n_set()
+    for i in range(n):
+        process_set(set_list.get_at(i))
+    
+    if new_reads:
+        if dom.reads_map:
+            dom.reads_map = dom.reads_map.union(new_reads)
+        else:
+            dom.reads_map = new_reads
+        
+    if new_writes:
+        if dom.writes_map:
+            dom.writes_map = dom.writes_map.union(new_writes)
+        else:
+            dom.writes_map = new_writes
