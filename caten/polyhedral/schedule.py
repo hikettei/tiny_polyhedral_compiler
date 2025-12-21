@@ -11,6 +11,7 @@ class ScheduleBuilder:
     def __init__(self) -> None:
         self.current_node: Optional["I.ScheduleNode"] = None
         self.domain: Any = None
+        self.params: str = "[]"
 
 _builder_ctx: contextvars.ContextVar[Optional[ScheduleBuilder]] = contextvars.ContextVar("schedule_builder", default=None)
 
@@ -23,9 +24,6 @@ def get_builder() -> ScheduleBuilder:
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 class ScheduleNodeBase(metaclass=abc.ABCMeta):
     """
-    A base class for ScheduleNode.
-    with P.<schedule_node_type>(initargs) as node:
-       pass
     """
     def __init__(self, node_type: str) -> None:
         self.node: Optional["I.ScheduleNode"] = None
@@ -79,6 +77,17 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
     def __getitem__(self, idx: int) -> "I.ScheduleNode":
         return self.node.child(idx)
 ## ~~ Specs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+class parameter():
+    def __init__(self, params: str) -> None:
+        # TODO: Syntax Check
+        self.params = f"[{params}]"
+
+    def __enter__(self) -> None:
+        get_builder().params = self.params
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        get_builder().params = "[]"
+
 class domain(ScheduleNodeBase):
     """
     A root of schedule node.
@@ -90,7 +99,7 @@ class domain(ScheduleNodeBase):
         self.writes_map: Optional["I.UnionMap"] = None
         match domain_set:
             case str():
-                self.uset = I.UnionSet(domain_set)
+                self.uset = I.UnionSet(f"{get_builder().params} -> {domain_set}")
             case I.Set():
                 self.uset = I.UnionSet.from_set(domain_set)
             case I.UnionSet():
@@ -101,6 +110,10 @@ class domain(ScheduleNodeBase):
     def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
         assert parent is None, f"P.domain should be the root of the schedule tree."
         return I.Schedule.from_domain(self.uset).get_root()
+
+    def __or__(self, other: domain) -> "domain":
+        assert self.reads_map is None and self.writes_map is None
+        return domain(self.uset | other.uset)
 
 class band(ScheduleNodeBase):
     """
@@ -178,7 +191,7 @@ class filter(ScheduleNodeBase):
         super().__init__("ScheduleNodeFilter")
         match filter_set:
             case str():
-                self.filter_set = I.UnionSet(filter_set)
+                self.filter_set = I.UnionSet(f"{get_builder().params} -> {filter_set}")
             case I.UnionSet():
                 self.filter_set = filter_set
             case _:
@@ -206,45 +219,26 @@ def stmt(expr: str) -> None:
         
     writes = extract_accesses(lhs_str)
     reads = extract_accesses(rhs_str)
-    
-    uset = dom.uset
-    
+    tuple_part = get_builder().params
     new_reads: Optional["I.UnionMap"] = None
     new_writes: Optional["I.UnionMap"] = None
     
-    def process_set(s: "I.Set") -> None:
-        nonlocal new_reads, new_writes
-        s_str = str(s)
-        if ":" in s_str:
-            tuple_part = s_str.split(":")[0].strip()
-            if tuple_part.startswith("{"):
-                tuple_part = tuple_part[1:].strip()
+    for (name, indices) in writes:
+        m_str = f"{{ {tuple_part} -> {name}[{indices}] }}"
+        m = I.UnionMap(m_str)
+        if new_writes is None:
+            new_writes = m
         else:
-            tuple_part = s_str.strip()
-            if tuple_part.startswith("{") and tuple_part.endswith("}"):
-                tuple_part = tuple_part[1:-1].strip()
-                
-        for (name, indices) in writes:
-            m_str = f"{{ {tuple_part} -> {name}[{indices}] }}"
-            m = I.UnionMap(m_str)
-            if new_writes is None:
-                new_writes = m
-            else:
-                new_writes = new_writes.union(m)
+            new_writes = new_writes.union(m)
             
-        for (name, indices) in reads:
-            m_str = f"{{ {tuple_part} -> {name}[{indices}] }}"
-            m = I.UnionMap(m_str)
-            if new_reads is None:
-                new_reads = m
-            else:
-                new_reads = new_reads.union(m)
+    for (name, indices) in reads:
+        m_str = f"{{ {tuple_part} -> {name}[{indices}] }}"
+        m = I.UnionMap(m_str)
+        if new_reads is None:
+            new_reads = m
+        else:
+            new_reads = new_reads.union(m)
 
-    set_list = uset.get_set_list()
-    n = set_list.n_set()
-    for i in range(n):
-        process_set(set_list.get_at(i))
-    
     if new_reads:
         if dom.reads_map:
             dom.reads_map = dom.reads_map.union(new_reads)
