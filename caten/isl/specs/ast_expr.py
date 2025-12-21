@@ -172,6 +172,14 @@ class ASTExpr(ISLObject, ISLObjectMixin):
     def substitute_ids(self, id2expr: "IdToAstExpr") -> "ASTExpr":
         return _isl_ast_expr_substitute_ids(self, id2expr)
 
+    def call(self, *args: List["ASTExpr"]) -> "ASTExpr":
+        from .ast_expr_list import AstExprList
+        return _isl_ast_expr_call(self, AstExprList.from_exprs(args))
+
+    def access(self, *indices: List["ASTExpr"]) -> "ASTExpr":
+        from .ast_expr_list import AstExprList
+        return _isl_ast_expr_access(self, AstExprList.from_exprs(indices))
+
     def to_C_str(self) -> str:
         return _isl_ast_expr_to_C_str(self)
 
@@ -500,6 +508,22 @@ _isl_ast_expr_read_from_str = ISLFunction.create(
     "isl_ast_expr_read_from_str",
     Context(),
     Param(str, ctype=c_char_p),
+    return_=Give("ASTExpr"),
+    lib=_lib,
+)
+
+_isl_ast_expr_access = ISLFunction.create(
+    "isl_ast_expr_access",
+    Take("ASTExpr"),
+    Take("AstExprList"),
+    return_=Give("ASTExpr"),
+    lib=_lib,
+)
+
+_isl_ast_expr_call = ISLFunction.create(
+    "isl_ast_expr_call",
+    Take("ASTExpr"),
+    Take("AstExprList"),
     return_=Give("ASTExpr"),
     lib=_lib,
 )
