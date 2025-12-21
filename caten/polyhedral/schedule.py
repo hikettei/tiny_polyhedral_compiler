@@ -35,8 +35,6 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
     def get_node(self) -> "I.ScheduleNode":
         if not self.node:
             raise RuntimeError("Cannot apply loop transformation before entering context.")
-        if not self.node_type == self.node.get_type():
-            raise RuntimeError(f"The schedule is asserted to be {self.node_type} but is {self.node.get_type()}")
         return self.node
     
     def __enter__(self) -> "ScheduleNodeContext":
@@ -201,6 +199,12 @@ class filter(ScheduleNodeBase):
         assert parent is not None, "band"
         return parent.insert_partial_schedule(self.schedule)
 
+class StmtContext():
+    def __getitem__(self, f: Callable) -> None:
+        # TODO:
+        # P.stmt("Access map")[lambda c0, c1, c2, c3, c4: out[i, j] += a[i] + b[i]]
+        pass
+
 def stmt(expr: str) -> None:
     """
     TODO: DOCS
@@ -250,3 +254,4 @@ def stmt(expr: str) -> None:
             dom.writes_map = dom.writes_map.union(new_writes)
         else:
             dom.writes_map = new_writes
+    return StmtContext()
