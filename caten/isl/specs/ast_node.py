@@ -37,6 +37,7 @@ class ASTNode(ISLObject, ISLObjectMixin):
 
     @classmethod
     def from_str(cls, spec: str) -> Any:
+        return _isl_ast_node_read_from_str(spec)
 
     def copy_handle(self) -> Any:
         return _isl_ast_node_copy(self, return_raw_pointer=True)

@@ -29,8 +29,8 @@ class ASTExpr(ISLObject, ISLObjectMixin):
             super().__init__(handle)
         else:
             super().__init__(handle_or_spec)
-            
-def get_type_name(self) -> str:
+
+    def get_type_name(self) -> str:
         """Helper to get the string name of the expr type."""
         return _ISL_AST_EXPR_TYPE_MAP.get(self.get_type(), "unknown")
 
