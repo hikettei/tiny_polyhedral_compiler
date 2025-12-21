@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import abc
+import re
 from typing import TYPE_CHECKING, Any, Optional, Union
 import contextvars
 
-if TYPE_CHECKING:
-    import caten.isl as I
+import caten.isl as I
 ## ~~ ScheduleBuilder ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 class ScheduleBuilder:
     def __init__(self) -> None:
@@ -43,12 +43,14 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
     
     def __enter__(self) -> "ScheduleNodeContext":
         builder = get_builder()
-        self.node = self.realize(builder.current_node)
-        # TODO: schedule_node_sequence/set
-        builder.current_node = self[0]
+        # reset ctx
         if isinstance(self, domain):
-            assert builder.domain is None, "Domain node cannot be nested!"
+            builder.current_node = None
+            builder.domain = None
+        self.node = self.realize(builder.current_node)
+        if isinstance(self, domain):
             builder.domain = self
+        builder.current_node = self[0]
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -56,10 +58,11 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
         builder = get_builder()
         if builder.current_node:
             builder.current_node = builder.current_node.parent()
+            self.node = builder.current_node
 
     def __repr__(self) -> str:
         if self.node is not None:
-            return self.node.to_str()
+            return str(self.node)
         else:
             return "ScheduleNode(Not Realized)"
 
@@ -72,8 +75,7 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
         p.request_inplace()
         p = p.print_ast_node(ast_node)
         return p.get_str()
-    # TODO: child, n_len, etc
-    # TODO: getitem setitem
+
     def __getitem__(self, idx: int) -> "I.ScheduleNode":
         return self.node.child(idx)
 ## ~~ Specs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -95,43 +97,30 @@ class domain(ScheduleNodeBase):
                 self.uset = domain_set
             case _:
                 raise TypeError("P.domain(domain_set) should be Set or UnionSet")
-    # TODO compute_flow dependence_relation
-    # Visualize dependence_relation in notebook
+
     def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
         assert parent is None, f"P.domain should be the root of the schedule tree."
-        return I.Schedule.from_domain(self.uset)
-
-    # TODO
-    def __getitem__(self, transformation: str) -> "domain":
-        """
-        s["ijk -> ikj"] will reshape the domain space
-        """
-        pass
-
-    def padding(self, transformation: str) -> "domain":
-        pass
-    # TODO
-    def finalize(self):
-        pass
+        return I.Schedule.from_domain(self.uset).get_root()
 
 class band(ScheduleNodeBase):
     """
     TODO: Decent docs?
     """
-    def __init__(self, schedule: Union[str, "I.MultiUnionPwAff"]) -> None:
+    def __init__(self, schedule: Union[str, "I.UnionMap", "I.MultiUnionPwAff"]) -> None:
         super().__init__("ScheduleNodeBand")
         match schedule:
             case str():
-                self.schedule = I.MultiUnionPwAff(schedule)
+                self.schedule = I.MultiUnionPwAff.from_union_map(I.UnionMap(schedule))
+            case I.UnionMap():
+                self.schedule = I.MultiUnionPwAff.from_union_map(schedule)
             case I.MultiUnionPwAff():
                 self.schedule = schedule
             case _:
                 raise TypeError("P.band: schedule should be MultiUnionPwAff.")
 
     def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
-        assert parent is not None, "band"
+        assert parent is not None, "band requires parent!"
         return parent.insert_partial_schedule(self.schedule)
-
     # TODO: Loop Transformation
     def get_tiling_sizes(self, sizes: Union[int, List[int]]) -> "I.MultiVal":
         "Convert sizes into MultiVal, broadcast if sizes is integer."
@@ -218,11 +207,7 @@ def stmt(expr: str) -> None:
     writes = extract_accesses(lhs_str)
     reads = extract_accesses(rhs_str)
     
-    uset = dom.domain_set
-    if isinstance(uset, str):
-        uset = I.UnionSet(uset)
-    elif isinstance(uset, I.Set):
-        uset = I.UnionSet.from_set(uset)
+    uset = dom.uset
     
     new_reads: Optional["I.UnionMap"] = None
     new_writes: Optional["I.UnionMap"] = None
