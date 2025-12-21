@@ -257,7 +257,7 @@ class filter(ScheduleNodeBase):
     def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
         if parent is None:
              raise RuntimeError("P.filter requires a parent node (e.g., inside a 'with P.domain(...):' block).")
-        return parent.insert_partial_schedule(self.schedule)
+        return parent.insert_filter(self.filter_set)
 
 class StmtContext():
     def __init__(self, dom: "domain", stmt_name: str) -> None:
@@ -271,88 +271,44 @@ def stmt(expr: str) -> StmtContext:
     """
     Defines a statement with read/write access relations in the schedule.
 
-    This function parses a string representation of a statement (e.g., "S[i,j] = A[i, j], B[j, i]")
-    to extract the statement's domain and its memory access patterns (reads and writes).
-    It updates the current domain's access maps, which are crucial for dependence analysis.
+    This function identifies the active statement in the current schedule context
+    (ensuring uniqueness) and parses the assignment expression to define access maps.
     
     Args:
         expr: A string string representing the statement assignment.
     """
-    dom = get_builder().domain
+    builder = get_builder()
+    dom = builder.domain
     if dom is None:
-        raise RuntimeError("stmt() is called outside of a domain context. Ensure you are calling stmt() inside a 'with P.domain(...):' block.")
+        raise RuntimeError("stmt() is called outside of a domain context.")
         
     if "=" not in expr:
-        raise ValueError(f"Invalid statement expression (must contain assignment '='): {expr}")
+        raise ValueError(f"Invalid statement expression: {expr}")
     
-    # Extract statement name from domain
-    # Assuming single statement domain for now or taking the first one
-    stmt_name = "unknown"
-    dom_tuple_str = ""
+    # 1. Get Universe Domain & Check Uniqueness
+    univ = builder.current_node.get_universe_domain()
+    if univ.n_set() != 1:
+        raise ValueError(f"stmt() requires exactly one active statement, but found {univ.n_set()}.")
     
-    set_list = dom.uset.get_set_list()
-    for i in range(set_list.n_set()):
-        s = set_list.get_at(i)
-        stmt_name = s.get_tuple_name()
-        # Reconstruct tuple string: S[i, j, k]
-        # We need variable names. get_dim_name might work if they are set.
-        # But parsing from string representation is safer if names are not set in obj.
-        # s.to_str() -> "{ S[i, j] : ... }"
-        # Use regex to extract "S[...]"
-        m = re.search(r"(\w+\[[^\]]+\])", str(s))
-        if m:
-            dom_tuple_str = m.group(1)
-        break # Only process the first set for now
+    # 2. Stringify and extract "S[i, j]" from "[P] -> { S[i, j] }"
+    dom_tuple_str = str(univ).split(" -> ")[-1].strip("{} ")
 
     lhs_str, rhs_str = expr.split("=", 1)
-        
-    def extract_accesses(s: str) -> List[Tuple[str, str]]:
-        return re.findall(r"([a-zA-Z_]\w*)\s*\[(.*?)\]", s)
-        
-    writes = extract_accesses(lhs_str)
-    reads = extract_accesses(rhs_str)
     
-    new_reads: Optional["I.UnionMap"] = None
-    new_writes: Optional["I.UnionMap"] = None
-    
-    # Helper to build map: { S[...] -> A[...] }
-    def build_map(name: str, indices: str) -> "I.UnionMap":
-        if dom_tuple_str:
-            m_str = f"{{ {dom_tuple_str} -> {name}[{indices}] }}"
-            return I.UnionMap(m_str)
-        else:
-            # Fallback to old behavior (incorrect but keeps code running if extraction fails)
-            tuple_part = get_builder().params
-            m_str = f"{{ {tuple_part} -> {name}[{indices}] }}"
-            return I.UnionMap(m_str)
+    def add_accesses(s: str, is_write: bool) -> None:
+        for name, indices in re.findall(r"([a-zA-Z_]\w*)\s*\[(.*?)\]", s):
+            # Helper to build map: [params] -> { S[...] -> A[...] }
+            m_str = f"{builder.params} -> {{ {dom_tuple_str} -> {name}[{indices}] }}"
+            m = I.UnionMap(m_str)
+            if is_write:
+                dom.writes_map = dom.writes_map.union(m) if dom.writes_map else m
+            else:
+                dom.reads_map = dom.reads_map.union(m) if dom.reads_map else m
 
-    for (name, indices) in writes:
-        m = build_map(name, indices)
-        if new_writes is None:
-            new_writes = m
-        else:
-            new_writes = new_writes.union(m)
+    add_accesses(lhs_str, True)
+    add_accesses(rhs_str, False)
             
-    for (name, indices) in reads:
-        m = build_map(name, indices)
-        if new_reads is None:
-            new_reads = m
-        else:
-            new_reads = new_reads.union(m)
-
-    if new_reads:
-        if dom.reads_map:
-            dom.reads_map = dom.reads_map.union(new_reads)
-        else:
-            dom.reads_map = new_reads
-        
-    if new_writes:
-        if dom.writes_map:
-            dom.writes_map = dom.writes_map.union(new_writes)
-        else:
-            dom.writes_map = new_writes
-            
-    return StmtContext(dom, stmt_name)
+    return StmtContext(dom, univ.get_set_list().get_at(0).get_tuple_name())
 
 def print_schedule(node: "I.ScheduleNode") -> str:
     """
