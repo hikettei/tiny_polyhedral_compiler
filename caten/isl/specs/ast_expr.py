@@ -132,6 +132,12 @@ class ASTExpr(ISLObject, ISLObjectMixin):
 
     def div(self, expr2: "ASTExpr") -> "ASTExpr":
         return _isl_ast_expr_div(self, expr2)
+    
+    def max(self, expr2: "ASTExpr") -> "ASTExpr":
+        return expr("max").call(self, expr2)
+    
+    def min(self, expr2: "ASTExpr") -> "ASTExpr":
+        return expr("min").call(self, expr2)
 
     def pdiv_q(self, expr2: "ASTExpr") -> "ASTExpr":
         return _isl_ast_expr_pdiv_q(self, expr2)
@@ -191,7 +197,7 @@ class ASTExpr(ISLObject, ISLObjectMixin):
         
         # Create a call expression: =(self, expr2)
         # Use Id.alloc to force creating an ID named "=", avoiding parser error
-        eq_id = Id.alloc("=")
+        eq_id = Id.alloc("assign")
         eq_expr = ASTExpr.from_id(eq_id)
         call_expr = eq_expr.call(self, expr2)
         
