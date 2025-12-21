@@ -88,6 +88,13 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
         else:
             return f"{self.node_type}(Not Realized)"
 
+    def viz(self) -> str:
+        if self.node is not None:
+            from caten.polyhedral.viz import viz_schedule
+            return viz_schedule(self.node)
+        else:
+            return "(Not Realized)"
+
     def to_c(self) -> str:
         from ctypes import CFUNCTYPE, c_void_p, cast, py_object
         
