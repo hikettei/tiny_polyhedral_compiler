@@ -16,8 +16,12 @@ class DotVisualizer:
         node_id = f"node_{self.node_counter}"
         self.node_counter += 1
         attr_str = ", ".join(f'{k}="{v}"' for k, v in attrs.items())
-        label = label.replace('"', '\"').replace('\n', '\\n')
-        self.lines.append(f'{node_id} [label="{label}", {attr_str}];')
+        
+        if label.strip().startswith("<") and label.strip().endswith(">"):
+            self.lines.append(f'{node_id} [label={label}, {attr_str}];')
+        else:
+            label = label.replace('"', '\"').replace('\n', '\\n')
+            self.lines.append(f'{node_id} [label="{label}", {attr_str}];')
         return node_id
 
     def add_edge(self, src: str, dst: str, label: str = ""):
@@ -135,7 +139,46 @@ def print_schedule(node: "I.ScheduleNode") -> str:
     """
     output_lines = []
 
-    def _rec(n: "I.ScheduleNode", prefix: str, is_last_child: bool):
+    def _clean_item(item: str) -> str:
+        # Remove [(...)] wrapping in RHS of arrow if present
+        if " → " in item:
+            lhs, rhs = item.split(" → ", 1)
+            rhs = rhs.strip()
+            if rhs.startswith("[(") and rhs.endswith(")]"):
+                rhs = rhs[2:-2]
+            elif rhs.startswith("[") and rhs.endswith("]"):
+                rhs = rhs[1:-1]
+            if rhs.startswith("(") and rhs.endswith(")"):
+                rhs = rhs[1:-1]
+            return f"{lhs} → {rhs}"
+        return item
+
+    def _align_items(items: List[str], separator: str) -> List[str]:
+        if not items or not any(separator in item for item in items):
+            return items
+            
+        max_lhs_len = 0
+        split_data = []
+        
+        for item in items:
+            if separator in item:
+                lhs, rhs = item.split(separator, 1)
+                lhs = lhs.strip()
+                rhs = rhs.strip()
+                max_lhs_len = max(max_lhs_len, len(lhs))
+                split_data.append((lhs, rhs))
+            else:
+                split_data.append((item, None))
+        
+        aligned = []
+        for lhs, rhs in split_data:
+            if rhs is not None:
+                aligned.append(f"{lhs.ljust(max_lhs_len)} {separator} {rhs}")
+            else:
+                aligned.append(lhs)
+        return aligned
+
+    def _rec(n: "I.ScheduleNode", indent: str):
         t_name = n.get_type_name()
         
         # 1. Extract Data
@@ -143,29 +186,22 @@ def print_schedule(node: "I.ScheduleNode") -> str:
         items = []
         
         if t_name == "domain":
-            params, items = parse_isl_object(n.domain_get_domain())
+            params, body = parse_isl_object(n.domain_get_domain())
             if params:
                 header_text += f" ({params})"
+            items = body
         
         elif t_name == "band":
-            # Decompose MUPA into individual dimensions
             mupa = n.band_get_partial_schedule()
             n_dims = mupa.dim(3) # isl_dim_set / isl_dim_out
             for i in range(n_dims):
                 upa = mupa.get_union_pw_aff(i)
-                # Parse each dimension
-                # UPA string is usually "[params] -> { S[i,j] -> [(i)] }" or similar
-                # We want "S -> i"
-                # But UPA to string is { S -> [(i)] }.
                 _, body = parse_isl_object(upa)
-                items.extend(body)
-            
-            # Permutable flag
-            if n.band_get_permutable():
-                header_text += " (Permutable)"
+                items.extend([_clean_item(b) for b in body])
                 
         elif t_name == "filter":
-            params, items = parse_isl_object(n.filter_get_filter())
+            params, body = parse_isl_object(n.filter_get_filter())
+            items = body
             
         elif t_name == "sequence":
             pass # Header is generated automatically by t_name
@@ -177,48 +213,51 @@ def print_schedule(node: "I.ScheduleNode") -> str:
             items = [f'"{n.mark_get_id().name()}"']
             
         elif t_name == "context":
-            params, items = parse_isl_object(n.context_get_context())
+            params, body = parse_isl_object(n.context_get_context())
+            items = body
             
         elif t_name == "guard":
-            params, items = parse_isl_object(n.guard_get_guard())
+            params, body = parse_isl_object(n.guard_get_guard())
+            items = body
             
         elif t_name == "extension":
-            params, items = parse_isl_object(n.extension_get_extension())
+            params, body = parse_isl_object(n.extension_get_extension())
 
         # 2. Render Node
         
-        # Connector logic:
-        # standard: ┣ or ┗
-        connector = "┗ " if is_last_child else "┣ "
-        output_lines.append(f"{prefix}{connector}{header_text}")
+        # Align items if applicable
+        separator = None
+        if t_name in ["domain", "filter"]:
+            separator = ":"
+        elif t_name == "band":
+            separator = "→"
+            
+        if separator:
+            items = _align_items(items, separator)
+
+        has_items = len(items) > 0
         
-        # Child prefix for content and children
-        child_prefix = prefix + ("  " if is_last_child else "┃ ")
+        # Header
+        marker = "┏ " if has_items else "┗ "
+        output_lines.append(f"{indent}{marker}{header_text}")
         
-        # Render Items (Node Content)
-        if items:
-            if len(items) == 1:
-                # Single item: simple indentation
-                for line in items[0].split('\n'):
-                    output_lines.append(f"{child_prefix} {line}")
-            else:
-                # Multiple items: ASCII Bracket
-                for i, item in enumerate(items):
-                    marker = "⎢ "
-                    if i == 0: marker = "⎡ "
-                    elif i == len(items) - 1: marker = "⎣ "
-                    
-                    sub = item.split('\n')
-                    output_lines.append(f"{child_prefix} {marker}{sub[0]}")
-                    for s in sub[1:]:
-                        output_lines.append(f"{child_prefix}   {s}")
+        # Items
+        if has_items:
+            for i, item in enumerate(items):
+                is_last_item = (i == len(items) - 1)
+                item_marker = "┗ " if is_last_item else "┃ "
+                output_lines.append(f"{indent}{item_marker} {item}")
 
         # 3. Recurse Children
+        child_indent = indent + "  "
         n_children = n.n_children()
         for i in range(n_children):
-            _rec(n.child(i), child_prefix, i == (n_children - 1))
+            _rec(n.child(i), child_indent)
 
-    _rec(node, "", True)
+    # Root wrapper
+    root_type = node.get_type_name()
+    
+    _rec(node, "    ")
     return "\n".join(output_lines)
 
 def viz_schedule(node: Union["I.ScheduleNode", "P.ScheduleNodeBase"]) -> Any:
@@ -226,10 +265,23 @@ def viz_schedule(node: Union["I.ScheduleNode", "P.ScheduleNodeBase"]) -> Any:
         node = node.get_node()
     
     viz = DotVisualizer("ScheduleTree")
+    import html
     
+    def _clean_item_viz(item: str) -> str:
+        if " → " in item:
+            lhs, rhs = item.split(" → ", 1)
+            rhs = rhs.strip()
+            if rhs.startswith("[(") and rhs.endswith(")]"):
+                rhs = rhs[2:-2]
+            elif rhs.startswith("[") and rhs.endswith("]"):
+                rhs = rhs[1:-1]
+            if rhs.startswith("(") and rhs.endswith(")"):
+                rhs = rhs[1:-1]
+            return f"{lhs} → {rhs}"
+        return item
+
     def _rec(n: "I.ScheduleNode", parent_id: Optional[str] = None):
         t_name = n.get_type_name()
-        label = f"<{t_name.upper()}>"
         fillcolor = "#FFFFFF"
         
         items = []
@@ -244,9 +296,7 @@ def viz_schedule(node: Union["I.ScheduleNode", "P.ScheduleNodeBase"]) -> Any:
             for i in range(n_dims):
                 upa = mupa.get_union_pw_aff(i)
                 _, body = parse_isl_object(upa)
-                items.extend(body)
-            if n.band_get_permutable():
-                label += "\n(Permutable)"
+                items.extend([_clean_item_viz(b) for b in body])
             fillcolor = "#E8F5E9"
         elif t_name == "filter":
             params, items = parse_isl_object(n.filter_get_filter())
@@ -265,11 +315,39 @@ def viz_schedule(node: Union["I.ScheduleNode", "P.ScheduleNodeBase"]) -> Any:
             params, items = parse_isl_object(n.guard_get_guard())
             fillcolor = "#FFEBEE"
             
-        if params:
-            label += f"\n[{params}]"
+        # Build HTML Label
+        rows = []
+        header_text = f"[{t_name}]"
+        if params: header_text += f" ({params})"
+        header_text = html.escape(header_text)
         
-        if items:
-            label += "\n" + "\n".join(items)
+        separator = None
+        if t_name in ["domain", "filter"]:
+            separator = ":"
+        elif t_name == "band":
+            separator = "→"
+            
+        use_two_cols = False
+        if items and separator:
+            use_two_cols = any(separator in item for item in items)
+            
+        colspan = ' COLSPAN="2"' if use_two_cols else ''
+        rows.append(f'<TR><TD ALIGN="LEFT" BALIGN="LEFT"{colspan}><B>{header_text}</B></TD></TR>')
+        
+        for item in items:
+            clean_item = html.escape(item)
+            if use_two_cols and separator in item:
+                parts = item.split(separator, 1)
+                left = html.escape(parts[0].strip())
+                right = html.escape(parts[1].strip())
+                sep_esc = html.escape(separator)
+                rows.append(f'<TR><TD ALIGN="LEFT" BALIGN="LEFT">{left}</TD><TD ALIGN="LEFT" BALIGN="LEFT">{sep_esc} {right}</TD></TR>')
+            elif use_two_cols:
+                 rows.append(f'<TR><TD ALIGN="LEFT" BALIGN="LEFT" COLSPAN="2">{clean_item}</TD></TR>')
+            else:
+                 rows.append(f'<TR><TD ALIGN="LEFT" BALIGN="LEFT">{clean_item}</TD></TR>')
+        
+        label = f'<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2">{"".join(rows)}</TABLE>>'
         
         current_id = viz.add_node(label, fillcolor=fillcolor)
         
