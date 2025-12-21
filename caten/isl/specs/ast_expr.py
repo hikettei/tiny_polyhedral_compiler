@@ -20,15 +20,22 @@ if TYPE_CHECKING:
 
 _lib = load_libisl()
 
+# handle is an integer, to prevent the confusion vs val, use I.expr instead of I.ASTExpr
+def expr(id_or_val: Any) -> "ASTExpr":
+    if isinstance(id_or_val, int):
+        from .val import Val
+        return ASTExpr.from_val(Val.int_from_si(id_or_val))
+    elif isinstance(id_or_val, str):
+        from .id import Id
+        return ASTExpr.from_id(Id(id_or_val))
+    else:
+        raise TypeError("I.expr can only accept int or str")
+
 class ASTExpr(ISLObject, ISLObjectMixin):
     __slots__ = ()
 
     def __init__(self, handle_or_spec: Any) -> None:
-        if isinstance(handle_or_spec, str):
-            handle = _isl_ast_expr_read_from_str(handle_or_spec, return_raw_pointer=True)
-            super().__init__(handle)
-        else:
-            super().__init__(handle_or_spec)
+        super().__init__(handle_or_spec)
 
     def get_type_name(self) -> str:
         """Helper to get the string name of the expr type."""
