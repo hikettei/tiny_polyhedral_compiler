@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import abc
 import re
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union, List, Tuple
 import contextvars
 
 import caten.isl as I
@@ -24,6 +24,12 @@ def get_builder() -> ScheduleBuilder:
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 class ScheduleNodeBase(metaclass=abc.ABCMeta):
     """
+    Abstract base class for all schedule nodes in the DSL.
+
+    This class serves as a wrapper around ISL schedule nodes, providing a Pythonic
+    interface for constructing and manipulating schedule trees. It handles the
+    realization of the schedule node within the builder context and supports
+    conversion to C code.
     """
     def __init__(self, node_type: str) -> None:
         self.node: Optional["I.ScheduleNode"] = None
@@ -34,7 +40,7 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
 
     def get_node(self) -> "I.ScheduleNode":
         if not self.node:
-            raise RuntimeError("Cannot apply loop transformation before entering context.")
+            raise RuntimeError("Schedule node has not been realized yet. Ensure you are accessing this node within the appropriate context (e.g., inside a 'with P.domain(...):' block).")
         return self.node
     
     def __enter__(self) -> "ScheduleNodeContext":
@@ -58,7 +64,7 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
 
     def __repr__(self) -> str:
         if self.node is not None:
-            return str(self.node)
+            return f"{self.node_type}(\n{print_schedule(self.node)}\n)"
         else:
             return "ScheduleNode(Not Realized)"
 
@@ -88,7 +94,11 @@ class parameter():
 
 class domain(ScheduleNodeBase):
     """
-    A root of schedule node.
+    Represents the domain of the schedule tree.
+
+    The domain node is always the root of a schedule tree and defines the set of
+    statement instances that are subject to scheduling. It encapsulates the iteration
+    domain of the program.
     """
     def __init__(self, domain_set: Union[str, "I.Set", "I.UnionSet"]):
         super().__init__("ScheduleNodeDomain")
@@ -103,19 +113,26 @@ class domain(ScheduleNodeBase):
             case I.UnionSet():
                 self.uset = domain_set
             case _:
-                raise TypeError("P.domain(domain_set) should be Set or UnionSet")
+                raise TypeError(f"P.domain expected a string, Set, or UnionSet, but got {type(domain_set).__name__}.")
 
     def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
-        assert parent is None, f"P.domain should be the root of the schedule tree."
+        if parent is not None:
+             raise RuntimeError(f"P.domain must be the root of the schedule tree, but found a parent node: {parent}.")
         return I.Schedule.from_domain(self.uset).get_root()
 
     def __or__(self, other: domain) -> "domain":
-        assert self.reads_map is None and self.writes_map is None
+        if self.reads_map is not None or self.writes_map is not None:
+            raise RuntimeError("Cannot merge domains that already have access relations defined (stmt() calls). Merge domains before defining statements.")
         return domain(self.uset | other.uset)
 
 class band(ScheduleNodeBase):
     """
-    TODO: Decent docs?
+    Represents a band node in the schedule tree.
+
+    A band node contains a partial schedule, which is a multi-dimensional
+    piecewise affine function assigning a tuple of values to each domain element.
+    Band nodes effectively define the loops of the resulting code. They can be
+    permutable (allowing loop interchange and tiling) or not.
     """
     def __init__(self, schedule: Union[str, "I.UnionMap", "I.MultiUnionPwAff"]) -> None:
         super().__init__("ScheduleNodeBand")
@@ -127,10 +144,11 @@ class band(ScheduleNodeBase):
             case I.MultiUnionPwAff():
                 self.schedule = schedule
             case _:
-                raise TypeError("P.band: schedule should be MultiUnionPwAff.")
+                raise TypeError(f"P.band expected a string, UnionMap, or MultiUnionPwAff, but got {type(schedule).__name__}.")
 
     def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
-        assert parent is not None, "band requires parent!"
+        if parent is None:
+            raise RuntimeError("P.band requires a parent node (e.g., inside a 'with P.domain(...):' block). Cannot create a band at the root level.")
         return parent.insert_partial_schedule(self.schedule)
     # TODO: Loop Transformation
     def get_tiling_sizes(self, sizes: Union[int, List[int]]) -> "I.MultiVal":
@@ -138,7 +156,7 @@ class band(ScheduleNodeBase):
         depth = (band := self.get_node()).band_get_space().dim(3)
         sizes = [sizes] * depth if isinstance(sizes, int) else sizes
         if not len(sizes) == depth:
-            raise RuntimeError(f"Cannot construct a tiling space, depth={depth} but getting {sizes}")
+            raise ValueError(f"Tiling size mismatch: Band depth is {depth}, but provided {len(sizes)} sizes: {sizes}. Please provide exactly {depth} sizes.")
         mv = I.MultiVal.zeros(band.band_get_space())
         for i, size in enumerate(sizes):
             mv[i] = size
@@ -185,6 +203,13 @@ class band(ScheduleNodeBase):
     def __matmul__(self, other):   return self.tile(other)
 
 class filter(ScheduleNodeBase):
+    """
+    Represents a filter node in the schedule tree.
+
+    A filter node restricts the set of domain instances that reach its children
+    to those that satisfy a given union set of constraints. This is used to
+    select subsets of the domain for specific sub-schedules.
+    """
     def __init__(self, filter_set: Union[str, "I.UnionSet"]) -> None:
         super().__init__("ScheduleNodeFilter")
         match filter_set:
@@ -193,10 +218,11 @@ class filter(ScheduleNodeBase):
             case I.UnionSet():
                 self.filter_set = filter_set
             case _:
-                raise TypeError("P.filter: filter should be union set")
+                raise TypeError(f"P.filter expected a string or UnionSet, but got {type(filter_set).__name__}.")
 
     def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
-        assert parent is not None, "band"
+        if parent is None:
+             raise RuntimeError("P.filter requires a parent node (e.g., inside a 'with P.domain(...):' block).")
         return parent.insert_partial_schedule(self.schedule)
 
 class StmtContext():
@@ -207,11 +233,18 @@ class StmtContext():
 
 def stmt(expr: str) -> None:
     """
-    TODO: DOCS
+    Defines a statement with read/write access relations in the schedule.
+
+    This function parses a string representation of a statement (e.g., "S[i,j] = A[i, j], B[j, i]")
+    to extract the statement's domain and its memory access patterns (reads and writes).
+    It updates the current domain's access maps, which are crucial for dependence analysis.
+    
+    Args:
+        expr: A string string representing the statement assignment.
     """
     dom = get_builder().domain
     if dom is None:
-        raise RuntimeError("stmt() must be used within a P.domain context")
+        raise RuntimeError("stmt() is called outside of a domain context. Ensure you are calling stmt() inside a 'with P.domain(...):' block.")
         
     if "=" not in expr:
         raise ValueError(f"Invalid statement expression (must contain assignment '='): {expr}")
@@ -255,3 +288,23 @@ def stmt(expr: str) -> None:
         else:
             dom.writes_map = new_writes
     return StmtContext()
+
+def print_schedule(node: "I.ScheduleNode") -> str:
+    """
+    Pretty prints the schedule tree using a refined tree traversal algorithm.
+    """
+    def _rec(n: "I.ScheduleNode", prefix: str = "", is_last: bool = True) -> list[str]:
+        types = ["band", "context", "domain", "expansion", "extension", "filter", "leaf", "guard", "mark", "sequence", "set"]
+        t, info = n.get_type(), ""
+        if t == 0: info = str(n.band_get_partial_schedule()).replace("{ ", "").replace(" }", "")
+        elif t == 2: info = str(n.domain_get_domain()).replace("{ ", "").replace(" }", "")
+        elif t == 5: info = str(n.filter_get_filter()).replace("{ ", "").replace(" }", "")
+        elif t == 8: info = f'"{n.mark_get_id().name()}"'
+        
+        lines = [f"{prefix}{'┗' if is_last else '┣'} {types[t] if t < len(types) else 'unknown'}({info})"]
+        children = [n.child(i) for i in range(n.n_children())]
+        for i, child in enumerate(children):
+            lines.extend(_rec(child, prefix + ("  " if is_last else "┃ "), i == len(children) - 1))
+        return lines
+
+    return "\n".join(_rec(node))
