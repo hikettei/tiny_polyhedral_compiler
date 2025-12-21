@@ -64,6 +64,7 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
 
     def __repr__(self) -> str:
         if self.node is not None:
+            from caten.polyhedral.viz import print_schedule
             return f"{self.node_type}(\n{print_schedule(self.node)}\n)"
         else:
             return "ScheduleNode(Not Realized)"
@@ -309,27 +310,3 @@ def stmt(expr: str) -> StmtContext:
     add_accesses(rhs_str, False)
             
     return StmtContext(dom, univ.get_set_list().get_at(0).get_tuple_name())
-
-def print_schedule(node: "I.ScheduleNode") -> str:
-    """
-    Pretty prints the schedule tree using a refined tree traversal algorithm.
-    """
-    def _rec(n: "I.ScheduleNode", prefix: str = "", is_last: bool = True) -> list[str]:
-        t_name = n.get_type_name()
-        info_map = {
-            "band": lambda x: str(x.band_get_partial_schedule()),
-            "domain": lambda x: str(x.domain_get_domain()),
-            "filter": lambda x: str(x.filter_get_filter()),
-            "mark": lambda x: f'"{x.mark_get_id().name()}"',
-            "context": lambda x: str(x.context_get_context()),
-            "guard": lambda x: str(x.guard_get_guard()),
-            "extension": lambda x: str(x.extension_get_extension())
-        }
-        info = info_map.get(t_name, lambda x: "")(n).replace("{ ", "").replace(" }", "")
-        yield f"{prefix}{'┗' if is_last else '┣'} {t_name}({info})"
-        
-        children = [n.child(i) for i in range(n.n_children())]
-        for i, c in enumerate(children):
-            yield from _rec(c, prefix + ("  " if is_last else "┃ "), i == len(children)-1)
-
-    return "\n".join(_rec(node))
