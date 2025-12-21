@@ -42,6 +42,10 @@ class UnionSetList(ISLObject, ISLObjectMixin):
         return _isl_union_set_list_union(self)
 
     @classmethod
+    def from_union_set(cls, el: "UnionSet") -> "UnionSetList":
+        return _isl_union_set_list_from_union_set(el)
+
+    @classmethod
     def alloc(cls, n: int) -> "UnionSetList":
         return _isl_union_set_list_alloc(n)
 
@@ -50,6 +54,13 @@ class UnionSetList(ISLObject, ISLObjectMixin):
 
 
 register_type("UnionSetList", UnionSetList)
+
+_isl_union_set_list_from_union_set = ISLFunction.create(
+    "isl_union_set_list_from_union_set",
+    Take("UnionSet"),
+    return_=Give("UnionSetList"),
+    lib=_lib,
+)
 
 _isl_union_set_list_union = ISLFunction.create(
     "isl_union_set_list_union",
