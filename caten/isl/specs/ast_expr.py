@@ -180,6 +180,24 @@ class ASTExpr(ISLObject, ISLObjectMixin):
         from .ast_expr_list import AstExprList
         return _isl_ast_expr_access(self, AstExprList.from_exprs(indices))
 
+    def assign(self, expr2: "ASTExpr") -> "ASTNode":
+        """
+        Creates an assignment node: self = expr2.
+        Since ISL AST does not natively support assignment statements, 
+        we represent this as a call to a function named "=".
+        """
+        from .ast_node import ASTNode
+        from .id import Id
+        
+        # Create a call expression: =(self, expr2)
+        # Use Id.alloc to force creating an ID named "=", avoiding parser error
+        eq_id = Id.alloc("=")
+        eq_expr = ASTExpr.from_id(eq_id)
+        call_expr = eq_expr.call(self, expr2)
+        
+        # Wrap it in a User Node
+        return ASTNode.user_from_expr(call_expr)
+
     def to_C_str(self) -> str:
         return _isl_ast_expr_to_C_str(self)
 

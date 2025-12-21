@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import abc
 import re
-from typing import TYPE_CHECKING, Any, Optional, Union, List, Tuple
+from typing import TYPE_CHECKING, Any, Optional, Union, List, Tuple, Callable, Dict
 import contextvars
 
 import caten.isl as I
@@ -69,11 +69,44 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
             return "ScheduleNode(Not Realized)"
 
     def to_c(self) -> str:
+        from ctypes import CFUNCTYPE, c_void_p, cast, py_object
+        
         ast_node = I.ASTBuild.alloc().node_from_schedule(self.get_node().get_schedule())
+        lambdas = getattr(self, "stmt_lambdas", {})
+
+        if lambdas:
+            # Callback signature: isl_ast_node *(*fn)(__isl_take isl_ast_node *node, void *user)
+            CALLBACK = CFUNCTYPE(c_void_p, c_void_p, c_void_p)
+            
+            def replace_cb(node_handle, user_data):
+                node = I.ASTNode(node_handle)
+                
+                from caten.isl.specs.enums import isl_ast_node_type, isl_ast_expr_type, isl_ast_expr_op_type
+                
+                if node.get_type() == isl_ast_node_type.ISL_AST_NODE_USER: 
+                    expr = node.user_get_expr()
+                    if expr.get_type() == isl_ast_expr_type.ISL_AST_EXPR_OP: 
+                        if expr.get_op_type() == isl_ast_expr_op_type.ISL_AST_EXPR_OP_CALL: 
+                            call_id = expr.get_op_arg(0).id_get_id()
+                            name = call_id.name()
+                            if name in lambdas:
+                                func = lambdas[name]
+                                n_args = expr.get_op_n_arg()
+                                # arg 0 is the function ID, actual args start from 1
+                                args = [expr.get_op_arg(i) for i in range(1, n_args)]
+                                new_node = func(*args)
+                                return new_node.copy_handle()
+                return node.copy_handle()
+
+            c_cb = CALLBACK(replace_cb)
+            cb_ptr = cast(c_cb, c_void_p)
+            ast_node = ast_node.map_descendant_bottom_up(cb_ptr, None)
+
         # Print to C
         p = I.Printer.alloc_str()
         p.request_inplace()
         p = p.set_output_format(4) # ISL_FORMAT_C
+        
         p.request_inplace()
         p = p.print_ast_node(ast_node)
         return p.get_str()
@@ -105,6 +138,7 @@ class domain(ScheduleNodeBase):
         # read/write access relation which updated by P.stmt
         self.reads_map: Optional["I.UnionMap"] = None
         self.writes_map: Optional["I.UnionMap"] = None
+        self.stmt_lambdas: Dict[str, Callable] = {}
         match domain_set:
             case str():
                 self.uset = I.UnionSet(f"{get_builder().params} -> {domain_set}")
@@ -226,12 +260,14 @@ class filter(ScheduleNodeBase):
         return parent.insert_partial_schedule(self.schedule)
 
 class StmtContext():
-    def __getitem__(self, f: Callable) -> None:
-        # TODO:
-        # P.stmt("Access map")[lambda c0, c1, c2, c3, c4: out[i, j] += a[i] + b[i]]
-        pass
+    def __init__(self, dom: "domain", stmt_name: str) -> None:
+        self.dom = dom
+        self.stmt_name = stmt_name
 
-def stmt(expr: str) -> None:
+    def __getitem__(self, f: Callable) -> None:
+        self.dom.stmt_lambdas[self.stmt_name] = f
+
+def stmt(expr: str) -> StmtContext:
     """
     Defines a statement with read/write access relations in the schedule.
 
@@ -248,7 +284,26 @@ def stmt(expr: str) -> None:
         
     if "=" not in expr:
         raise ValueError(f"Invalid statement expression (must contain assignment '='): {expr}")
-        
+    
+    # Extract statement name from domain
+    # Assuming single statement domain for now or taking the first one
+    stmt_name = "unknown"
+    dom_tuple_str = ""
+    
+    set_list = dom.uset.get_set_list()
+    for i in range(set_list.n_set()):
+        s = set_list.get_at(i)
+        stmt_name = s.get_tuple_name()
+        # Reconstruct tuple string: S[i, j, k]
+        # We need variable names. get_dim_name might work if they are set.
+        # But parsing from string representation is safer if names are not set in obj.
+        # s.to_str() -> "{ S[i, j] : ... }"
+        # Use regex to extract "S[...]"
+        m = re.search(r"(\w+\[[^\]]+\])", str(s))
+        if m:
+            dom_tuple_str = m.group(1)
+        break # Only process the first set for now
+
     lhs_str, rhs_str = expr.split("=", 1)
         
     def extract_accesses(s: str) -> List[Tuple[str, str]]:
@@ -256,21 +311,30 @@ def stmt(expr: str) -> None:
         
     writes = extract_accesses(lhs_str)
     reads = extract_accesses(rhs_str)
-    tuple_part = get_builder().params
+    
     new_reads: Optional["I.UnionMap"] = None
     new_writes: Optional["I.UnionMap"] = None
     
+    # Helper to build map: { S[...] -> A[...] }
+    def build_map(name: str, indices: str) -> "I.UnionMap":
+        if dom_tuple_str:
+            m_str = f"{{ {dom_tuple_str} -> {name}[{indices}] }}"
+            return I.UnionMap(m_str)
+        else:
+            # Fallback to old behavior (incorrect but keeps code running if extraction fails)
+            tuple_part = get_builder().params
+            m_str = f"{{ {tuple_part} -> {name}[{indices}] }}"
+            return I.UnionMap(m_str)
+
     for (name, indices) in writes:
-        m_str = f"{{ {tuple_part} -> {name}[{indices}] }}"
-        m = I.UnionMap(m_str)
+        m = build_map(name, indices)
         if new_writes is None:
             new_writes = m
         else:
             new_writes = new_writes.union(m)
             
     for (name, indices) in reads:
-        m_str = f"{{ {tuple_part} -> {name}[{indices}] }}"
-        m = I.UnionMap(m_str)
+        m = build_map(name, indices)
         if new_reads is None:
             new_reads = m
         else:
@@ -287,7 +351,8 @@ def stmt(expr: str) -> None:
             dom.writes_map = dom.writes_map.union(new_writes)
         else:
             dom.writes_map = new_writes
-    return StmtContext()
+            
+    return StmtContext(dom, stmt_name)
 
 def print_schedule(node: "I.ScheduleNode") -> str:
     """
