@@ -1,13 +1,35 @@
 import caten.isl as I
+from .analysis import a
 
 def create_constrainted_schedule(root, read_umap, write_umap, stmts):
     pass
 
-class Constrainted():
+class ConstraintedModel():
+    def __init__(self):
+        pass
+
+class Dispatcher():
+    # Dispatcher can do pattern match to move to the next editor
+    # Dispatcher can trace how the tree was optimized, finally generating optimization tree like beam.
+    def sequence(self):
+        pass
+    
+    def band(self):
+        pass
+
+class DomainEditor(Dispatcher):
     pass
 
-class domain():
+class FilterEditor(Dispatcher):
     pass
+
+class BandEditor(Dispatcher):
+    # TODO: Tile
+    pass
+
+# etc ...
+# pattern match -> editor dispatch model
+# everything is in-place
 # ConstraintedScheduleModel
 # Parametric Tiling
 # finalize() -> Schedule
