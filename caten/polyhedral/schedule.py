@@ -294,17 +294,21 @@ def print_schedule(node: "I.ScheduleNode") -> str:
     Pretty prints the schedule tree using a refined tree traversal algorithm.
     """
     def _rec(n: "I.ScheduleNode", prefix: str = "", is_last: bool = True) -> list[str]:
-        types = ["band", "context", "domain", "expansion", "extension", "filter", "leaf", "guard", "mark", "sequence", "set"]
-        t, info = n.get_type(), ""
-        if t == 0: info = str(n.band_get_partial_schedule()).replace("{ ", "").replace(" }", "")
-        elif t == 2: info = str(n.domain_get_domain()).replace("{ ", "").replace(" }", "")
-        elif t == 5: info = str(n.filter_get_filter()).replace("{ ", "").replace(" }", "")
-        elif t == 8: info = f'"{n.mark_get_id().name()}"'
+        t_name = n.get_type_name()
+        info_map = {
+            "band": lambda x: str(x.band_get_partial_schedule()),
+            "domain": lambda x: str(x.domain_get_domain()),
+            "filter": lambda x: str(x.filter_get_filter()),
+            "mark": lambda x: f'"{x.mark_get_id().name()}"',
+            "context": lambda x: str(x.context_get_context()),
+            "guard": lambda x: str(x.guard_get_guard()),
+            "extension": lambda x: str(x.extension_get_extension())
+        }
+        info = info_map.get(t_name, lambda x: "")(n).replace("{ ", "").replace(" }", "")
+        yield f"{prefix}{'┗' if is_last else '┣'} {t_name}({info})"
         
-        lines = [f"{prefix}{'┗' if is_last else '┣'} {types[t] if t < len(types) else 'unknown'}({info})"]
         children = [n.child(i) for i in range(n.n_children())]
-        for i, child in enumerate(children):
-            lines.extend(_rec(child, prefix + ("  " if is_last else "┃ "), i == len(children) - 1))
-        return lines
+        for i, c in enumerate(children):
+            yield from _rec(c, prefix + ("  " if is_last else "┃ "), i == len(children)-1)
 
     return "\n".join(_rec(node))

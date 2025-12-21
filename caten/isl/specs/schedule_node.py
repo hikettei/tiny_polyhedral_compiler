@@ -25,6 +25,21 @@ if TYPE_CHECKING:
     from .union_set_list import UnionSetList
 
 _lib = load_libisl()
+        
+_SCHEDULE_NODE_TYPE_MAP = {
+    -1: "error",
+    0: "band",
+    1: "context",
+    2: "domain",
+    3: "expansion",
+    4: "extension",
+    5: "filter",
+    6: "leaf",
+    7: "guard",
+    8: "mark",
+    9: "sequence",
+    10: "set",
+}
 
 class ScheduleNode(ISLObject, ISLObjectMixin):
     __slots__ = ()
@@ -35,6 +50,10 @@ class ScheduleNode(ISLObject, ISLObjectMixin):
             super().__init__(handle)
         else:
             super().__init__(handle_or_spec)
+
+    def get_type_name(self) -> str:
+        """Helper to get the string name of the node type."""
+        return _SCHEDULE_NODE_TYPE_MAP.get(self.get_type(), "unknown")
 
     @classmethod
     def from_str(cls, spec: str) -> Any:
