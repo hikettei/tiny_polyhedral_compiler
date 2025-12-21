@@ -52,16 +52,31 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
         node = None
         if builder.current_node:
             node = builder.current_node.child(builder.current_node.n_children()-1)
-        builder.current_node = self.realize(node)
+        if isinstance(self, filter) and node.get_type_name() == "filter":
+            new_sequence = I.UnionSetList.alloc(0)
+            new_sequence = new_sequence + node.filter_get_filter()
+            new_sequence = new_sequence + self.filter_set
+
+            node = node.delete()
+            n1 = node
+            node = node.copy().insert_sequence(new_sequence)
+            node = node.child(node.n_children()-1)
+            # new sequence element copies the structure of first children. delete them
+            node = node.child(0).cut().parent()
+            builder.current_node = node
+        else:
+            builder.current_node = self.realize(node)
+        
         if isinstance(self, domain):
             builder.domain = self
-        print(builder.current_node)
         self.node = builder.current_node
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         # Default exit behavior: move up to parent
-        if not isinstance(self, domain):
+        if isinstance(self, domain):
+            self.node = get_builder().current_node.get_schedule().get_root()
+        else:
             self.node = None
             builder = get_builder()
             builder.current_node = builder.current_node.parent()
@@ -241,6 +256,16 @@ class band(ScheduleNodeBase):
     def __sub__(self, other):      return self.shift([-x for x in other] if isinstance(other, list) else -other)
     def __matmul__(self, other):   return self.tile(other)
 
+class sequence(ScheduleNodeBase):
+    def __init__(self, filter_set_list: I.UnionSetList) -> None:
+        super().__init__("ScheduleNodeSequence")
+        self.filter_set_list = filter_set_list
+        
+    def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
+        if parent is None:
+             raise RuntimeError("P.sequence requires a parent node (e.g., inside a 'with P.domain(...):' block).")
+        return parent.insert_sequence(self.filter_set_list)
+
 class filter(ScheduleNodeBase):
     """
     Represents a filter node in the schedule tree.
@@ -262,19 +287,7 @@ class filter(ScheduleNodeBase):
     def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
         if parent is None:
             raise RuntimeError("P.filter requires a parent node (e.g., inside a 'with P.domain(...):' block).")
-        if parent.get_type_name() == "filter":
-            new_sequence = I.UnionSetList.alloc(0)
-            new_sequence = new_sequence + parent.filter_get_filter()
-            new_sequence = new_sequence + self.filter_set
-
-            parent = parent.delete()
-            parent = parent.insert_sequence(new_sequence)
-            print("SEQ")
-            print(parent)
-            parent = parent.child(parent.n_children()-1)
-            return parent
-        else:
-            return parent.insert_filter(self.filter_set)
+        return parent.insert_filter(self.filter_set)
 
 class StmtContext():
     def __init__(self, dom: "domain", stmt_name: str) -> None:
