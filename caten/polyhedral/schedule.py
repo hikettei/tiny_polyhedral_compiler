@@ -186,6 +186,11 @@ class domain(ScheduleNodeBase):
             raise RuntimeError("Cannot merge domains that already have access relations defined (stmt() calls). Merge domains before defining statements.")
         return domain(self.uset | other.uset)
 
+    def finalize(self):
+        assert self.node is not None, "Cannot finalize P.domain before finalizing schedules."
+        from .transform import create_constrainted_schedule
+        return create_constrainted_schedule(self.node, self.reads_map, self.writes_map, self.stmt_lambdas)
+
 class band(ScheduleNodeBase):
     """
     Represents a band node in the schedule tree.
