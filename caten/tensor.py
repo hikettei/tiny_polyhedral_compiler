@@ -67,15 +67,11 @@ class ATenBase(ATen, ATenMath, ATenNN, ATenMovements, ATenLinalg, metaclass=ABCM
     def compile(self):
         pass
 
-# TODO: Tensor(3, 3)ってやったら，自動でTensor = CPUTensorとかになる
 class Tensor(ATenBase):
     def __new__(cls, *args, **kwargs):
-        if cls is Tensor:
-            impl = DEVICE_TO_TENSOR.get(get_backend())
-            if impl is None:
-                raise ValueError(f"Unknown BACKEND={get_backend()}")
-            return impl(*args, **kwargs)
-        return super().__new__(cls)
+        impl = DEVICE_TO_TENSOR.get(get_backend())
+        if impl is None: raise ValueError(f"Unknown BACKEND={get_backend()}")
+        return impl(*args, **kwargs)
 ## For-Style Graph Construction
 def kernel(get_kernel: bool = False) -> Callable:
     def decorator(func: Callable) -> Callable:
