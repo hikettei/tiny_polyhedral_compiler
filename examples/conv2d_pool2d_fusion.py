@@ -1,7 +1,8 @@
-import caten.isl as I
-import caten.polyhedral as P
 from caten.polyhedral.stmt import stmt
 from caten.polyhedral.transformations import schedule_node_sequence_full_fuse
+
+import caten.isl as I
+import caten.polyhedral as P
 
 
 def create_conv_schedule(N, K_out, H_out, W_out, Cin, KH, KW):

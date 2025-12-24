@@ -279,6 +279,7 @@ class SequenceEditor(Dispatcher):
         if mupa is not None:
             cursor = cursor.insert_partial_schedule(mupa)
         return cursor
+    
     @transformation
     def reorder(self, *order: List[int]) -> I.ScheduleNode:
         if sorted(order) != list(range(self.node.n_children())):
@@ -288,5 +289,25 @@ class SequenceEditor(Dispatcher):
             filters = filters + self[order[i]].filter().node.filter_get_filter()
         return self.node.insert_sequence(filters)
 
+    @transformation
+    def group(self, start: int, end: int) -> I.ScheduleNode:
+        filters1 = []
+        filters2 = None
+        filters3 = []
+        for i in range(0, self.node.n_children()):
+            if i < start: 
+                filters1.append(self[i].filter().node.filter_get_filter())
+            elif i > end:
+                filters3.append(self[i].filter().node.filter_get_filter())
+            else:
+                f = self[i].filter().node.filter_get_filter()
+                filters2 = f if filters2 is None else filters2 | f
+        filters = I.UnionSetList.alloc(0)
+        assert filters2 is not None, f"group: nothing involved in range({start}, {end})"
+        for f in filters1: filters += f
+        filters += filters2
+        for f in filters3: filters += f
+        return self.node.insert_sequence(filters)
+    
 class SetEditor(SequenceEditor):
     pass

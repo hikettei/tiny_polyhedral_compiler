@@ -247,13 +247,13 @@ class UnionSet(ISLObject, ISLObjectMixin):
         return _isl_union_set_lex_le_union_set(self, other)
     
     def lex_lt_union_set(self, other: "UnionSet") -> "UnionSet":
-        return _isl_union_set_lex_ly_union_set(self, other)
+        return _isl_union_set_lex_lt_union_set(self, other)
     
     def lex_ge_union_set(self, other: "UnionSet") -> "UnionSet":
         return _isl_union_set_lex_ge_union_set(self, other)
     
     def lex_gt_union_set(self, other: "UnionSet") -> "UnionSet":
-        return _isl_union_set_lex_gy_union_set(self, other)
+        return _isl_union_set_lex_gt_union_set(self, other)
 
 
 register_type("UnionSet", UnionSet)
