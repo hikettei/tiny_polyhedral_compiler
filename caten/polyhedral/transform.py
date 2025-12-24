@@ -35,7 +35,9 @@ class TraversalHelper():
 
 @dataclass(frozen=True)
 class OptRecord():
-    op: str
+    f: Callable
+    args: list
+    kwargs: dict
 
 class ConstraintedModel:
     def __init__(
