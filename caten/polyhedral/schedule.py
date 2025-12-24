@@ -122,8 +122,8 @@ class domain(ScheduleNodeBase):
     def __init__(self, domain_set: Union[str, "I.Set", "I.UnionSet"]):
         super().__init__("ScheduleNodeDomain")
         # read/write access relation which updated by P.stmt
-        self.reads_map: Optional["I.UnionMap"] = None
-        self.writes_map: Optional["I.UnionMap"] = None
+        self.reads_map: I.UnionMap = I.UnionMap("{}")
+        self.writes_map: I.UnionMap = I.UnionMap("{}")
         self.stmt_lambdas: Dict[str, Callable] = {}
         match domain_set:
             case str():
@@ -141,7 +141,7 @@ class domain(ScheduleNodeBase):
         return I.Schedule.from_domain(self.uset).get_root()
 
     def __or__(self, other: domain) -> "domain":
-        if self.reads_map is not None or self.writes_map is not None:
+        if not self.reads_map.is_empty() or not self.writes_map.is_empty():
             raise RuntimeError("Cannot merge domains that already have access relations defined (stmt() calls). Merge domains before defining statements.")
         return domain(self.uset | other.uset)
     

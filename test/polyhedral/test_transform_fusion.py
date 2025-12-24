@@ -139,48 +139,50 @@ def softmax():
     zero = I.expr(0)
 
     with P.parameter("M, N, D, DV"):  # D/DV unused but consistent
-        d0 = P.domain("{ S_sm_init_max[i] : 0<=i<M }")
-        d1 = P.domain("{ S_sm_max[i,j] : 0<=i<M and 0<=j<N }")
-        d2 = P.domain("{ S_sm_init_sum[i] : 0<=i<M }")
-        d3 = P.domain("{ S_sm_exp_sum[i,j] : 0<=i<M and 0<=j<N }")
-        d4 = P.domain("{ S_sm_norm[i,j] : 0<=i<M and 0<=j<N }")
-
-        with (d0 | d1 | d2 | d3 | d4) as sm:
+        with P.domain("{ S_sm_init_max[i] : 0<=i<M }") as d0:
             with P.filter("{ S_sm_init_max[i] }"):
-                with P.band("{ S_sm_init_max[i] -> [i, 0] }"):
+                with P.band("{ S_sm_init_max[i] -> [i] }"):
                     P.stmt("Max[i] = -INF")[
                         lambda i: Max[i].assign(neg_inf)
                     ]
-
+        
+        with P.domain("{ S_sm_max[i,j] : 0<=i<M and 0<=j<N }") as d1:
             with P.filter("{ S_sm_max[i,j] }"):
-                with P.band("{ S_sm_max[i,j] -> [i, 1, j] }"):
+                with P.band("{ S_sm_max[i,j] -> [i, j] }"):
                     P.stmt("Max[i] = Max[i], Score[i,j]")[
                         lambda i, j: Max[i].assign(Max[i].max(Score[i, j]))
                     ]
-
+        
+        with P.domain("{ S_sm_init_sum[i] : 0<=i<M }") as d2:
             with P.filter("{ S_sm_init_sum[i] }"):
-                with P.band("{ S_sm_init_sum[i] -> [i, 2] }"):
+                with P.band("{ S_sm_init_sum[i] -> [i] }"):
                     P.stmt("Sum[i] = 0")[
                         lambda i: Sum[i].assign(zero)
                     ]
 
+        with P.domain("{ S_sm_exp_sum[i,j] : 0<=i<M and 0<=j<N }") as d3:
             with P.filter("{ S_sm_exp_sum[i,j] }"):
-                with P.band("{ S_sm_exp_sum[i,j] -> [i, 3, j] }"):
-                    P.stmt("Tmp[i,j] = Score[i,j], Max[i]; Sum[i] = Sum[i], Tmp[i,j]")[
-                        lambda i, j:
-                            (
-                                Tmp[i, j].assign(_exp((Score[i, j] - Max[i]))),
-                                Sum[i].assign(Sum[i] + Tmp[i, j]),
-                            )
-                    ]
+                with P.band("{ S_sm_exp_sum[i,j] -> [i, j] }"):
+                    P.stmt("Tmp[i, j] = Score[i, j], Max[i]")#[
+#                        lambda i, j:
+#                            (
+#                                Tmp[i, j].assign(_exp((Score[i, j] - Max[i]))),
+#                            )
+#                    ]
+                    P.stmt("Sum[i] = Sum[i], Tmp[i, j]")#[
+#                        lambda i, j:
+#                            (
+#                                Sum[i].assign(Sum[i] + Tmp[i, j]),
+#                            )
+#                    ]
 
+        with P.domain("{ S_sm_norm[i,j] : 0<=i<M and 0<=j<N }") as d4:
             with P.filter("{ S_sm_norm[i,j] }"):
-                with P.band("{ S_sm_norm[i,j] -> [i, 4, j] }"):
-                    P.stmt("Prob[i,j] = Tmp[i,j], Sum[i]")[
-                        lambda i, j: Prob[i, j].assign(Tmp[i, j] / Sum[i])
-                    ]
-
-    return sm.finalize()
+                with P.band("{ S_sm_norm[i,j] -> [i, j] }"):
+                    P.stmt("Prob[i,j] = Tmp[i,j], Sum[i]")#[
+#                        lambda i, j: Prob[i, j].assign(Tmp[i, j] / Sum[i])
+#                   ]
+    return d0.finalize() + d1.finalize() + d2.finalize() + d3.finalize() + d4.finalize()
 
 @pytest.fixture()
 def gemm_v():
@@ -207,5 +209,6 @@ def gemm_v():
 
     return pv.finalize()
 
-def test_flash_attention(softmax):
-    print(softmax)
+def test_flash_attention(gemm_qk, softmax, gemm_v):
+    with (gemm_qk+softmax+gemm_v).editor() as flash_attention:
+        print(flash_attention.to_c())
