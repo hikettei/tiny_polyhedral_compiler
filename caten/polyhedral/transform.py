@@ -1,8 +1,14 @@
+from typing import Dict, Callable
 import caten.isl as I
-from .analysis import a
+from .analysis import compute_flow, compute_dependence_relation
 
-def create_constrainted_schedule(root, read_umap, write_umap, stmts):
-    pass
+def create_constrainted_schedule(
+        schedule: I.Schedule,
+        read_umap: I.Schedule,
+        write_umap: I.Schedule,
+        stmts: Dict[str, Callable]):
+    deps, raw, waw, war = compute_dependence_relation(read_umap, write_umap, schedule)
+    return ConstraintedModel
 
 class ConstraintedModel():
     def __init__(self):
