@@ -23,6 +23,7 @@ def test_matmul_dispatcher(matmul):
         assert isinstance(mm, P.Dispatcher)
         mm: P.DomainEditor = mm.domain()[0]
         with mm.band().permute(0, 2, 1) as mm: # todo: interchange
+            print(mm)
             mm.tile([128, 128, 128])
             print(mm)
             with mm[0].band() as mm:
