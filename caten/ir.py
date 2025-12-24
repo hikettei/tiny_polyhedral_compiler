@@ -78,33 +78,38 @@ class BinaryOps():
 class TernaryOps():
     def verify(self): verify_tensor_op(self, 3)
 ### UnaryOps
+@dataclass(frozen=True)
 class Neg(ATenOp, UnaryOps):
     """
     OUT = -X
     """
     pass
 
+@dataclass(frozen=True)
 class Recip(ATenOp, UnaryOps):
     pass
 
+@dataclass(frozen=True)
 class Sin(ATenOp, UnaryOps):
     pass
 
+@dataclass(frozen=True)
 class Exp2(ATenOp, UnaryOps):
     pass
 
+@dataclass(frozen=True)
 class Log2(ATenOp, UnaryOps):
     pass
 
+@dataclass(frozen=True)
 class Sqrt(ATenOp, UnaryOps):
     pass
 
-class Cast(ATenOp, UnaryOps):
-    pass
-    
+@dataclass(frozen=True)
 class Bitcast(ATenOp, UnaryOps):
     pass
 
+@dataclass(frozen=True)
 class Not(ATenOp, UnaryOps):
     """
     Logical not if the X is a boolean
@@ -112,6 +117,7 @@ class Not(ATenOp, UnaryOps):
     """
     pass
 ### BinaryOps
+@dataclass(frozen=True)
 class Add(ATenOp, BinaryOps):
     """
     OUT = Add(X, Y)
@@ -120,6 +126,7 @@ class Add(ATenOp, BinaryOps):
     def from_ast_expr(cls):
         pass
 
+@dataclass(frozen=True)
 class Mul(ATenOp, BinaryOps):
     """
     OUT = Mul(X, Y)
@@ -128,43 +135,55 @@ class Mul(ATenOp, BinaryOps):
     def from_ast_expr(cls):
         pass
 
+@dataclass(frozen=True)
 class IDiv(ATenOp, BinaryOps):
     pass
 
+@dataclass(frozen=True)
 class And(ATenOp, BinaryOps):
     pass
 
+@dataclass(frozen=True)
 class Or(ATenOp, BinaryOps):
     pass
 
+@dataclass(frozen=True)
 class And(ATenOp, BinaryOps):
     pass
 
+@dataclass(frozen=True)
 class Xor(ATenOp, BinaryOps):
     pass
 
+@dataclass(frozen=True)
 class Max(ATenOp, BinaryOps):
     pass
 
+@dataclass(frozen=True)
 class Mod(ATenOp, BinaryOps):
     pass
 
+@dataclass(frozen=True)
 class Neq(ATenOp, BinaryOps):
     pass
 
+@dataclass(frozen=True)
 class Lt(ATenOp, BinaryOps):
     pass
 ### TernaryOps
+@dataclass(frozen=True)
 class Where(ATenOp, TernaryOps):
     pass
 
 ### Allocation
+@dataclass(frozen=True)
 class Const(ATenOp):
-    value: Union[int, float, str]
+    value: Union[int, float, str] = 0.0
     @staticmethod
-    def new(val: Union[int, float, str], dtype: DType):
-        return Const(val, T=ATenOpType(shape=[], dtype=dtype))
+    def new(value: Union[int, float, str], dtype: DType):
+        return Const(args=[], value=value, T=ATenOpType(shape=[], dtype=dtype))
 
+@dataclass(frozen=True)
 class Allocate(ATenOp):
     """
     Allocate(S1, S2, S3, ...)
@@ -173,6 +192,7 @@ class Allocate(ATenOp):
     def new(shape: List[Any], dtype: DType):
         return Allocate([], T=ATenOpType.from_shape(shape, dtype))
 
+@dataclass(frozen=True)
 class View(ATenOp):
     """
     View(X, T=T_New)
@@ -181,6 +201,7 @@ class View(ATenOp):
     def new(tensor: ATenOp, view: ATenOpType):
         pass
 ## == JIT =====================================================================
+@dataclass(frozen=True)
 class Reduce(ATenOp):
     """
     OUT = Reduce(A, B, op=BinaryOps)
@@ -190,21 +211,27 @@ class Reduce(ATenOp):
     def from_ast_expr(cls):
         pass
 
+@dataclass(frozen=True)
 class Store(ATenOp):
     pass
 ## ControlFlow
+@dataclass(frozen=True)
 class Range(ATenOp):
     pass
 
+@dataclass(frozen=True)
 class Loop(ATenOp):
     pass
 
+@dataclass(frozen=True)
 class When(ATenOp):
     pass
 
+@dataclass(frozen=True)
 class Progn(ATenOp):
     pass
 ## == ScheduleOps ============================================================
+@dataclass(frozen=True)
 class Polyhedral(ATenOp):
     pass
 
