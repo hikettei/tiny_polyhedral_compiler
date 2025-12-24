@@ -14,6 +14,8 @@ from .enums import _ISL_AST_NODE_TYPE_MAP
 
 if TYPE_CHECKING:
     from .ast_expr import ASTExpr
+    from .ast_node_list import AstNodeList
+    from .ast_print_options import ASTPrintOptions
     from .context import Context
     from .id import Id
     from .printer import Printer

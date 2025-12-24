@@ -58,17 +58,19 @@ Semantics:
 Returns:
   boolean
     """
-    if dep.is_empty(): return True
+    if dep.is_empty():
+        return True
     sched_map = schedule.get_map()
     # { t_src -> t_dst }
     domain = dep.apply_domain(sched_map)
     domain = domain.apply_range(sched_map)
     # { t_dst - t_src }
     delta = domain.deltas()
-    if delta.is_empty(): return False
+    if delta.is_empty():
+        return False
     zeros = zero_vector_union_set(delta)
     le = delta.lex_le_union_set(zeros)
     return le.is_empty()
 
-def compute_parallel():
+def compute_parallel() -> None:
     pass

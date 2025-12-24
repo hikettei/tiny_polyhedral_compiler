@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 import caten.isl as I
 
+if TYPE_CHECKING:
+    from .schedule import ScheduleNodeBase
 
 class DotVisualizer:
-    def __init__(self, title: str):
+    def __init__(self, title: str) -> None:
         self.lines = [
             f'digraph "{title}" {{',
             'node [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", color="#333333", fillcolor="#F5F5F5"];',
@@ -15,7 +17,7 @@ class DotVisualizer:
         ]
         self.node_counter = 0
 
-    def add_node(self, label: str, **attrs) -> str:
+    def add_node(self, label: str, **attrs: Any) -> str:
         node_id = f"node_{self.node_counter}"
         self.node_counter += 1
         attr_str = ", ".join(f'{k}="{v}"' for k, v in attrs.items())
@@ -27,22 +29,22 @@ class DotVisualizer:
             self.lines.append(f'{node_id} [label="{label}", {attr_str}];')
         return node_id
 
-    def add_edge(self, src: str, dst: str, label: str = ""):
+    def add_edge(self, src: str, dst: str, label: str = "") -> None:
         attr_str = f'label="{label}"' if label else ""
         self.lines.append(f"{src} -> {dst} [{attr_str}];")
 
-    def render(self):
+    def render(self) -> str:
         self.lines.append("}")
         return "\n".join(self.lines)
 
 def _get_jupyter_graphviz(dot_source: str) -> Any:
     try:
-        import graphviz
+        import graphviz  # type: ignore
         return graphviz.Source(dot_source)
     except ImportError:
         class HtmlDot:
-            def __init__(self, src): self.src = src
-            def _repr_html_(self):
+            def __init__(self, src: str) -> None: self.src = src
+            def _repr_html_(self) -> str:
                 return f"<div style='border:1px solid #ccc; padding:10px; white-space:pre; font-family:monospace'>{self.src}</div><div style='color:red'>graphviz module not found. try %pip install graphviz</div>"
         return HtmlDot(dot_source)
 
@@ -67,7 +69,7 @@ def split_at_top_level(s: str, separators: List[str]) -> List[str]:
     Splits a string at the given separators, but only if not nested inside [], {}, ().
     """
     res = []
-    current = []
+    current: List[str] = []
     depth = 0
     i = 0
     while i < len(s):
@@ -161,32 +163,32 @@ def print_schedule(node: "I.ScheduleNode") -> str:
             return items
             
         max_lhs_len = 0
-        split_data = []
+        split_data: List[Tuple[str, Optional[str]]] = []
         
         for item in items:
             if separator in item:
-                lhs, rhs = item.split(separator, 1)
-                lhs = lhs.strip()
-                rhs = rhs.strip()
+                parts = item.split(separator, 1)
+                lhs: str = parts[0].strip()
+                rhs: str = parts[1].strip()
                 max_lhs_len = max(max_lhs_len, len(lhs))
                 split_data.append((lhs, rhs))
             else:
                 split_data.append((item, None))
         
         aligned = []
-        for lhs, rhs in split_data:
-            if rhs is not None:
-                aligned.append(f"{lhs.ljust(max_lhs_len)} {separator} {rhs}")
+        for left, right in split_data:
+            if right is not None:
+                aligned.append(f"{left.ljust(max_lhs_len)} {separator} {right}")
             else:
-                aligned.append(lhs)
+                aligned.append(left)
         return aligned
 
-    def _rec(n: "I.ScheduleNode", indent: str):
+    def _rec(n: "I.ScheduleNode", indent: str) -> None:
         t_name = n.get_type_name()
         
         # 1. Extract Data
         header_text = f"[{t_name}]"
-        items = []
+        items: List[str] = []
         
         if t_name == "domain":
             params, body = parse_isl_object(n.domain_get_domain())
@@ -260,12 +262,12 @@ def print_schedule(node: "I.ScheduleNode") -> str:
             _rec(n.child(i), child_indent)
 
     # Root wrapper
-    root_type = node.get_type_name()
+    # root_type = node.get_type_name()
     
     _rec(node.get_schedule().get_root(), "    ")
     return "\n".join(output_lines)
 
-def viz_schedule(node: Union["I.ScheduleNode", "P.ScheduleNodeBase"]) -> Any:
+def viz_schedule(node: Union["I.ScheduleNode", "ScheduleNodeBase"]) -> Any:
     if hasattr(node, "get_node"):
         node = node.get_node()
     
@@ -285,11 +287,11 @@ def viz_schedule(node: Union["I.ScheduleNode", "P.ScheduleNodeBase"]) -> Any:
             return f"{lhs} → {rhs}"
         return item
 
-    def _rec(n: "I.ScheduleNode", parent_id: Optional[str] = None):
+    def _rec(n: "I.ScheduleNode", parent_id: Optional[str] = None) -> None:
         t_name = n.get_type_name()
         fillcolor = "#FFFFFF"
         
-        items = []
+        items: List[str] = []
         params = ""
         
         if t_name == "domain":
@@ -323,7 +325,8 @@ def viz_schedule(node: Union["I.ScheduleNode", "P.ScheduleNodeBase"]) -> Any:
         # Build HTML Label
         rows = []
         header_text = f"[{t_name}]"
-        if params: header_text += f" ({params})"
+        if params:
+            header_text += f" ({params})"
         header_text = html.escape(header_text)
         
         separator = None
@@ -341,7 +344,7 @@ def viz_schedule(node: Union["I.ScheduleNode", "P.ScheduleNodeBase"]) -> Any:
         
         for item in items:
             clean_item = html.escape(item)
-            if use_two_cols and separator in item:
+            if use_two_cols and separator and separator in item:
                 parts = item.split(separator, 1)
                 left = html.escape(parts[0].strip())
                 right = html.escape(parts[1].strip())
@@ -370,7 +373,7 @@ def viz_ast(node: "I.ASTNode") -> Any:
     viz = DotVisualizer("AST")
     from caten.isl.specs.enums import isl_ast_node_type
     
-    def _rec(n: "I.ASTNode", parent_id: Optional[str] = None, edge_label: str = ""):
+    def _rec(n: "I.ASTNode", parent_id: Optional[str] = None, edge_label: str = "") -> None:
         ntype = n.get_type()
         label = ""
         fillcolor = "#FFFFFF"
@@ -384,7 +387,8 @@ def viz_ast(node: "I.ASTNode") -> Any:
             label = f"FOR {it}\nInit: {init}\nCond: {cond}\nInc: {inc}"
             fillcolor = "#E3F2FD"
             current_id = viz.add_node(label, fillcolor=fillcolor)
-            if parent_id: viz.add_edge(parent_id, current_id, edge_label)
+            if parent_id:
+                viz.add_edge(parent_id, current_id, edge_label)
             
             _rec(n.for_get_body(), current_id)
             
@@ -394,7 +398,8 @@ def viz_ast(node: "I.ASTNode") -> Any:
             fillcolor = "#FFEBEE"
             shape = "diamond"
             current_id = viz.add_node(label, shape=shape, fillcolor=fillcolor)
-            if parent_id: viz.add_edge(parent_id, current_id, edge_label)
+            if parent_id:
+                viz.add_edge(parent_id, current_id, edge_label)
             
             _rec(n.if_get_then(), current_id, "True")
             if n.if_has_else():
@@ -404,7 +409,8 @@ def viz_ast(node: "I.ASTNode") -> Any:
             label = "BLOCK"
             fillcolor = "#ECEFF1"
             current_id = viz.add_node(label, fillcolor=fillcolor)
-            if parent_id: viz.add_edge(parent_id, current_id, edge_label)
+            if parent_id:
+                viz.add_edge(parent_id, current_id, edge_label)
             
             children = n.block_get_children()
             count = children.n_ast_node()
@@ -416,7 +422,8 @@ def viz_ast(node: "I.ASTNode") -> Any:
             label = f"MARK\n{mk.name()}"
             fillcolor = "#FFF8E1"
             current_id = viz.add_node(label, fillcolor=fillcolor)
-            if parent_id: viz.add_edge(parent_id, current_id, edge_label)
+            if parent_id:
+                viz.add_edge(parent_id, current_id, edge_label)
             _rec(n.mark_get_node(), current_id)
             
         elif ntype == isl_ast_node_type.ISL_AST_NODE_USER:
@@ -424,13 +431,14 @@ def viz_ast(node: "I.ASTNode") -> Any:
             label = f"USER\n{expr.to_C_str()}"
             fillcolor = "#E8F5E9"
             current_id = viz.add_node(label, fillcolor=fillcolor)
-            if parent_id: viz.add_edge(parent_id, current_id, edge_label)
+            if parent_id:
+                viz.add_edge(parent_id, current_id, edge_label)
             
         else:
             label = "UNKNOWN"
             current_id = viz.add_node(label)
-            if parent_id: viz.add_edge(parent_id, current_id, edge_label)
+            if parent_id:
+                viz.add_edge(parent_id, current_id, edge_label)
 
     _rec(node)
     return _get_jupyter_graphviz(viz.render())
-

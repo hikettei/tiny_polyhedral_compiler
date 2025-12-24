@@ -12,7 +12,7 @@ from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
-    from .astexpr import ASTExpr
+    from .ast_expr import ASTExpr
     from .context import Context
 
 _lib = load_libisl()
@@ -35,7 +35,7 @@ class AstExprList(ISLObject, ISLObjectMixin):
         return _isl_ast_expr_list_copy(self, return_raw_pointer=True)
 
     @classmethod
-    def free_handle(cls, handle) -> None:
+    def free_handle(cls, handle: Any) -> None:
         _lib.isl_ast_expr_list_free(handle)
 
     @classmethod

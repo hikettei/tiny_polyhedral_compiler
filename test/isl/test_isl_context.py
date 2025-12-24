@@ -1,4 +1,4 @@
-import pytest
+import pytest  # type: ignore
 
 import caten.isl as I
 from caten.isl.ffi import load_libisl

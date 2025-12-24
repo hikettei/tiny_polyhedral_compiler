@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Type, TypeVar
 
 import caten.isl as I
 
 from .analysis import compute_dependence_relation, compute_schedule_legality
 
+T = TypeVar("T", bound="Dispatcher")
 
 class TraversalHelper():
-    def __init__(self, node: "I.ScheduleNode"):
+    def __init__(self, node: "I.ScheduleNode") -> None:
         self.node = node
     
     def current(self) -> Tuple[int, ...]:
@@ -22,17 +23,18 @@ class TraversalHelper():
     
     def switch(self, path: Sequence[int]) -> "I.ScheduleNode":
         current = self.node
-        for idx in path: current = current.child(idx)
+        for idx in path:
+            current = current.child(idx)
         return current
 
     def filter(self, predicate: Callable[["I.ScheduleNode", Sequence[int]], bool]) -> List[List[int]]:
         results: List[List[int]] = []
-        def explore(n: "I.ScheduleNode", path: List[int]) -> None:
+        def explore(n: "I.ScheduleNode", path: List[int]) -> None: 
             if predicate(n, path):
                 results.append(list(path))
             for i in range(n.n_children()):
                 explore(n.child(i), path + [i])
-        explore(node, [])
+        explore(self.node, [])
         return results
 
 @dataclass(frozen=True)
@@ -51,9 +53,9 @@ class ConstraintedModel:
     ) -> None:
         self.schedule = schedule
         self.stmts = stmts
-        self.read_umap = read_maps
-        self.write_umap = write_maps
-        self.deps, _, _, _ = compute_dependence_relation(read_maps, write_maps, schedule)
+        self.read_umap = read_maps if read_maps is not None else I.UnionMap("{}")
+        self.write_umap = write_maps if write_maps is not None else I.UnionMap("{}")
+        self.deps, _, _, _ = compute_dependence_relation(self.read_umap, self.write_umap, schedule)
         self.history: List[OptRecord] = [] # TODO
 
     @classmethod
@@ -66,7 +68,8 @@ class ConstraintedModel:
     ) -> "ConstraintedModel":
         return cls(schedule, read_umap, write_umap, stmts)
 
-    def editor(self) -> "Dispatcher": return Dispatcher(self.schedule.get_root(), self)
+    def editor(self) -> "Dispatcher":
+        return Dispatcher(self.schedule.get_root(), self)
 
     def __add__(self, other: "ConstraintedModel") -> "ConstraintedModel":
         read_umap = self.read_umap | other.read_umap
@@ -81,11 +84,11 @@ class ConstraintedModel:
             schedule, read_umap, write_umap, stmts=self.stmts | other.stmts
         )
 
-    def update_schedule(self, new_schedule: I.Schedule):
+    def update_schedule(self, new_schedule: I.Schedule) -> None:
         self.schedule = new_schedule
 
-def transformation(body: Callable[Any, I.ScheduleNode]):
-    def f(*args, **kwargs):
+def transformation(body: Callable[..., I.ScheduleNode]) -> Callable[..., Any]:
+    def f(*args: Any, **kwargs: Any) -> Any:
         new_schedule = body(*args, **kwargs)
         assert isinstance(new_schedule, I.ScheduleNode)
         assert isinstance(args[0], Dispatcher)
@@ -101,7 +104,10 @@ class Dispatcher:
         self.model = model
         self.path = TraversalHelper(node).current()
 
-    def commit(self, name: str, new_schedule: I.ScheduleNode) -> I.ScheduleNode:
+    def commit(self, name: str, new_schedule: I.ScheduleNode) -> "Dispatcher":
+        return self.commit_dispatcher(name, new_schedule)
+
+    def commit_dispatcher(self, name: str, new_schedule: I.ScheduleNode) -> "Dispatcher":
         if not compute_schedule_legality(new_schedule.get_schedule(), self.model.deps):
             raise RuntimeError(
                 f"Detected illegal loop transformation: {name}."
@@ -110,7 +116,7 @@ class Dispatcher:
         # [TODO] Update records
         self.model.update_schedule(new_schedule.get_schedule())
         return self
-    
+
     @property
     def node(self) -> I.ScheduleNode:
         return TraversalHelper(self.model.schedule.get_root()).switch(self.path)
@@ -131,7 +137,7 @@ class Dispatcher:
         # TODO: 元のPathまで戻ってくる
         return None
 
-    def ensure_and_dispatch(self, cls: type["Dispatcher"], expect: str) -> "Dispatcher":
+    def ensure_and_dispatch(self, cls: Type[T], expect: str) -> T:
         if not self.node.get_type_name() == expect:
             raise RuntimeError(
                 f"Cannot switch to the {expect}, you are now at {self.node.get_type_name()}!.\n"
@@ -161,8 +167,7 @@ class Dispatcher:
         # [TODO]
         raise TypeError("mark expects a Directive or string id.")
 
-class DomainEditor(Dispatcher):
-    # TODO:
+class DomainEditor(Dispatcher):    # TODO:
     # padding
     pass
 
@@ -230,10 +235,11 @@ class BandEditor(Dispatcher):
         return self.node.band_sink()
 
     @transformation
-    def permute(self, *order: List[int]) -> I.ScheduleNode:
+    def permute(self, *order: int) -> I.ScheduleNode:
         if sorted(order) != list(range(self.depth)):
             raise RuntimeError(f"order is not a valid permutation, getting {order}, depth={self.depth}")
-        def _perm(lst): return [lst[i] for i in order]
+        def _perm(lst: List[Any]) -> List[Any]:
+            return [lst[i] for i in order]
         
         mupa = self.node.band_get_partial_schedule()
         upas = _perm([mupa.get_union_pw_aff(i) for i in range(self.depth)])
@@ -245,12 +251,12 @@ class BandEditor(Dispatcher):
             band = band.band_member_set_coincident(i, coincidents[i])
         return band
 
-    def __mul__(self, other: Any) -> "BandEditor": return self.scale(other)
-    def __floordiv__(self, other: Any) -> "BandEditor": return self.scale_down(other)
-    def __mod__(self, other: Any) -> "BandEditor": return self.mod(other)
-    def __add__(self, other: Any) -> "BandEditor": return self.shift(other)
-    def __sub__(self, other: Any) -> "BandEditor": return self.shift([-x for x in other])
-    def __matmul__(self, other: Any) -> "BandEditor": return self.tile(other)
+    def __mul__(self, other: Any) -> "BandEditor": return self.scale(other) # type: ignore
+    def __floordiv__(self, other: Any) -> "BandEditor": return self.scale_down(other) # type: ignore
+    def __mod__(self, other: Any) -> "BandEditor": return self.mod(other) # type: ignore
+    def __add__(self, other: Any) -> "BandEditor": return self.shift(other) # type: ignore
+    def __sub__(self, other: Any) -> "BandEditor": return self.shift([-x for x in other]) # type: ignore
+    def __matmul__(self, other: Any) -> "BandEditor": return self.tile(other) # type: ignore
 
 class SequenceEditor(Dispatcher):
     # [TODO]
@@ -281,7 +287,7 @@ class SequenceEditor(Dispatcher):
         return cursor
     
     @transformation
-    def reorder(self, *order: List[int]) -> I.ScheduleNode:
+    def reorder(self, *order: int) -> I.ScheduleNode:
         if sorted(order) != list(range(self.node.n_children())):
             raise RuntimeError(f"order is not a valid permutation, getting {order}, depth={self.node.n_children()}")
         filters = I.UnionSetList.alloc(0)
@@ -304,9 +310,11 @@ class SequenceEditor(Dispatcher):
                 filters2 = f if filters2 is None else filters2 | f
         filters = I.UnionSetList.alloc(0)
         assert filters2 is not None, f"group: nothing involved in range({start}, {end})"
-        for f in filters1: filters += f
+        for f in filters1:
+            filters += f
         filters += filters2
-        for f in filters3: filters += f
+        for f in filters3:
+            filters += f
         return self.node.insert_sequence(filters)
     
 class SetEditor(SequenceEditor):

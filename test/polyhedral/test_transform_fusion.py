@@ -1,4 +1,6 @@
-import pytest
+from typing import Any
+
+import pytest  # type: ignore
 
 import caten.isl as I
 import caten.polyhedral as P
@@ -10,8 +12,8 @@ W_OUT = 128
 H_POOL = (H_OUT - S_POOL) // S_POOL + 1
 W_POOL = (W_OUT - S_POOL) // S_POOL + 1
 
-@pytest.fixture()
-def conv2d():
+@pytest.fixture()  # type: ignore
+def conv2d() -> Any:
     out, inp, wei = map(I.expr, ("Out", "In", "W"))
     zero = I.expr(0)
 
@@ -45,8 +47,8 @@ def conv2d():
     return conv.finalize()
 
 
-@pytest.fixture()
-def pool2d():
+@pytest.fixture()  # type: ignore
+def pool2d() -> Any:
     S_pool = I.expr(S_POOL)
     pool_buf, out = map(I.expr, ("PoolBuf", "Out"))
     neg_inf = I.expr("NEG_INF")
@@ -81,7 +83,7 @@ def pool2d():
                     ]
     return pool.finalize()
 
-def test_conv_pool_manual_fusion(conv2d, pool2d):
+def test_conv_pool_manual_fusion(conv2d: Any, pool2d: Any) -> None:
     with (conv2d+pool2d).editor() as kernel:
         # Kernel Fusion
         with kernel.domain()[0] as dom:
@@ -105,8 +107,8 @@ def test_conv_pool_manual_fusion(conv2d, pool2d):
             print(kernel.to_c())
         # Kernel Optimization
 # == Flash Attention ==================================================================
-@pytest.fixture()
-def gemm_qk():
+@pytest.fixture()  # type: ignore
+def gemm_qk() -> Any:
     Q, K, Score = map(I.expr, ("Q", "K", "Score"))
     zero = I.expr(0)
 
@@ -130,8 +132,8 @@ def gemm_qk():
     return qk.finalize()
 
 @pytest.fixture()
-def softmax():
-    def _exp(x):
+def softmax() -> Any:
+    def _exp(x: Any) -> Any:
         return I.expr("expr").call(x)
     
     Score, Prob, Tmp, Max, Sum = map(I.expr, ("Score", "Prob", "Tmp", "Max", "Sum"))
@@ -184,8 +186,8 @@ def softmax():
 #                   ]
     return d0.finalize() + d1.finalize() + d2.finalize() + d3.finalize() + d4.finalize()
 
-@pytest.fixture()
-def gemm_v():
+@pytest.fixture()  # type: ignore
+def gemm_v() -> Any:
     Prob, V, Out = map(I.expr, ("Prob", "V", "OutAttn"))
     zero = I.expr(0)
 
@@ -209,7 +211,7 @@ def gemm_v():
 
     return pv.finalize()
 
-def test_flash_attention(gemm_qk, softmax, gemm_v):
+def test_flash_attention(gemm_qk: Any, softmax: Any, gemm_v: Any) -> None:
     with (gemm_qk+softmax+gemm_v).editor() as flash_attention:
         with flash_attention.domain()[0] as dom:
             with dom.sequence() as seq:

@@ -13,8 +13,11 @@ from .context import Context
 from .enums import _ISL_AST_EXPR_OP_TYPE_MAP, _ISL_AST_EXPR_TYPE_MAP
 
 if TYPE_CHECKING:
+    from .ast_node import ASTNode
     from .context import Context
     from .id import Id
+    from .id_to_ast_expr import IdToAstExpr
+    from .printer import Printer
     from .val import Val
 
 _lib = load_libisl()
@@ -177,13 +180,13 @@ class ASTExpr(ISLObject, ISLObjectMixin):
     def substitute_ids(self, id2expr: "IdToAstExpr") -> "ASTExpr":
         return _isl_ast_expr_substitute_ids(self, id2expr)
 
-    def call(self, *args: List["ASTExpr"]) -> "ASTExpr":
+    def call(self, *args: "ASTExpr") -> "ASTExpr":
         from .ast_expr_list import AstExprList
-        return _isl_ast_expr_call(self, AstExprList.from_exprs(args))
+        return _isl_ast_expr_call(self, AstExprList.from_exprs(list(args)))
 
-    def access(self, *indices: List["ASTExpr"]) -> "ASTExpr":
+    def access(self, *indices: "ASTExpr") -> "ASTExpr":
         from .ast_expr_list import AstExprList
-        return _isl_ast_expr_access(self, AstExprList.from_exprs(indices))
+        return _isl_ast_expr_access(self, AstExprList.from_exprs(list(indices)))
 
     def assign(self, expr2: "ASTExpr") -> "ASTNode":
         """

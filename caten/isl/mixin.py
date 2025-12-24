@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, cast
 
 from .obj import InPlace
 
@@ -112,4 +112,4 @@ class ISLObjectMixin:
 
     def __setitem__(self, key: Any, value: Any) -> Any:
         if hasattr(self, "set_val"):
-            return InPlace(self).set_val(key, value)
+            return InPlace(cast(Any, self)).set_val(key, value)

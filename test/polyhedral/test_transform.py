@@ -1,13 +1,14 @@
-import pytest
+from typing import Any
+
+import pytest  # type: ignore
 
 import caten.isl as I
 import caten.polyhedral as P
 
 
-@pytest.fixture()
-def matmul():
+@pytest.fixture()  # type: ignore
+def matmul() -> Any:
     A, B, C = map(I.expr, ("A", "B", "C"))
-    zero = I.expr(0)
 
     with P.parameter("M, N, K"):
         with P.domain("{ WMMA[i,j,k] : 0<=i<M and 0<=j<N and 0<=k<K }") as gemm:
@@ -19,10 +20,10 @@ def matmul():
 # TODO:
 # - Repro of the article
 # - test tile (padding)
-def test_matmul_dispatcher(matmul):
+def test_matmul_dispatcher(matmul: Any) -> None:
     with matmul.editor() as mm:
         assert isinstance(mm, P.Dispatcher)
-        mm: P.DomainEditor = mm.domain()[0]
+        mm = mm.domain()[0]
         with mm.band().permute(0, 2, 1) as mm: # todo: interchange
             mm.tile([128, 128, 128])
             with mm[0].band() as mm:

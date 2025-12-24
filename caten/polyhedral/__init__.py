@@ -4,9 +4,20 @@ from .schedule import band, domain, filter, get_builder, parameter, stmt
 from .transform import BandEditor, ConstraintedModel, Dispatcher, DomainEditor, FilterEditor
 
 __all__ = [
-    "analysys",
+    "analysis",
     "schedule",
     "transform",
     "viz",
-    "directive",
+    "Directive",
+    "band",
+    "domain",
+    "filter",
+    "get_builder",
+    "parameter",
+    "stmt",
+    "BandEditor",
+    "ConstraintedModel",
+    "Dispatcher",
+    "DomainEditor",
+    "FilterEditor",
 ]

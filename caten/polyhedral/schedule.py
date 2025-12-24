@@ -3,9 +3,12 @@ from __future__ import annotations
 import abc
 import contextvars
 import re
-from typing import Any, Callable, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Self, Union, cast
 
 import caten.isl as I
+
+if TYPE_CHECKING:
+    from .transform import ConstraintedModel
 
 
 ## ~~ ScheduleBuilder ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -23,7 +26,7 @@ def get_builder() -> ScheduleBuilder:
         b = ScheduleBuilder()
         _builder_ctx.set(b)
     return b
-## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
 class ScheduleNodeBase(metaclass=abc.ABCMeta):
     """
     Abstract base class for all schedule nodes in the DSL.
@@ -38,14 +41,14 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
         self.node_type: str = node_type
 
     @abc.abstractmethod
-    def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode": pass
+    def realize(self, parent: Optional["I.ScheduleNode"]) -> "I.ScheduleNode": pass
 
     def get_node(self) -> "I.ScheduleNode":
-        if not self.node:
+        if self.node is None:
             raise RuntimeError("Schedule node has not been realized yet. Ensure you are accessing this node within the appropriate context (e.g., inside a 'with P.domain(...):' block).")
         return self.node
     
-    def __enter__(self) -> "ScheduleNodeContext":
+    def __enter__(self) -> Self:
         builder = get_builder()
         # reset ctx
         if isinstance(self, domain):
@@ -54,13 +57,13 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
         node = None
         if builder.current_node:
             node = builder.current_node.child(builder.current_node.n_children()-1)
-        if isinstance(self, filter) and node.get_type_name() == "filter":
+        
+        if isinstance(self, filter) and node and node.get_type_name() == "filter":
             new_sequence = I.UnionSetList.alloc(0)
             new_sequence = new_sequence + node.filter_get_filter()
             new_sequence = new_sequence + self.filter_set
 
             node = node.delete()
-            n1 = node
             node = node.insert_sequence(new_sequence)
             node = node.child(node.n_children()-1)
             # new sequence element copies the structure of first children. delete them
@@ -76,29 +79,34 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         # Default exit behavior: move up to parent
+        builder = get_builder()
         if isinstance(self, domain):
-            self.node = get_builder().current_node.get_schedule().get_root()
+            current_node = builder.current_node
+            assert current_node is not None
+            self.node = current_node.get_schedule().get_root()
         else:
             self.node = None
-            builder = get_builder()
-            builder.current_node = builder.current_node.parent()
+            if builder.current_node:
+                builder.current_node = builder.current_node.parent()
 
     def __repr__(self) -> str:
-        if self.node is not None:
+        node = self.node
+        if node is not None:
             from caten.polyhedral.viz import print_schedule
-            return f"{self.node_type}(\n{print_schedule(self.node)}\n)"
+            return f"{self.node_type}(\n{print_schedule(node)}\n)"
         else:
             return f"{self.node_type}(Not Realized)"
 
     def viz(self) -> str:
-        if self.node is not None:
+        node = self.node
+        if node is not None:
             from caten.polyhedral.viz import viz_schedule
-            return viz_schedule(self.node)
+            return viz_schedule(node)
         else:
             return "(Not Realized)"
 
     def __getitem__(self, idx: int) -> "I.ScheduleNode":
-        return self.node.child(idx)
+        return self.get_node().child(idx)
 ## ~~ Specs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 class parameter():
     def __init__(self, params: str) -> None:
@@ -135,7 +143,7 @@ class domain(ScheduleNodeBase):
             case _:
                 raise TypeError(f"P.domain expected a string, Set, or UnionSet, but got {type(domain_set).__name__}.")
 
-    def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
+    def realize(self, parent: Optional["I.ScheduleNode"]) -> "I.ScheduleNode":
         if parent is not None:
              raise RuntimeError(f"P.domain must be the root of the schedule tree, but found a parent node: {parent}.")
         return I.Schedule.from_domain(self.uset).get_root()
@@ -147,12 +155,17 @@ class domain(ScheduleNodeBase):
     
     def to_c(self) -> str:
         from caten.polyhedral.codegen import schedule_to_c
+        if self.node is None:
+             raise RuntimeError("Cannot generate C code for unrealized domain.")
         return schedule_to_c(self.node.get_schedule(), self.stmt_lambdas)
 
-    def finalize(self):
-        assert self.node is not None, "Cannot finalize P.domain before finalizing schedules."
+    def finalize(self) -> "ConstraintedModel":
+        node = self.node
+        if node is None:
+            raise RuntimeError("Cannot finalize P.domain before finalizing schedules.")
+        node = cast(Any, node)
         from .transform import ConstraintedModel
-        return ConstraintedModel.from_schedule(self.node.get_schedule(), self.reads_map, self.writes_map, self.stmt_lambdas)
+        return ConstraintedModel.from_schedule(node.get_schedule(), self.reads_map, self.writes_map, self.stmt_lambdas)
 
 class band(ScheduleNodeBase):
     """
@@ -175,7 +188,7 @@ class band(ScheduleNodeBase):
             case _:
                 raise TypeError(f"P.band expected a string, UnionMap, or MultiUnionPwAff, but got {type(schedule).__name__}.")
 
-    def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
+    def realize(self, parent: Optional["I.ScheduleNode"]) -> "I.ScheduleNode":
         if parent is None:
             raise RuntimeError("P.band requires a parent node (e.g., inside a 'with P.domain(...):' block). Cannot create a band at the root level.")
         return parent.insert_partial_schedule(self.schedule)
@@ -185,7 +198,7 @@ class sequence(ScheduleNodeBase):
         super().__init__("ScheduleNodeSequence")
         self.filter_set_list = filter_set_list
         
-    def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
+    def realize(self, parent: Optional["I.ScheduleNode"]) -> "I.ScheduleNode":
         if parent is None:
              raise RuntimeError("P.sequence requires a parent node (e.g., inside a 'with P.domain(...):' block).")
         return parent.insert_sequence(self.filter_set_list)
@@ -208,7 +221,7 @@ class filter(ScheduleNodeBase):
             case _:
                 raise TypeError(f"P.filter expected a string or UnionSet, but got {type(filter_set).__name__}.")
 
-    def realize(self, parent: Optional["I.ScheduleNode"]) -> "ScheduleNode":
+    def realize(self, parent: Optional["I.ScheduleNode"]) -> "I.ScheduleNode":
         if parent is None:
             raise RuntimeError("P.filter requires a parent node (e.g., inside a 'with P.domain(...):' block).")
         return parent.insert_filter(self.filter_set)
@@ -240,18 +253,21 @@ def stmt(expr: str) -> StmtContext:
         raise ValueError(f"Invalid statement expression: {expr}")
     
     # 1. Get Universe Domain & Check Uniqueness
-    univ = builder.current_node.get_universe_domain()
+    current_node = builder.current_node
+    if current_node is None:
+        raise RuntimeError("stmt() is called outside of a domain context (no active schedule node).")
+    univ = current_node.get_universe_domain()
     if univ.n_set() != 1:
         raise ValueError(f"stmt() requires exactly one active statement, but found {univ.n_set()}.")
     
     # 2. Stringify and extract "S[i, j]" from "[P] -> { S[i, j] }"
-    dom_tuple_str = str(univ).split(" -> ")[-1].strip("{} ")
+    dom_tuple_str = str(univ).split(" -> ")[-1].replace("{", "").replace("}", "").strip()
 
     lhs_str, rhs_str = expr.split("=", 1)
     
     def add_accesses(s: str, is_write: bool) -> None:
         for name, indices in re.findall(r"([a-zA-Z_]\w*)\s*\[(.*?)\]", s):
-            # Helper to build map: [params] -> { S[...] -> A[...] }
+            # Helper to build map: [params] -> {{ S[...] -> A[...] }}
             m_str = f"{builder.params} -> {{ {dom_tuple_str} -> {name}[{indices}] }}"
             m = I.UnionMap(m_str)
             if is_write:
