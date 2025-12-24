@@ -230,7 +230,7 @@ class BandEditor(Dispatcher):
     @transformation
     def permute(self, *order: List[int]) -> I.ScheduleNode:
         if sorted(order) != list(range(self.depth)):
-            raise RuntimeError(f"order is not a valid permutation, getting {order_arg}, depth={self.depth}")
+            raise RuntimeError(f"order is not a valid permutation, getting {order}, depth={self.depth}")
         def _perm(lst): return [lst[i] for i in order]
         
         mupa = self.node.band_get_partial_schedule()
@@ -277,6 +277,14 @@ class SequenceEditor(Dispatcher):
         if mupa is not None:
             cursor = cursor.insert_partial_schedule(mupa)
         return cursor
+    @transformation
+    def reorder(self, *order: List[int]) -> I.ScheduleNode:
+        if sorted(order) != list(range(self.node.n_children())):
+            raise RuntimeError(f"order is not a valid permutation, getting {order}, depth={self.node.n_children()}")
+        filters = I.UnionSetList.alloc(0)
+        for i in range(self.node.n_children()):
+            filters = filters + self[order[i]].filter().node.filter_get_filter()
+        return self.node.insert_sequence(filters)
 
 class SetEditor(SequenceEditor):
     pass

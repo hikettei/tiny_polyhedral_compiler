@@ -58,10 +58,18 @@ def pool2d():
 
 def test_conv_pool_fusion(conv2d, pool2d):
     with (conv2d+pool2d).editor() as kernel:
-        with kernel.domain()[0].sequence() as batch:
-            batch[0].filter()[0].band().split(1)
-            batch[1].filter()[0].band().split(1)
-            batch[2].filter()[0].band().split(1)
-            batch[3].filter()[0].band().split(1)
-            batch.fuse()
-            print(batch.to_c())
+        print(kernel.model.deps)
+        with kernel.domain()[0] as dom:
+            # maximize fusion?
+            with dom.sequence() as nk:
+                nk[0].filter()[0].band().split(2)
+                nk[1].filter()[0].band().split(2)
+                nk[2].filter()[0].band().split(2)
+                nk[3].filter()[0].band().split(2)
+                nk.fuse()
+            dom.band()[0].sequence().reorder(0, 2, 1, 3)
+            with dom.band()[0].sequence()[3].filter()[0].band() as pool_hw:
+                pool_hw.split(2)
+                pool_hw.tile([2, 2])
+                print(pool_hw)
+                print(pool_hw.to_c())

@@ -59,7 +59,7 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
 
             node = node.delete()
             n1 = node
-            node = node.copy().insert_sequence(new_sequence)
+            node = node.insert_sequence(new_sequence)
             node = node.child(node.n_children()-1)
             # new sequence element copies the structure of first children. delete them
             node = node.child(0).cut().parent()
@@ -145,7 +145,7 @@ class domain(ScheduleNodeBase):
     
     def to_c(self) -> str:
         from caten.polyhedral.codegen import schedule_to_c
-        return schedule_to_c(self.node.get_schedule(), self.stmts)
+        return schedule_to_c(self.node.get_schedule(), self.stmt_lambdas)
 
     def finalize(self):
         assert self.node is not None, "Cannot finalize P.domain before finalizing schedules."
