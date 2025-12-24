@@ -24,7 +24,7 @@ class ATenOpType():
     is_ptr: bool = False # for vectorize
     def index(self, indices: List[ATenOp]):
         assert self.ndim == len(indices)
-        total = itertools.accumlate([b.index(a) for (a, b) in zip(indices, self.shape)], lambda a, b: Add([a, b]), initial=Const.new(0, index))
+        total = itertools.accumulate([b.index(a) for (a, b) in zip(indices, self.shape)], lambda a, b: Add([a, b]), initial=Const.new(0, index))
         if self.offset: total = Add([total, self.offset])
         return total
     @property
@@ -36,7 +36,7 @@ class ATenOpType():
             if not isinstance(a, Const): a = _const(a)
             if not isinstance(b, Const): b = _const(b)
             return Mul([a, b])
-        strides = tuple(itertools.accumlate(reversed(shape[1:]), _mul, initial=_const(1)))[::-1]
+        strides = tuple(itertools.accumulate(reversed(shape[1:]), _mul, initial=_const(1)))[::-1]
         return ATenOpType(
             shape=[ATenAxis(shape=size, stride=stride, offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides)],
             dtype=dtype,
