@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from abc import ABCMeta, abstractmethod
 from typing import List, Dict, Any
+import itertools
 from dataclasses import dataclass
-from .dtype import DType
+from .dtype import DType, index
 
 @dataclass(frozen=True)
 class ATenAxis():
@@ -19,18 +20,30 @@ class ATenAxis():
 class ATenOpType():
     shape: List[ATenAxis]
     dtype: DType
-    offset: ATenOp
-    
+    offset: Union[ATenOp, None] = None
+    @staticmethod
+    def from_shape(shape: List[Any], dtype: DType) -> ATenOpType:
+        def _const(val: int): return Const.new(val, index)
+        def _mul(a, b):
+            if not isinstance(a, Const): a = _const(a)
+            if not isinstance(b, Const): b = _const(b)
+            return Mul([a, b])
+        strides = tuple(itertools.accumulate(reversed(shape[1:]), _mul, initial=_const(1)))[::-1]
+        return ATenOpType(
+            shape=[ATenAxis(shape=size, stride=stride, offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides)],
+            dtype=dtype,
+        )
+
 @dataclass(frozen=True)
 class ATenOp(metaclass=ABCMeta):
     args: List[AtenOp]
-    T: ATenOpType
+    T: Union[ATenOpType, None] = None
     @classmethod
-    @abstractmethod
+#    @abstractmethod
     def from_astexpr(cls):
         pass
     
-    @abstractmethod
+#    @abstractmethod
     def infer_dtype(self):
         pass
 ## == Tensor Graph ============================================================
@@ -122,15 +135,20 @@ class Where(ATenOp, TernaryOps):
     pass
 
 ### Allocation
-class Variable(ATenOp):
-    symbol: str
+class Const(ATenOp):
+    value: Union[int, float, str]
+    @staticmethod
+    def new(val: Union[int, float, str], dtype: DType):
+        return Const(val, T=ATenOpType(shape=[], dtype=dtype))
 
 class Allocate(ATenOp):
     """
     Allocate(S1, S2, S3, ...)
     """
-    pass
-
+    @staticmethod
+    def new(shape: List[Any], dtype: DType):
+        return Allocate(shape, T=ATenOpType.from_shape(shape, dtype))
+        
 ## == JIT =====================================================================
 class Reduce(ATenOp):
     """

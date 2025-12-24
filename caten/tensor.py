@@ -3,6 +3,7 @@ from abc import ABCMeta, abstractmethod
 from typing import Any, Optional, Tuple, Union, ClassVar
 import os
 import caten.ir as ir
+from .dtype import float32
 # [TODO]
 # - Tensor => Fused Tensor Graph Construction
 # - Tensor Kernel Construction
@@ -24,8 +25,8 @@ class ATenSpec:
 class ATen:
     op: ATenOp # ATen is just a wrapper for ATenOp
     @classmethod
-    def from_shape(cls, shape: List[ATenOp]):
-        return ir.Allocate(shape) # TODO
+    def from_shape(cls, shape: List[ATenOp], dtype: DType=float32):
+        return ir.Allocate.new(shape, dtype)
     
     def apply(self, op: Callable, *args: List, **kwargs) -> ATen: return ATen(op=op(*args, **kwargs))
     
