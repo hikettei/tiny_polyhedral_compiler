@@ -1,5 +1,5 @@
 from . import analysis, schedule, transform, viz
-from .transform import ConstraintedModel, Dispatcher, DomainEditor, FilterEditor, BandEditor
+from .transform import ConstraintedModel, Dispatcher, DomainEditor, FilterEditor, BandEditor, Parallel
 from .schedule import band, domain, filter, parameter, stmt, get_builder
 
 __all__ = [

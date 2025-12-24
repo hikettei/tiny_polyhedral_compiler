@@ -108,6 +108,12 @@ def get_zero_union_set(uset: "I.UnionSet") -> "I.UnionSet":
         return I.UnionSet.empty(uset.get_space())
     return res
 
+def zero_vector_union_set(uset: "I.UnionSet") -> "I.UnionSet":
+    """
+    Return a singleton union-set containing the zero vector in the space of uset.
+    """
+    return get_zero_union_set(uset)
+
 def is_point_lex_negative(p: "I.Point") -> bool:
     # Check if point vector is lexicographically negative
     # isl_dim_set = 3
@@ -152,3 +158,22 @@ def schedule_is_legal_p(schedule: "I.Schedule", dep: "I.UnionMap") -> bool:
     # If the minimum is non-negative, all are non-negative.
     p = min_delta.sample_point()
     return not is_point_lex_negative(p)
+
+def schedule_node_band_parallel_legal_p(node: "I.ScheduleNode", dep: "I.UnionMap") -> bool:
+    """
+    Return True iff the given band node can be executed in parallel without
+    violating the dependence relation.
+    """
+    if dep.is_empty():
+        return True
+
+    if node.get_type_name() != "band":
+        raise ValueError("schedule_node_band_parallel_legal_p expects a band node.")
+
+    sched = node.band_get_partial_schedule_union_map()
+    domain = dep.apply_domain(sched).apply_range(sched)
+    delta = domain.deltas()
+    if delta.is_empty():
+        return True
+    zeros = zero_vector_union_set(delta)
+    return delta.is_subset(zeros)
