@@ -78,8 +78,12 @@ def kernel(get_kernel: bool = False) -> Callable:
         pass
     return decorator
 
-class Range():
+# how to generate polyhedral model from tensor ops?
+# rangeify -> range/when ==> polyhedral model
+# with C.range(10, 10):
+# with C.when(10, 10)
+class range():
     pass
 
-class When():
+class when():
     pass
