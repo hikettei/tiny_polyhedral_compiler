@@ -1,13 +1,16 @@
 from __future__ import annotations
 from abc import ABCMeta, abstractmethod
-from typing import Any, Optional, Tuple, Union
-
+from typing import Any, Optional, Tuple, Union, ClassVar
+import os
 import caten.ir as ir
 # [TODO]
 # - Tensor => Fused Tensor Graph Construction
 # - Tensor Kernel Construction
 # - Then, start working on auto scheduler
+## Backend Abstraction
 DEVICE_TO_TENSOR = {}
+def get_backend(): return os.environ.get("BACKEND", "CPU")
+##
 
 class ATenSpec:
     """
@@ -19,26 +22,23 @@ class ATenSpec:
     def __repr__(self) -> str: return f"TensorSpec({self.shape}, {self.dtype})"
 
 class ATen:
-    op: ATenOp # Just a wrapper for ATenOp
+    op: ATenOp # ATen is just a wrapper for ATenOp
     @classmethod
     def from_shape(cls, shape: List[ATenOp]):
-        pass
+        return ir.Allocate(shape) # TODO
     
-    def apply(self, other: Any, func: Any) -> Tensor:
-        other_node = other.node if isinstance(other, Tensor) else other
-        res_node = func(self.node, other_node)
-        return ATen(node=res_node)
+    def apply(self, op: Callable, *args: List, **kwargs) -> ATen: return ATen(op=op(*args, **kwargs))
     
     def __class_getitem__(cls, item: Union[Any, Tuple[Any, ...]]) -> TensorSpec:
         # Usage: C.Tensor[10, 10] -> TensorSpec((10, 10))
+        # TODO
         pass
 
-    def realize(self):
+    def polyhedral(self):
         pass
 
 class ATenMath():
-    def add(self, other):
-        pass
+    pass
 
 class ATenMovements():
     pass
@@ -49,14 +49,12 @@ class ATenNN():
 class ATenLinalg():
     pass
 
-class ATenMeta(ATen, ATenMath, ATenNN, ATenMovements, ATenLinalg, metaclass=ABCMeta):
-    # Tensor has a shape
-    # Tensor has a stride
-    # Tensor has a multi level offset
-    # Tensor can broadcast
-    # Tensor can have a computation graph
-    # Can lower
+class ATenBase(ATen, ATenMath, ATenNN, ATenMovements, ATenLinalg, metaclass=ABCMeta):
     ## == AbstractionLayer
+    @staticmethod
+    def register(device_id: str, cls: ClassVar):
+        DEVICE_TO_TENSOR[device_id] = cls
+    
     @abstractmethod
     def allocate(self):
         pass
@@ -65,6 +63,19 @@ class ATenMeta(ATen, ATenMath, ATenNN, ATenMovements, ATenLinalg, metaclass=ABCM
     def free(self):
         pass
 
+    @abstractmethod
+    def compile(self):
+        pass
+
+# TODO: Tensor(3, 3)ってやったら，自動でTensor = CPUTensorとかになる
+class Tensor(ATenBase):
+    def __new__(cls, *args, **kwargs):
+        if cls is Tensor:
+            impl = DEVICE_TO_TENSOR.get(get_backend())
+            if impl is None:
+                raise ValueError(f"Unknown BACKEND={get_backend()}")
+            return impl(*args, **kwargs)
+        return super().__new__(cls)
 ## For-Style Graph Construction
 def kernel(get_kernel: bool = False) -> Callable:
     def decorator(func: Callable) -> Callable:

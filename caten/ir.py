@@ -2,27 +2,44 @@ from __future__ import annotations
 
 from abc import ABCMeta, abstractmethod
 from typing import List, Dict, Any
-
+from dataclasses import dataclass
 from .dtype import DType
 
 @dataclass(frozen=True)
-class DTypeContext():
-    shape: List[ATenOp]
-    stride: List[ATenOp]
+class ATenAxis():
+    shape: ATenOp
+    stride: ATenOp
+    offset: ATenOp
+    incf: ATenOp
+    def index(self, i: ATenOp):
+        # TODO: Assert i.T.dtype is dtype.index
+        return Mul(self.stride, Add(Mul(i, self.incf), self.offset))
+
+@dataclass(frozen=True)
+class ATenOpType():
+    shape: List[ATenAxis]
     dtype: DType
+    offset: ATenOp
     
 @dataclass(frozen=True)
 class ATenOp(metaclass=ABCMeta):
     args: List[AtenOp]
-    T: DTypeContext
-    @abstractmethod
+    T: ATenOpType
     @classmethod
+    @abstractmethod
     def from_astexpr(cls):
         pass
+    
+    @abstractmethod
+    def infer_dtype(self):
+        pass
 ## == Tensor Graph ============================================================
-class UnaryOps():   def verify(self): verify_tensor_op(self, 1)
-class BinaryOps():  def verify(self): verify_tensor_op(self, 2)
-class TernaryOps(): def verify(self): verify_tensor_op(self, 3)
+class UnaryOps():
+    def verify(self): verify_tensor_op(self, 1)
+class BinaryOps():
+    def verify(self): verify_tensor_op(self, 2)
+class TernaryOps():
+    def verify(self): verify_tensor_op(self, 3)
 ### UnaryOps
 class Neg(ATenOp, UnaryOps):
     """
