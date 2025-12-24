@@ -206,7 +206,7 @@ class Reduce(ATenOp):
     """
     OUT = Reduce(A, B, op=BinaryOps)
     """
-    op: BinaryOps
+    op: BinaryOps = Add
     @classmethod
     def from_ast_expr(cls):
         pass
