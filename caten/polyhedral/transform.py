@@ -300,7 +300,6 @@ class Dispatcher:
             return self.current.insert_mark(I.Id.alloc(directive))
         raise TypeError("mark expects a Directive or string id.")
 
-
 class DomainEditor(Dispatcher):
     def padding(self) -> "DomainEditor":
         return self
@@ -308,10 +307,8 @@ class DomainEditor(Dispatcher):
     def reshape(self) -> "DomainEditor":
         return self
 
-
 class FilterEditor(Dispatcher):
     pass
-
 
 class BandEditor(Dispatcher):
     def get_tiling_sizes(self, sizes: int | List[int]) -> I.MultiVal:
@@ -395,23 +392,10 @@ class BandEditor(Dispatcher):
     def __matmul__(self, other: Any) -> "BandEditor":
         return self.tile(other)
 
-
 class SequenceEditor(Dispatcher):
     @transform_opt
     def fuse(self) -> I.ScheduleNode:
         return schedule_node_sequence_full_fuse(self.current)
-
-    @transform_opt
-    def reorder(self, order: List[int]) -> I.ScheduleNode:
-        return schedule_node_sequence_reorder(self.current, order)
-
-    def tpsort(self, read_umap: I.UnionMap, write_umap: I.UnionMap) -> List[int]:
-        return schedule_node_sequence_tpsort(self.current, read_umap, write_umap)
-
-    @transform_opt
-    def group_sequence(self) -> I.ScheduleNode:
-        return schedule_node_sequence_group_sequence(self.current)
-
 
 class SetEditor(Dispatcher):
     @transform_opt
