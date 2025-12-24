@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Optional, Tuple, Union, cast
+from typing import Tuple
 
 import caten.isl as I
+
 
 def compute_dependence_relation(read: I.UnionMap, write: I.UnionMap, schedule: I.Schedule) -> Tuple["I.UnionMap", "I.UnionMap", "I.UnionMap", "I.UnionMap"]:
     """

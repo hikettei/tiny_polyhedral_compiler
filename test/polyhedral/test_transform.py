@@ -3,6 +3,7 @@ import pytest
 import caten.isl as I
 import caten.polyhedral as P
 
+
 @pytest.fixture()
 def matmul():
     A, B, C = map(I.expr, ("A", "B", "C"))

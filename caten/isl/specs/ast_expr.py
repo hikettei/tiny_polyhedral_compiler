@@ -13,7 +13,6 @@ from .context import Context
 from .enums import _ISL_AST_EXPR_OP_TYPE_MAP, _ISL_AST_EXPR_TYPE_MAP
 
 if TYPE_CHECKING:
-    from .ast_expr_list import ASTExprList
     from .context import Context
     from .id import Id
     from .val import Val

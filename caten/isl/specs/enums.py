@@ -1,5 +1,6 @@
 from enum import IntEnum
 
+
 class isl_error(IntEnum):
     ISL_ERROR_NONE = 0
     ISL_ERROR_ABORT = 1

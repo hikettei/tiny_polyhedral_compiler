@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import caten.isl as I
+
 from .analysis import compute_dependence_relation, compute_schedule_legality
+
 
 class TraversalHelper():
     def __init__(self, node: "I.ScheduleNode"):

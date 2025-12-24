@@ -1,7 +1,5 @@
-from pydantic import BaseModel
 from abc import ABCMeta, abstractmethod
 
-import caten.isl as I
 
 class Directive(metaclass=ABCMeta):
     """

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import abc
-import re
-from typing import TYPE_CHECKING, Any, Optional, Union, List, Tuple, Callable, Dict
 import contextvars
+import re
+from typing import Any, Callable, Dict, Optional, Union
 
 import caten.isl as I
+
+
 ## ~~ ScheduleBuilder ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 class ScheduleBuilder:
     def __init__(self) -> None:

@@ -1,5 +1,7 @@
 from typing import Any
+
 from .obj import InPlace
+
 
 class ISLObjectMixin:
     """

@@ -3,6 +3,7 @@ import pytest
 import caten.isl as I
 import caten.polyhedral as P
 
+
 @pytest.fixture()
 def conv2d():
     out, inp, wei = map(I.expr, ("Out", "In", "W"))
@@ -67,9 +68,11 @@ def test_conv_pool_fusion(conv2d, pool2d):
                 nk[2].filter()[0].band().split(2)
                 nk[3].filter()[0].band().split(2)
                 nk.fuse()
-            dom.band()[0].sequence().reorder(0, 2, 1, 3)
-            with dom.band()[0].sequence()[3].filter()[0].band() as pool_hw:
-                pool_hw.split(2)
-                pool_hw.tile([2, 2])
-                print(pool_hw)
-                print(pool_hw.to_c())
+            print(dom)
+            with dom.band()[0].sequence() as hw:
+                hw[0].filter()[0].band().split(2)
+                hw[1].filter()[0].band().split(2)
+                hw[2].filter()[0].band().split(2).tile([2, 2]).scale_down([2, 2])
+                hw[3].filter()[0].band().split(2).tile([2, 2]).scale_down([2, 2])
+                #hw.fuse()
+            print(hw.to_c())

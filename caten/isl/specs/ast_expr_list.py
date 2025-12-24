@@ -7,13 +7,13 @@ from ..ffi import load_libisl
 from ..func import ISLFunction
 from ..mixin import ISLObjectMixin
 from ..obj import ISLObject
-from ..qualifier import Give, Param, Keep, Take
+from ..qualifier import Give, Keep, Param, Take
 from ..registry import register_type
 from .context import Context
 
 if TYPE_CHECKING:
-    from .context import Context
     from .astexpr import ASTExpr
+    from .context import Context
 
 _lib = load_libisl()
 

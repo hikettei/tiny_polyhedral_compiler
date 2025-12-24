@@ -1,6 +1,9 @@
 from __future__ import annotations
-from typing import Any, List, Optional, Tuple, Union, Dict, Callable
+
+from typing import Any, List, Optional, Tuple, Union
+
 import caten.isl as I
+
 
 class DotVisualizer:
     def __init__(self, title: str):
@@ -8,7 +11,7 @@ class DotVisualizer:
             f'digraph "{title}" {{',
             'node [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", color="#333333", fillcolor="#F5F5F5"];',
             'edge [fontname="Helvetica", fontsize=9, color="#666666"];',
-            'rankdir=TB;',
+            "rankdir=TB;",
         ]
         self.node_counter = 0
 
@@ -18,15 +21,15 @@ class DotVisualizer:
         attr_str = ", ".join(f'{k}="{v}"' for k, v in attrs.items())
         
         if label.strip().startswith("<") and label.strip().endswith(">"):
-            self.lines.append(f'{node_id} [label={label}, {attr_str}];')
+            self.lines.append(f"{node_id} [label={label}, {attr_str}];")
         else:
-            label = label.replace('"', '\"').replace('\n', '\\n')
+            label = label.replace('"', '"').replace("\n", "\\n")
             self.lines.append(f'{node_id} [label="{label}", {attr_str}];')
         return node_id
 
     def add_edge(self, src: str, dst: str, label: str = ""):
         attr_str = f'label="{label}"' if label else ""
-        self.lines.append(f'{src} -> {dst} [{attr_str}];')
+        self.lines.append(f"{src} -> {dst} [{attr_str}];")
 
     def render(self):
         self.lines.append("}")
@@ -333,7 +336,7 @@ def viz_schedule(node: Union["I.ScheduleNode", "P.ScheduleNodeBase"]) -> Any:
         if items and separator:
             use_two_cols = any(separator in item for item in items)
             
-        colspan = ' COLSPAN="2"' if use_two_cols else ''
+        colspan = ' COLSPAN="2"' if use_two_cols else ""
         rows.append(f'<TR><TD ALIGN="LEFT" BALIGN="LEFT"{colspan}><B>{header_text}</B></TD></TR>')
         
         for item in items:
