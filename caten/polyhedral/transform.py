@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import caten.isl as I
-from .analysis import compute_dependence_relation
+from .analysis import compute_dependence_relation, compute_schedule_legality
 
 class TraversalHelper():
     def __init__(self, node: "I.ScheduleNode"):
@@ -49,7 +49,7 @@ class ConstraintedModel:
         self.stmts = stmts
         self.read_umap = read_maps
         self.write_umap = write_maps
-        self.dependencies = compute_dependence_relation(read_maps, write_maps, schedule)
+        self.deps, _, _, _ = compute_dependence_relation(read_maps, write_maps, schedule)
         self.history: List[OptRecord] = [] # TODO
 
     @classmethod
@@ -99,7 +99,8 @@ class Dispatcher:
 
     def commit(self, name: str, new_schedule: I.ScheduleNode) -> I.ScheduleNode:
         # [TODO] Verify the correctness of loop transformation
-        print(name)
+        if not compute_schedule_legality(new_schedule.get_schedule(), self.model.deps):
+            pass
         # Verify the correctness of loop transformation here!
         self.model.update_schedule(new_schedule.get_schedule())
         return self
