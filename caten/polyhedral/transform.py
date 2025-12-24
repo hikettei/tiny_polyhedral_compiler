@@ -78,8 +78,6 @@ class FilterEditor(Dispatcher):
 # - [ ] Verify the legality of the schedule.
 # - [ ] 最終的にもう一度OptimizationTreeをTraceしたい。
 # - [ ] Band Symbolic, Padding, Isolation.
-class Directive():
-    pass
 
 class BandEditor(Dispatcher):
     # TODO: Loop Transformation
