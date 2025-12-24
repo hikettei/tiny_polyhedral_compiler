@@ -21,6 +21,7 @@ class ATenOpType():
     shape: List[ATenAxis]
     dtype: DType
     offset: Union[ATenOp, None] = None
+    is_ptr: bool = False # for vectorize
     def index(self, indices: List[ATenOp]):
         assert self.ndim == len(indices)
         total = itertools.accumlate([b.index(a) for (a, b) in zip(indices, self.shape)], lambda a, b: Add([a, b]), initial=Const.new(val, index))
@@ -53,6 +54,10 @@ class ATenOp(metaclass=ABCMeta):
     T: Union[ATenOpType, None] = None
     # TODO: Cached?
     # def __init__(self, ...)
+    def predecessors(self):
+        # TODO:
+        # - Tに含まれるOpsをReadに含める
+        pass
     @classmethod
 #    @abstractmethod
     def from_astexpr(cls):
@@ -166,8 +171,15 @@ class Allocate(ATenOp):
     """
     @staticmethod
     def new(shape: List[Any], dtype: DType):
-        return Allocate(shape, T=ATenOpType.from_shape(shape, dtype))
-        
+        return Allocate([], T=ATenOpType.from_shape(shape, dtype))
+
+class View(ATenOp):
+    """
+    View(X, T=T_New)
+    """
+    @staticmethod
+    def new(tensor: ATenOp, view: ATenOpType):
+        pass
 ## == JIT =====================================================================
 class Reduce(ATenOp):
     """
