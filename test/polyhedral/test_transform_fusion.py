@@ -57,4 +57,6 @@ def pool2d():
     return pool.finalize()
 
 def test_conv_pool_fusion(conv2d, pool2d):
-    print(conv2d+pool2d)
+    with (conv2d+pool2d).editor() as kernel:
+        print(kernel)
+        print(kernel.to_c())
