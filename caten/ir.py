@@ -21,6 +21,13 @@ class ATenOpType():
     shape: List[ATenAxis]
     dtype: DType
     offset: Union[ATenOp, None] = None
+    def index(self, indices: List[ATenOp]):
+        assert self.ndim == len(indices)
+        total = itertools.accumlate([b.index(a) for (a, b) in zip(indices, self.shape)], lambda a, b: Add([a, b]), initial=Const.new(val, index))
+        if self.offset: total = Add([total, self.offset])
+        return total
+    @property
+    def ndim(self): return len(self.shape)
     @staticmethod
     def from_shape(shape: List[Any], dtype: DType) -> ATenOpType:
         def _const(val: int): return Const.new(val, index)
@@ -41,11 +48,11 @@ class ATenOp(metaclass=ABCMeta):
     @classmethod
 #    @abstractmethod
     def from_astexpr(cls):
-        pass
-    
+        pass   
 #    @abstractmethod
-    def infer_dtype(self):
+    def verify(self):
         pass
+        
 ## == Tensor Graph ============================================================
 class UnaryOps():
     def verify(self): verify_tensor_op(self, 1)
