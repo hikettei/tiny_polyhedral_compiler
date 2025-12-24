@@ -25,6 +25,10 @@ class Dispatcher():
         self.current: I.ScheduleNode = schedule
         self.model: ConstraintedModel  = model
 
+    def to_c(self) -> str:
+        from caten.polyhedral.viz import schedule_to_c
+        return schedule_to_c(self.current.get_schedule(), self.model.stmts)
+    
     def __repr__(self) -> str:
         from caten.polyhedral.viz import print_schedule
         return f"{self.__class__.__name__}(\n{print_schedule(self.current)}\n)"
@@ -64,10 +68,10 @@ class FilterEditor(Dispatcher):
     pass
 # [TODO]
 # - [ ] Scheduleの適用を共有する仕組み
+# - [ ] What are the list of needed loop transformation?
 # - [ ] Verify the legality of the schedule.
 # - [ ] 最終的にもう一度OptimizationTreeをTraceしたい。
 # - [ ] Band Symbolic, Padding, Isolation.
-# - [ ] 
 
 class BandEditor(Dispatcher):
     # TODO: Loop Transformation
@@ -99,7 +103,13 @@ class BandEditor(Dispatcher):
         return self
 
     def shift(self, sizes: Union[int, List[int]]) -> "band":
-        self.current = self.current.band_shift(self.get_tiling_sizes(sizes))
+        # [TODO]
+        # - [ ] how to specify sizes
+        # - [ ] how to add?
+        # - [ ] Can become a loop reminder?
+        schedule = self.current.band_get_partial_schedule()
+        # for each aff, replace
+        self.current = self.current.band_shift(schedule)
         return self
 
     def tile(self, sizes: Union[int, List[int]]) -> "band":
@@ -121,6 +131,14 @@ class BandEditor(Dispatcher):
     def __add__(self, other):      return self.shift(other)
     def __sub__(self, other):      return self.shift([-x for x in other] if isinstance(other, list) else -other)
     def __matmul__(self, other):   return self.tile(other)
+
+class SequenceEditor(Dispatcher):
+    def fuse(self):
+        pass
+
+class SetEditor(Dispatcher):
+    def fuse(self):
+        pass
 
 # etc ...
 # pattern match -> editor dispatch model
