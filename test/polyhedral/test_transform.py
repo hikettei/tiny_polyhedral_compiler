@@ -24,5 +24,6 @@ def test_matmul_dispatcher(matmul):
         mm: P.DomainEditor = mm.domain()[0]
         with mm.band() as mm: # interchange
             print(mm)
-        
+            mm @ [32, 32, 32]
+            print(mm)
 

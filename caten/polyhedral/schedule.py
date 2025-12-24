@@ -216,57 +216,6 @@ class band(ScheduleNodeBase):
         if parent is None:
             raise RuntimeError("P.band requires a parent node (e.g., inside a 'with P.domain(...):' block). Cannot create a band at the root level.")
         return parent.insert_partial_schedule(self.schedule)
-    # TODO: Loop Transformation
-    def get_tiling_sizes(self, sizes: Union[int, List[int]]) -> "I.MultiVal":
-        "Convert sizes into MultiVal, broadcast if sizes is integer."
-        depth = (band := self.get_node()).band_get_space().dim(3)
-        sizes = [sizes] * depth if isinstance(sizes, int) else sizes
-        if not len(sizes) == depth:
-            raise ValueError(f"Tiling size mismatch: Band depth is {depth}, but provided {len(sizes)} sizes: {sizes}. Please provide exactly {depth} sizes.")
-        mv = I.MultiVal.zeros(band.band_get_space())
-        for i, size in enumerate(sizes):
-            mv[i] = size
-        return mv
-
-    @property
-    def depth(self) -> int:
-        return self.get_node().band_get_space().dim(3)
-    
-    def scale(self, sizes: Union[int, List[int]]) -> "band":
-        self.node = self.node.band_scale(self.get_tiling_sizes(sizes))
-        return self
-
-    def scale_down(self, sizes: Union[int, List[int]]) -> "band":
-        self.node = self.node.band_scale_down(self.get_tiling_sizes(sizes))
-        return self
-    
-    def mod(self, sizes: Union[int, List[int]]) -> "band":
-        self.node = self.node.band_mod(self.get_tiling_sizes(sizes))
-        return self
-
-    def shift(self, sizes: Union[int, List[int]]) -> "band":
-        self.node = self.node.band_shift(self.get_tiling_sizes(sizes))
-        return self
-
-    def tile(self, sizes: Union[int, List[int]]) -> "band":
-        """{[i] -> [i mod size, size]}"""
-        self.node = self.node.band_tile(self.get_tiling_sizes(sizes))
-        return self
-
-    def split(self, pos: int) -> "band":
-        self.node = self.node.band_split(pos)
-        return self
-
-    def sink(self) -> "band":
-        self.node = self.node.bank_sink()
-        return self
-
-    def __mul__(self, other):      return self.scale(other)
-    def __floordiv__(self, other): return self.scale_down(other)
-    def __mod__(self, other):      return self.mod(other)
-    def __add__(self, other):      return self.shift(other)
-    def __sub__(self, other):      return self.shift([-x for x in other] if isinstance(other, list) else -other)
-    def __matmul__(self, other):   return self.tile(other)
 
 class sequence(ScheduleNodeBase):
     def __init__(self, filter_set_list: I.UnionSetList) -> None:
