@@ -3,7 +3,6 @@ from typing import Dict, Callable, Union, List, Any
 import caten.isl as I
 from .analysis import compute_flow, compute_dependence_relation
 
-
 class ConstraintedModel():
     def __init__(self, schedule: I.Schedule, deps: I.UnionMap, stmts: Dict[str, Callable]):
         self.schedule = schedule
@@ -107,9 +106,12 @@ class BandEditor(Dispatcher):
         # - [ ] how to specify sizes
         # - [ ] how to add?
         # - [ ] Can become a loop reminder?
-        schedule = self.current.band_get_partial_schedule()
+        partial_schedule = I.UnionMap.from_multi_union_pw_aff(self.current.band_get_partial_schedule())
+        print(partial_schedule)
+        partial_schedule = I.UnionMap("{ WMMA[i, j, k] -> [0, 0, 0] }")
+        
         # for each aff, replace
-        self.current = self.current.band_shift(schedule)
+        self.current = self.current.band_shift(I.MultiUnionPwAff.from_union_map(partial_schedule))
         return self
 
     def tile(self, sizes: Union[int, List[int]]) -> "band":

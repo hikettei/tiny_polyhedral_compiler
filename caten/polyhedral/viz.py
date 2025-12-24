@@ -259,7 +259,7 @@ def print_schedule(node: "I.ScheduleNode") -> str:
     # Root wrapper
     root_type = node.get_type_name()
     
-    _rec(node, "    ")
+    _rec(node.get_schedule().get_root(), "    ")
     return "\n".join(output_lines)
 
 def viz_schedule(node: Union["I.ScheduleNode", "P.ScheduleNodeBase"]) -> Any:
