@@ -11,8 +11,7 @@ from .dtype import float32
 ## Backend Abstraction
 DEVICE_TO_TENSOR = {}
 def get_backend(): return os.environ.get("BACKEND", "CPU")
-##
-
+## Annotation
 class ATenSpec:
     """
     Usage: C.Tensor[float32, "M", "N"] -> TensorSpec(M N)
@@ -21,7 +20,7 @@ class ATenSpec:
         self.shape = shape
         self.dtype = dtype
     def __repr__(self) -> str: return f"TensorSpec({self.shape}, {self.dtype})"
-
+## Tensor datastrucure
 class ATen:
     op: ATenOp # ATen is just a wrapper for ATenOp
     @classmethod
@@ -37,24 +36,24 @@ class ATen:
 
     def polyhedral(self):
         pass
-
+## math mixin
 class ATenMath():
     pass
-
+## movement ops mixin
 class ATenMovements():
     pass
-
+## nn ops mixin
 class ATenNN():
     pass
-
+## linalg ops mixin
 class ATenLinalg():
     pass
-
+## facet mixin
 class Facet():
     # Facet is device transfer abstraction: A.to("CUDA")
     # TODO: with tensor.facet("CUDA") as tensor: ...
     pass
-
+## abstraction over backends
 class ATenBase(ATen, ATenMath, ATenNN, ATenMovements, ATenLinalg, metaclass=ABCMeta):
     ## == AbstractionLayer
     @staticmethod

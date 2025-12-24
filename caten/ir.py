@@ -40,6 +40,12 @@ class ATenOpType():
             shape=[ATenAxis(shape=size, stride=stride, offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides)],
             dtype=dtype,
         )
+    def reshape(self):
+        pass
+    def permute(self):
+        pass
+    def expand(self):
+        pass
 
 @dataclass(frozen=True)
 class ATenOp(metaclass=ABCMeta):
