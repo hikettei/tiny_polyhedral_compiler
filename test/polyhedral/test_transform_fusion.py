@@ -56,5 +56,5 @@ def pool2d():
                     ]
     return pool.finalize()
 
-def test_conv_pool_fusion(conv, pool):
-    pass
+def test_conv_pool_fusion(conv2d, pool2d):
+    print(conv2d+pool2d)

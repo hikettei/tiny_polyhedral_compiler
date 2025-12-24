@@ -4,18 +4,25 @@ import caten.isl as I
 from .analysis import compute_flow, compute_dependence_relation
 
 class ConstraintedModel():
-    def __init__(self, schedule: I.Schedule, deps: I.UnionMap, stmts: Dict[str, Callable]):
+    def __init__(self, schedule: I.Schedule, read_maps: I.UnionMap, write_maps: I.UnionMap, stmts: Dict[str, Callable]):
         self.schedule = schedule
         self.stmts = stmts
-        self.deps = deps
+        self.read_umap = read_maps
+        self.write_umap = write_maps
 
     @classmethod
     def from_schedule(cls, schedule: I.Schedule, read_umap: I.UnionMap, write_umap: I.UnionMap, stmts: Dict[str, Callable]):
-        deps, _, _, _ = compute_dependence_relation(read_umap, write_umap, schedule)
-        return cls(schedule, deps, stmts)
+        return cls(schedule, read_umap, write_umap, stmts)
 
     def editor(self) -> "Dispatcher":
         return Dispatcher(self.schedule.get_root(), self)
+
+    def __add__(self, other: "ConstraintedModel"):
+        read_umap = self.read_umap | other.read_umap
+        write_umap = self.write_umap | other.write_umap
+        schedule = self.schedule.sequence(other.schedule)
+        assert len((intersections := self.stmts.keys() & other.stmts.keys())) == 0, f"Cannot add two models because they have common stmt keys: {intersections}"
+        return ConstraintedModel.from_schedule(schedule, read_umap, write_umap, stmts=self.stmts | other.stmts)
 
 class Dispatcher():
     # Dispatcher can do pattern match to move to the next editor
@@ -71,6 +78,8 @@ class FilterEditor(Dispatcher):
 # - [ ] Verify the legality of the schedule.
 # - [ ] 最終的にもう一度OptimizationTreeをTraceしたい。
 # - [ ] Band Symbolic, Padding, Isolation.
+class Directive():
+    pass
 
 class BandEditor(Dispatcher):
     # TODO: Loop Transformation
