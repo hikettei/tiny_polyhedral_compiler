@@ -1,6 +1,6 @@
 from typing import Any
 
-import pytest
+import pytest  # type: ignore
 
 import caten.isl as I
 
@@ -15,7 +15,7 @@ def test_ast_expr_foreach_op_type_invokes_callback() -> None:
         def cb(op_type: int) -> None:
             seen["n"] += 1
 
-        expr.foreach_ast_expr_op_type(cb)
+        expr.foreach_ast_expr_op_type(cb, None)
         assert seen["n"] == 3
 
 @pytest.mark.skip(reason="Requires ASTUserNode manual support")
@@ -31,7 +31,7 @@ def test_ast_node_block_children_and_descendant_walk() -> None:
             seen["n"] += 1
             return True
             
-        block.foreach_descendant_top_down(cb)
+        block.foreach_descendant_top_down(cb, None)
         assert seen["n"] == 2 # block + user
 
 @pytest.mark.skip(reason="Requires ASTUserNode manual support")
@@ -45,5 +45,5 @@ def test_ast_node_map_descendant_bottom_up_identity() -> None:
         def cb(node: Any) -> Any:
             return node
             
-        block2 = block.map_descendant_bottom_up(cb)
+        block2 = block.map_descendant_bottom_up(cb, None)
         assert str(block2) == str(block)

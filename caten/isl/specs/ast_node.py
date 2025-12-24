@@ -10,6 +10,7 @@ from ..obj import ISLObject
 from ..qualifier import Give, Keep, Param, Take
 from ..registry import register_type
 from .context import Context
+from .enums import _ISL_AST_NODE_TYPE_MAP
 
 if TYPE_CHECKING:
     from .ast_expr import ASTExpr
@@ -30,6 +31,10 @@ class ASTNode(ISLObject, ISLObjectMixin):
             super().__init__(handle)
         else:
             super().__init__(handle_or_spec)
+
+    def get_type_name(self) -> str:
+        """Helper to get the string name of the node type."""
+        return _ISL_AST_NODE_TYPE_MAP.get(self.get_type(), "unknown")
 
     @classmethod
     def from_str(cls, spec: str) -> Any:

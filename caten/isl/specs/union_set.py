@@ -243,6 +243,18 @@ class UnionSet(ISLObject, ISLObjectMixin):
     def compute_schedule(self, validity: "UnionMap", proximity: "UnionMap") -> "Schedule":
         return _isl_union_set_compute_schedule(self, validity, proximity)
 
+    def lex_le_union_set(self, other: "UnionSet") -> "UnionSet":
+        return _isl_union_set_lex_le_union_set(self, other)
+    
+    def lex_lt_union_set(self, other: "UnionSet") -> "UnionSet":
+        return _isl_union_set_lex_lt_union_set(self, other)
+    
+    def lex_ge_union_set(self, other: "UnionSet") -> "UnionSet":
+        return _isl_union_set_lex_ge_union_set(self, other)
+    
+    def lex_gt_union_set(self, other: "UnionSet") -> "UnionSet":
+        return _isl_union_set_lex_gt_union_set(self, other)
+
 
 register_type("UnionSet", UnionSet)
 
@@ -725,5 +737,37 @@ _isl_union_set_compute_schedule = ISLFunction.create(
     Take("UnionMap"),
     Take("UnionMap"),
     return_=Give("Schedule"),
+    lib=_lib,
+)
+
+_isl_union_set_lex_le_union_set = ISLFunction.create(
+    "isl_union_set_lex_le_union_set",
+    Take("UnionSet"),
+    Take("UnionSet"),
+    return_=Give("UnionSet"),
+    lib=_lib,
+)
+
+_isl_union_set_lex_lt_union_set = ISLFunction.create(
+    "isl_union_set_lex_lt_union_set",
+    Take("UnionSet"),
+    Take("UnionSet"),
+    return_=Give("UnionSet"),
+    lib=_lib,
+)
+
+_isl_union_set_lex_ge_union_set = ISLFunction.create(
+    "isl_union_set_lex_ge_union_set",
+    Take("UnionSet"),
+    Take("UnionSet"),
+    return_=Give("UnionSet"),
+    lib=_lib,
+)
+
+_isl_union_set_lex_gt_union_set = ISLFunction.create(
+    "isl_union_set_lex_gt_union_set",
+    Take("UnionSet"),
+    Take("UnionSet"),
+    return_=Give("UnionSet"),
     lib=_lib,
 )

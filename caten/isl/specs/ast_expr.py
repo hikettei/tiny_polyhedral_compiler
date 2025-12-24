@@ -10,8 +10,10 @@ from ..obj import ISLObject
 from ..qualifier import Give, Keep, Param, Take
 from ..registry import register_type
 from .context import Context
+from .enums import _ISL_AST_EXPR_OP_TYPE_MAP, _ISL_AST_EXPR_TYPE_MAP
 
 if TYPE_CHECKING:
+    from .ast_node import ASTNode
     from .context import Context
     from .id import Id
     from .id_to_ast_expr import IdToAstExpr
@@ -20,15 +22,30 @@ if TYPE_CHECKING:
 
 _lib = load_libisl()
 
+# handle is an integer, to prevent the confusion vs val, use I.expr instead of I.ASTExpr
+def expr(id_or_val: Any) -> "ASTExpr":
+    if isinstance(id_or_val, int):
+        from .val import Val
+        return ASTExpr.from_val(Val.int_from_si(id_or_val))
+    elif isinstance(id_or_val, str):
+        from .id import Id
+        return ASTExpr.from_id(Id(id_or_val))
+    else:
+        raise TypeError("I.expr can only accept int or str")
+
 class ASTExpr(ISLObject, ISLObjectMixin):
     __slots__ = ()
 
     def __init__(self, handle_or_spec: Any) -> None:
-        if isinstance(handle_or_spec, str):
-            handle = _isl_ast_expr_read_from_str(handle_or_spec, return_raw_pointer=True)
-            super().__init__(handle)
-        else:
-            super().__init__(handle_or_spec)
+        super().__init__(handle_or_spec)
+
+    def get_type_name(self) -> str:
+        """Helper to get the string name of the expr type."""
+        return _ISL_AST_EXPR_TYPE_MAP.get(self.get_type(), "unknown")
+
+    def op_get_type_name(self) -> str:
+        """Helper to get the string name of the expr op type."""
+        return _ISL_AST_EXPR_OP_TYPE_MAP.get(self.op_get_type(), "unknown")
 
     @classmethod
     def from_str(cls, spec: str) -> Any:
@@ -117,6 +134,12 @@ class ASTExpr(ISLObject, ISLObjectMixin):
 
     def div(self, expr2: "ASTExpr") -> "ASTExpr":
         return _isl_ast_expr_div(self, expr2)
+    
+    def max(self, expr2: "ASTExpr") -> "ASTExpr":
+        return expr("max").call(self, expr2)
+    
+    def min(self, expr2: "ASTExpr") -> "ASTExpr":
+        return expr("min").call(self, expr2)
 
     def pdiv_q(self, expr2: "ASTExpr") -> "ASTExpr":
         return _isl_ast_expr_pdiv_q(self, expr2)
@@ -156,6 +179,32 @@ class ASTExpr(ISLObject, ISLObjectMixin):
 
     def substitute_ids(self, id2expr: "IdToAstExpr") -> "ASTExpr":
         return _isl_ast_expr_substitute_ids(self, id2expr)
+
+    def call(self, *args: "ASTExpr") -> "ASTExpr":
+        from .ast_expr_list import AstExprList
+        return _isl_ast_expr_call(self, AstExprList.from_exprs(list(args)))
+
+    def access(self, *indices: "ASTExpr") -> "ASTExpr":
+        from .ast_expr_list import AstExprList
+        return _isl_ast_expr_access(self, AstExprList.from_exprs(list(indices)))
+
+    def assign(self, expr2: "ASTExpr") -> "ASTNode":
+        """
+        Creates an assignment node: self = expr2.
+        Since ISL AST does not natively support assignment statements, 
+        we represent this as a call to a function named "=".
+        """
+        from .ast_node import ASTNode
+        from .id import Id
+        
+        # Create a call expression: =(self, expr2)
+        # Use Id.alloc to force creating an ID named "=", avoiding parser error
+        eq_id = Id.alloc("assign")
+        eq_expr = ASTExpr.from_id(eq_id)
+        call_expr = eq_expr.call(self, expr2)
+        
+        # Wrap it in a User Node
+        return ASTNode.user_from_expr(call_expr)
 
     def to_C_str(self) -> str:
         return _isl_ast_expr_to_C_str(self)
@@ -485,6 +534,22 @@ _isl_ast_expr_read_from_str = ISLFunction.create(
     "isl_ast_expr_read_from_str",
     Context(),
     Param(str, ctype=c_char_p),
+    return_=Give("ASTExpr"),
+    lib=_lib,
+)
+
+_isl_ast_expr_access = ISLFunction.create(
+    "isl_ast_expr_access",
+    Take("ASTExpr"),
+    Take("AstExprList"),
+    return_=Give("ASTExpr"),
+    lib=_lib,
+)
+
+_isl_ast_expr_call = ISLFunction.create(
+    "isl_ast_expr_call",
+    Take("ASTExpr"),
+    Take("AstExprList"),
     return_=Give("ASTExpr"),
     lib=_lib,
 )

@@ -1,4 +1,6 @@
-from typing import Any
+from typing import Any, cast
+
+from .obj import InPlace
 
 
 class ISLObjectMixin:
@@ -96,3 +98,18 @@ class ISLObjectMixin:
         if hasattr(self, "neg"):
             return self.neg()
         return NotImplemented
+
+    def __getitem__(self, key: Any) -> Any:
+        """Array access (A[i]) or List access (L[i])"""
+        if hasattr(self, "access"):
+            # Handle multiple indices for access (e.g. A[i, j])
+            if isinstance(key, tuple):
+                return self.access(*key)
+            return self.access(key)
+        if hasattr(self, "get_at"):
+             return self.get_at(key)
+        raise TypeError(f"Object of type {type(self).__name__} does not support indexing (access or get_at).")
+
+    def __setitem__(self, key: Any, value: Any) -> Any:
+        if hasattr(self, "set_val"):
+            return InPlace(cast(Any, self)).set_val(key, value)

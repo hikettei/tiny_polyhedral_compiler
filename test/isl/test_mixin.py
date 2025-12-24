@@ -1,7 +1,7 @@
 import caten.isl as I
 
 
-def test_set_operators():
+def test_set_operators() -> None:
     with I.context():
         s1 = I.Set("{ [i] : 0 <= i < 5 }")
         s2 = I.Set("{ [i] : 5 <= i < 10 }")
@@ -26,7 +26,7 @@ def test_set_operators():
         assert s1 == s1
         assert s1 != s2
 
-def test_val_operators():
+def test_val_operators() -> None:
     with I.context():
         v1 = I.Val.int_from_si(10)
         v2 = I.Val.int_from_si(20)

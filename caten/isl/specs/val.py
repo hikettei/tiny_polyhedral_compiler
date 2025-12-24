@@ -20,11 +20,7 @@ class Val(ISLObject, ISLObjectMixin):
     __slots__ = ()
 
     def __init__(self, handle_or_spec: Any) -> None:
-        if isinstance(handle_or_spec, str):
-            handle = _isl_val_read_from_str(handle_or_spec, return_raw_pointer=True)
-            super().__init__(handle)
-        else:
-            super().__init__(handle_or_spec)
+        super().__init__(handle_or_spec)
 
     @classmethod
     def from_str(cls, spec: str) -> Any:

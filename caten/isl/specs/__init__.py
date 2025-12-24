@@ -2,7 +2,7 @@ from .access_info import AccessInfo
 from .aff import Aff
 from .aff_list import AffList
 from .ast_build import ASTBuild
-from .ast_expr import ASTExpr
+from .ast_expr import ASTExpr, expr
 from .ast_node import ASTNode, ASTUserNode
 from .ast_node_list import AstNodeList
 from .ast_print_options import ASTPrintOptions
@@ -99,6 +99,7 @@ __all__ = [
     "ScheduleConstraints",
     "ScheduleNode",
     "ASTBuild",
+    "expr",
     "ASTExpr",
     "ASTNode",
     "StrideInfo",
