@@ -202,7 +202,7 @@ class BandEditor(Dispatcher):
         mv = I.MultiVal.zero(self.node.band_get_space())
         for i, size in enumerate(sizes):
             mv = mv.set_val(i, I.Val.int_from_si(int(size)))
-        domain = schedule_node_subtree_domain(self.node)
+        domain = self.node.get_subtree_expansion().domain()
         shift = I.MultiUnionPwAff.multi_val_on_domain(domain, mv)
         return self.node.band_shift(shift)
 
