@@ -13,7 +13,7 @@ class ATenAxis():
     offset: ATenOp
     incf: ATenOp
     def index(self, i: ATenOp):
-        # TODO: Assert i.T.dtype is dtype.index
+        assert i.T.dtype == index, "ATenAxis.index: range index should be type of index."
         return Mul(self.stride, Add(Mul(i, self.incf), self.offset))
 
 @dataclass(frozen=True)
@@ -45,12 +45,18 @@ class ATenOpType():
 class ATenOp(metaclass=ABCMeta):
     args: List[AtenOp]
     T: Union[ATenOpType, None] = None
+    # TODO: Cached?
+    # def __init__(self, ...)
     @classmethod
 #    @abstractmethod
     def from_astexpr(cls):
         pass   
 #    @abstractmethod
     def verify(self):
+        pass
+
+    def coalese(self):
+        # Simplify myself
         pass
         
 ## == Tensor Graph ============================================================
