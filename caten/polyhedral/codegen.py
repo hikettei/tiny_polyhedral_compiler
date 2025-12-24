@@ -5,40 +5,14 @@ from ctypes import CFUNCTYPE, c_void_p, cast
 import base64
 import json
 import re
+
+from pydantic import BaseModel
 from caten.isl.specs.enums import isl_ast_node_type, isl_ast_expr_type, isl_ast_expr_op_type
-
 import caten.isl as I
-
-try:
-    from pydantic import BaseModel
-    try:
-        from pydantic import ConfigDict
-    except Exception:  # pragma: no cover - compatibility shim
-        ConfigDict = None
-except Exception:  # pragma: no cover - fallback when pydantic is unavailable
-    class BaseModel:
-        def __init__(self, **kwargs: Any) -> None:
-            self.__dict__.update(kwargs)
-
-        def model_dump_json(self) -> str:
-            return json.dumps(self.__dict__, separators=(",", ":"))
-
-        @classmethod
-        def model_validate_json(cls, data: str) -> "BaseModel":
-            return cls(**json.loads(data))
-
-    ConfigDict = None
-
-class DirectiveParams(BaseModel):
-    if ConfigDict is not None:
-        model_config = ConfigDict(extra="forbid")
-    else:
-        class Config:
-            extra = "forbid"
 
 class Directive:
     name: ClassVar[str] = "Directive"
-    Params: ClassVar[Optional[Type[DirectiveParams]]] = None
+    Params: ClassVar[Optional[Type[BaseModel]]] = None
     _registry: ClassVar[Dict[str, Type["Directive"]]] = {}
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -74,12 +48,7 @@ class Directive:
             return target()
         if decoded:
             params = target.Params.model_validate_json(decoded)
-            if hasattr(params, "model_dump"):
-                data = params.model_dump()
-            elif hasattr(params, "dict"):
-                data = params.dict()
-            else:
-                data = params.__dict__
+            data = params.model_dump()
             return target(**data)
         return target()
 
