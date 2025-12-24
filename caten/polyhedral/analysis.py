@@ -67,11 +67,7 @@ Returns:
     if delta.is_empty(): return False
     zeros = zero_vector_union_set(delta)
     le = delta.lex_le_union_set(zeros)
-    print(le)
     return le.is_empty()
-
-def verify_legality():
-    pass
 
 def compute_parallel():
     pass

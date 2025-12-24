@@ -85,7 +85,7 @@ def transformation(body: Callable[Any, I.ScheduleNode]):
         new_schedule = body(*args, **kwargs)
         assert isinstance(new_schedule, I.ScheduleNode)
         assert isinstance(args[0], Dispatcher)
-        return args[0].commit(f"{body.__name__}({args[1:]})", new_schedule)
+        return args[0].commit(f"{body.__name__}{args[1:]}", new_schedule)
     return f
 
 class Dispatcher:
@@ -98,10 +98,12 @@ class Dispatcher:
         self.path = TraversalHelper(node).current()
 
     def commit(self, name: str, new_schedule: I.ScheduleNode) -> I.ScheduleNode:
-        # [TODO] Verify the correctness of loop transformation
         if not compute_schedule_legality(new_schedule.get_schedule(), self.model.deps):
-            pass
-        # Verify the correctness of loop transformation here!
+            raise RuntimeError(
+                f"Detected illegal loop transformation: {name}."
+                f"\n{self.__repr__()}"
+            )
+        # [TODO] Update records
         self.model.update_schedule(new_schedule.get_schedule())
         return self
     
