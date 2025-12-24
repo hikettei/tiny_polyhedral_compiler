@@ -211,4 +211,18 @@ def gemm_v():
 
 def test_flash_attention(gemm_qk, softmax, gemm_v):
     with (gemm_qk+softmax+gemm_v).editor() as flash_attention:
-        print(flash_attention.to_c())
+        with flash_attention.domain()[0] as dom:
+            with dom.sequence() as seq:
+                seq[0].filter()[0].band().split(1)  # [i][j]
+                seq[1].filter()[0].band().split(1)  # [i][j,d]
+                # seq[2] already [i]
+                seq[3].filter()[0].band().split(1)  # [i][j]
+                # seq[4] already [i]
+                seq[5].filter()[0].band().split(1)  # [i][j]
+                seq[6].filter()[0].band().split(1)  # [i][j]
+                seq[7].filter()[0].band().split(1)  # [i][v]
+                seq[8].filter()[0].band().split(1)  # [i][v,j]
+                seq.fuse()
+                seq[0].sequence().reorder(0, 1, 2, 3, 4, 5, 6, 7, 8)
+        print(dom.to_c())
+        # TODO
