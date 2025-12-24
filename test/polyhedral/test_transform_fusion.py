@@ -3,6 +3,7 @@ import pytest
 import caten.isl as I
 import caten.polyhedral as P
 
+# === Conv+Pool ====================================================================
 S_POOL = 4
 H_OUT = 128
 W_OUT = 128
@@ -78,12 +79,11 @@ def pool2d():
                                 )
                             )
                     ]
-
     return pool.finalize()
 
-def test_conv_pool_fusion(conv2d, pool2d):
+def test_conv_pool_manual_fusion(conv2d, pool2d):
     with (conv2d+pool2d).editor() as kernel:
-        print(kernel.model.deps)
+        # Kernel Fusion
         with kernel.domain()[0] as dom:
             print(dom.to_c())
             # maximize fusion?
@@ -103,3 +103,109 @@ def test_conv_pool_fusion(conv2d, pool2d):
             with dom.band()[0].band()[0].sequence().group(1, 3) as fused:
                 fused[1].filter()[0].sequence().fuse()
             print(kernel.to_c())
+        # Kernel Optimization
+# == Flash Attention ==================================================================
+@pytest.fixture()
+def gemm_qk():
+    Q, K, Score = map(I.expr, ("Q", "K", "Score"))
+    zero = I.expr(0)
+
+    with P.parameter("M, N, D"):  # DV unused here but keep parameter sets consistent
+        d1 = P.domain("{ S_qk_init[i,j] : 0<=i<M and 0<=j<N }")
+        d2 = P.domain("{ S_qk[i,j,d] : 0<=i<M and 0<=j<N and 0<=d<D }")
+
+        with (d1 | d2) as qk:
+            with P.filter("{ S_qk_init[i,j] }"):
+                with P.band("{ S_qk_init[i,j] -> [i, j] }"):
+                    P.stmt("Score[i,j] = 0")[
+                        lambda i, j: Score[i, j].assign(zero)
+                    ]
+
+            with P.filter("{ S_qk[i,j,d] }"):
+                with P.band("{ S_qk[i,j,d] -> [i, j, d] }"):
+                    P.stmt("Score[i,j] = Score[i,j], Q[i,d], K[j,d]")[
+                        lambda i, j, d:
+                            Score[i, j].assign(Score[i, j] + Q[i, d] * K[j, d])
+                    ]
+    return qk.finalize()
+
+@pytest.fixture()
+def softmax():
+    def _exp(x):
+        return I.expr("expr").call(x)
+    
+    Score, Prob, Tmp, Max, Sum = map(I.expr, ("Score", "Prob", "Tmp", "Max", "Sum"))
+    neg_inf = I.expr("NEG_INF")
+    zero = I.expr(0)
+
+    with P.parameter("M, N, D, DV"):  # D/DV unused but consistent
+        d0 = P.domain("{ S_sm_init_max[i] : 0<=i<M }")
+        d1 = P.domain("{ S_sm_max[i,j] : 0<=i<M and 0<=j<N }")
+        d2 = P.domain("{ S_sm_init_sum[i] : 0<=i<M }")
+        d3 = P.domain("{ S_sm_exp_sum[i,j] : 0<=i<M and 0<=j<N }")
+        d4 = P.domain("{ S_sm_norm[i,j] : 0<=i<M and 0<=j<N }")
+
+        with (d0 | d1 | d2 | d3 | d4) as sm:
+            with P.filter("{ S_sm_init_max[i] }"):
+                with P.band("{ S_sm_init_max[i] -> [i, 0] }"):
+                    P.stmt("Max[i] = -INF")[
+                        lambda i: Max[i].assign(neg_inf)
+                    ]
+
+            with P.filter("{ S_sm_max[i,j] }"):
+                with P.band("{ S_sm_max[i,j] -> [i, 1, j] }"):
+                    P.stmt("Max[i] = Max[i], Score[i,j]")[
+                        lambda i, j: Max[i].assign(Max[i].max(Score[i, j]))
+                    ]
+
+            with P.filter("{ S_sm_init_sum[i] }"):
+                with P.band("{ S_sm_init_sum[i] -> [i, 2] }"):
+                    P.stmt("Sum[i] = 0")[
+                        lambda i: Sum[i].assign(zero)
+                    ]
+
+            with P.filter("{ S_sm_exp_sum[i,j] }"):
+                with P.band("{ S_sm_exp_sum[i,j] -> [i, 3, j] }"):
+                    P.stmt("Tmp[i,j] = Score[i,j], Max[i]; Sum[i] = Sum[i], Tmp[i,j]")[
+                        lambda i, j:
+                            (
+                                Tmp[i, j].assign(_exp((Score[i, j] - Max[i]))),
+                                Sum[i].assign(Sum[i] + Tmp[i, j]),
+                            )
+                    ]
+
+            with P.filter("{ S_sm_norm[i,j] }"):
+                with P.band("{ S_sm_norm[i,j] -> [i, 4, j] }"):
+                    P.stmt("Prob[i,j] = Tmp[i,j], Sum[i]")[
+                        lambda i, j: Prob[i, j].assign(Tmp[i, j] / Sum[i])
+                    ]
+
+    return sm.finalize()
+
+@pytest.fixture()
+def gemm_v():
+    Prob, V, Out = map(I.expr, ("Prob", "V", "OutAttn"))
+    zero = I.expr(0)
+
+    with P.parameter("M, N, D, DV"):
+        d1 = P.domain("{ S_pv_init[i,v] : 0<=i<M and 0<=v<DV }")
+        d2 = P.domain("{ S_pv[i,v,j] : 0<=i<M and 0<=v<DV and 0<=j<N }")
+
+        with (d1 | d2) as pv:
+            with P.filter("{ S_pv_init[i,v] }"):
+                with P.band("{ S_pv_init[i,v] -> [i, v] }"):
+                    P.stmt("OutAttn[i,v] = 0")[
+                        lambda i, v: Out[i, v].assign(zero)
+                    ]
+
+            with P.filter("{ S_pv[i,v,j] }"):
+                with P.band("{ S_pv[i,v,j] -> [i, v, j] }"):
+                    P.stmt("OutAttn[i,v] = OutAttn[i,v], Prob[i,j], V[j,v]")[
+                        lambda i, v, j:
+                            Out[i, v].assign(Out[i, v] + Prob[i, j] * V[j, v])
+                    ]
+
+    return pv.finalize()
+
+def test_flash_attention(softmax):
+    print(softmax)
