@@ -160,9 +160,13 @@ class Dispatcher:
         raise TypeError("mark expects a Directive or string id.")
 
 class DomainEditor(Dispatcher):
+    # TODO:
+    # padding
     pass
 
 class FilterEditor(Dispatcher):
+    # TODO:
+    # e.g.: mask, isolate, eg
     pass
 
 class BandEditor(Dispatcher):
@@ -247,11 +251,32 @@ class BandEditor(Dispatcher):
     def __matmul__(self, other: Any) -> "BandEditor": return self.tile(other)
 
 class SequenceEditor(Dispatcher):
+    # [TODO]
+    # I guess topological sort is required to find flash attention automatically.
     @transformation
     def fuse(self) -> I.ScheduleNode:
-        return schedule_node_sequence_full_fuse(self.node)
+        if self.node.get_type_name() not in ("sequence", "set"):
+            raise ValueError("schedule_node_sequence_full_fuse expects sequence/set node.")
+        n_child = self.node.n_children()
+        cursor = self.node.first_child()
+        mupa: Optional[I.MultiUnionPwAff] = None
+        for i in range(n_child):
+            filter_set = cursor.filter_get_filter()
+            band_node = cursor.first_child()
+            if band_node.get_type_name() != "band":
+                raise ValueError("schedule_node_sequence_full_fuse: filter child must be a band.")
+            tmp = band_node.band_get_partial_schedule()
+            tmp = tmp.intersect_domain(filter_set)
+            tmp = tmp.reset_tuple_id(3)
+            mupa = tmp if mupa is None else mupa.union_add(tmp)
+            cursor = band_node.delete().parent()
+            if i == n_child - 1:
+                cursor = cursor.parent()
+            else:
+                cursor = cursor.next_sibling()
+        if mupa is not None:
+            cursor = cursor.insert_partial_schedule(mupa)
+        return cursor
 
-class SetEditor(Dispatcher):
-    @transformation
-    def fuse(self) -> I.ScheduleNode:
-        return schedule_node_sequence_full_fuse(self.node)
+class SetEditor(SequenceEditor):
+    pass

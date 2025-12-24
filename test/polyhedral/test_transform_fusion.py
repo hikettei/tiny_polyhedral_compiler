@@ -58,5 +58,10 @@ def pool2d():
 
 def test_conv_pool_fusion(conv2d, pool2d):
     with (conv2d+pool2d).editor() as kernel:
-        print(kernel)
-        print(kernel.to_c())
+        with kernel.domain()[0].sequence() as batch:
+            batch[0].filter()[0].band().split(1)
+            batch[1].filter()[0].band().split(1)
+            batch[2].filter()[0].band().split(1)
+            batch[3].filter()[0].band().split(1)
+            batch.fuse()
+            print(batch.to_c())
