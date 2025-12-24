@@ -49,6 +49,11 @@ class ATenNN():
 class ATenLinalg():
     pass
 
+class Facet():
+    # Facet is device transfer abstraction: A.to("CUDA")
+    # TODO: with tensor.facet("CUDA") as tensor: ...
+    pass
+
 class ATenBase(ATen, ATenMath, ATenNN, ATenMovements, ATenLinalg, metaclass=ABCMeta):
     ## == AbstractionLayer
     @staticmethod
