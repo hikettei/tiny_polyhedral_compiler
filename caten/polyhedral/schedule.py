@@ -95,10 +95,6 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
         else:
             return "(Not Realized)"
 
-    def to_c(self) -> str:
-        from caten.polyhedral.codegen import schedule_to_c
-        return schedule_to_c(self.node.get_schedule(), self.stmts)
-
     def __getitem__(self, idx: int) -> "I.ScheduleNode":
         return self.node.child(idx)
 ## ~~ Specs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -146,6 +142,10 @@ class domain(ScheduleNodeBase):
         if self.reads_map is not None or self.writes_map is not None:
             raise RuntimeError("Cannot merge domains that already have access relations defined (stmt() calls). Merge domains before defining statements.")
         return domain(self.uset | other.uset)
+    
+    def to_c(self) -> str:
+        from caten.polyhedral.codegen import schedule_to_c
+        return schedule_to_c(self.node.get_schedule(), self.stmts)
 
     def finalize(self):
         assert self.node is not None, "Cannot finalize P.domain before finalizing schedules."

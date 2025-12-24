@@ -6,59 +6,8 @@ import base64
 import json
 import re
 
-from pydantic import BaseModel
 from caten.isl.specs.enums import isl_ast_node_type, isl_ast_expr_type, isl_ast_expr_op_type
 import caten.isl as I
-
-class Directive:
-    name: ClassVar[str] = "Directive"
-    Params: ClassVar[Optional[Type[BaseModel]]] = None
-    def __init__(self, **params: Any) -> None:
-        self.params = self.Params(**params)
-    
-    def dumps(self) -> str:
-        payload = "" if self.params is None else self.params.model_dump_json()
-        encoded = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
-        return f"@Directive[{self.name}]<{encoded}>"
-
-    @classmethod
-    def loads(cls, encoded: str) -> Optional["Directive"]:
-        match = re.match(r"^@Directive\\[([^\\]]+)\\]<([^>]*)>$", encoded)
-        if not match:
-            return None
-        name, payload = match.group(1), match.group(2)
-        target = cls._registry.get(name)
-        if target is None:
-            return None
-        if payload:
-            decoded = base64.urlsafe_b64decode(payload.encode("ascii")).decode("utf-8")
-        else:
-            decoded = ""
-        if target.Params is None:
-            return target()
-        if decoded:
-            params = target.Params.model_validate_json(decoded)
-            data = params.model_dump()
-            return target(**data)
-        return target()
-
-    def mark_id(self) -> "I.Id":
-        return I.Id.alloc(self.dumps())
-
-    def on_schedule(self, node: "I.ScheduleNode") -> "I.ScheduleNode":
-        """
-        Apply the directive at schedule-tree level.
-        Default behavior inserts a mark node carrying the directive payload.
-        """
-        return node.insert_mark(self.mark_id())
-
-    def on_ast_generation(self, node: "I.ASTNode", stmts: Dict[str, Callable]) -> "I.ASTNode":
-        """
-        Apply the directive at AST generation time.
-        Default behavior strips the mark and returns its child node.
-        """
-        return node.mark_get_node()
-
 # [TODO]
 # Separate AST Generation and Rendering Process
 # Use MLIR?
@@ -68,14 +17,6 @@ def schedule_to_ast(schedule: I.Schedule, stmts: Dict[str, Callable]):
     CALLBACK = CFUNCTYPE(c_void_p, c_void_p, c_void_p)
     def replace_cb(node_handle, user_data):
         node = I.ASTNode(node_handle)    
-        if node.get_type() == isl_ast_node_type.ISL_AST_NODE_MARK:
-            directive = Directive.loads(node.mark_get_id().name())
-            if directive is not None:
-                new_node = directive.on_ast_generation(node, stmts)
-                if new_node is None:
-                    return node.mark_get_node().copy_handle()
-                return new_node.copy_handle()
-            return node.mark_get_node().copy_handle()
         if node.get_type() == isl_ast_node_type.ISL_AST_NODE_USER: 
             expr = node.user_get_expr()
             if expr.get_type() == isl_ast_expr_type.ISL_AST_EXPR_OP: 

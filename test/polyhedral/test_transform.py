@@ -23,7 +23,8 @@ def test_matmul_dispatcher(matmul):
         assert isinstance(mm, P.Dispatcher)
         mm: P.DomainEditor = mm.domain()[0]
         with mm.band() as mm: # todo: interchange
-            mm = mm @ [128, 128, 128]
+            mm @ [128, 128, 128]
+            print(mm)
             with mm[0].band() as mm:
                 mm @ [32, 32, 32]
                 print(mm)
