@@ -219,12 +219,26 @@ class BandEditor(Dispatcher):
     def split(self, pos: int) -> I.ScheduleNode:
         return self.node.band_split(pos)
 
+    @transformation
     def sink(self) -> I.ScheduleNode:
         return self.node.band_sink()
 
     @transformation
-    def permute(self, order: List[int]) -> I.ScheduleNode:
-        return schedule_node_band_permute(self.node, order)
+    def permute(self, *order: List[int]) -> I.ScheduleNode:
+        if sorted(order) != list(range(self.depth)):
+            raise RuntimeError(f"order is not a valid permutation, getting {order_arg}, depth={self.depth}")
+        def _perm(lst): return [lst[i] for i in order]
+        
+        mupa = self.node.band_get_partial_schedule()
+        
+        upas = _perm([mupa.get_union_pw_aff(i) for i in range(self.depth)])
+        coincidents = _perm([self.node.band_member_get_coincident(i) for i in range(self.depth)])
+        for i in range(self.depth):
+            mupa = mupa.set_union_pw_aff(i, upas[i])
+        band = self.node.insert_partial_schedule(mupa)
+        for i in range(self.depth):
+            band = self.node.band_member_set_coincident(i, coincidents[i])
+        return band
 
     def __mul__(self, other: Any) -> "BandEditor": return self.scale(other)
     def __floordiv__(self, other: Any) -> "BandEditor": return self.scale_down(other)

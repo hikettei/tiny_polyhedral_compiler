@@ -14,3 +14,10 @@ class Directive(metaclass=ABCMeta):
     @abstractmethod
     def on_ast(self):
         pass
+
+class Parallel(Directive):
+    def on_schedule(self):
+        pass
+
+    def on_ast(self):
+        pass

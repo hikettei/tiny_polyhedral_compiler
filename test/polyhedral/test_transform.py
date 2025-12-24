@@ -22,8 +22,8 @@ def test_matmul_dispatcher(matmul):
     with matmul.editor() as mm:
         assert isinstance(mm, P.Dispatcher)
         mm: P.DomainEditor = mm.domain()[0]
-        with mm.band() as mm: # todo: interchange
-            mm @ [128, 128, 128]
+        with mm.band().permute(0, 2, 1) as mm: # todo: interchange
+            mm.tile([128, 128, 128])
             print(mm)
             with mm[0].band() as mm:
                 mm @ [32, 32, 32]
