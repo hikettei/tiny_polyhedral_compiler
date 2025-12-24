@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
-import functools
-import re
 
 import caten.isl as I
 from .analysis import compute_dependence_relation
@@ -64,8 +62,7 @@ class ConstraintedModel:
     ) -> "ConstraintedModel":
         return cls(schedule, read_umap, write_umap, stmts)
 
-    def editor(self) -> "Dispatcher":
-        return Dispatcher(self.schedule.get_root(), self)
+    def editor(self) -> "Dispatcher": return Dispatcher(self.schedule.get_root(), self)
 
     def __add__(self, other: "ConstraintedModel") -> "ConstraintedModel":
         read_umap = self.read_umap | other.read_umap
@@ -88,7 +85,7 @@ def transformation(body: Callable[Any, I.ScheduleNode]):
         new_schedule = body(*args, **kwargs)
         assert isinstance(new_schedule, I.ScheduleNode)
         assert isinstance(args[0], Dispatcher)
-        return args[0].commit(f"{body.__name__}({args})", new_schedule)
+        return args[0].commit(f"{body.__name__}({args[1:]})", new_schedule)
     return f
 
 class Dispatcher:
@@ -124,7 +121,7 @@ class Dispatcher:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        # TODO: Back
+        # TODO: 元のPathまで戻ってくる
         return None
 
     def ensure_and_dispatch(self, cls: type["Dispatcher"], expect: str) -> "Dispatcher":
