@@ -25,7 +25,7 @@ class Dispatcher():
         self.model: ConstraintedModel  = model
 
     def to_c(self) -> str:
-        from caten.polyhedral.viz import schedule_to_c
+        from caten.polyhedral.codegen import schedule_to_c
         return schedule_to_c(self.current.get_schedule(), self.model.stmts)
     
     def __repr__(self) -> str:

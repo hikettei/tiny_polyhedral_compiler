@@ -96,7 +96,7 @@ class ScheduleNodeBase(metaclass=abc.ABCMeta):
             return "(Not Realized)"
 
     def to_c(self) -> str:
-        from caten.polyhedral.viz import schedule_to_c
+        from caten.polyhedral.codegen import schedule_to_c
         return schedule_to_c(self.node.get_schedule(), self.stmts)
 
     def __getitem__(self, idx: int) -> "I.ScheduleNode":
