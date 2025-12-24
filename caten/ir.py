@@ -18,13 +18,13 @@ class ATenAxis():
 
 @dataclass(frozen=True)
 class ATenOpType():
-    shape: List[ATenAxis]
+    shape: tuple[ATenAxis]
     dtype: DType
     offset: Union[ATenOp, None] = None
     is_ptr: bool = False # for vectorize
     def index(self, indices: List[ATenOp]):
         assert self.ndim == len(indices)
-        total = itertools.accumulate([b.index(a) for (a, b) in zip(indices, self.shape)], lambda a, b: Add([a, b]), initial=Const.new(0, index))
+        total = itertools.accumulate([b.index(a) for (a, b) in zip(indices, self.shape)], lambda a, b: Add((a, b)), initial=Const.new(0, index))
         if self.offset: total = Add([total, self.offset])
         return total
     @property
@@ -35,7 +35,7 @@ class ATenOpType():
         def _mul(a, b):
             if not isinstance(a, Const): a = _const(a)
             if not isinstance(b, Const): b = _const(b)
-            return Mul([a, b])
+            return Mul((a, b))
         strides = tuple(itertools.accumulate(reversed(shape[1:]), _mul, initial=_const(1)))[::-1]
         return ATenOpType(
             shape=[ATenAxis(shape=size, stride=stride, offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides)],
@@ -181,7 +181,7 @@ class Const(ATenOp):
     value: Union[int, float, str] = 0.0
     @staticmethod
     def new(value: Union[int, float, str], dtype: DType):
-        return Const(args=[], value=value, T=ATenOpType(shape=[], dtype=dtype))
+        return Const(args=(), value=value, T=ATenOpType(shape=[], dtype=dtype))
 
 @dataclass(frozen=True)
 class Allocate(ATenOp):
@@ -190,7 +190,7 @@ class Allocate(ATenOp):
     """
     @staticmethod
     def new(shape: List[Any], dtype: DType):
-        return Allocate([], T=ATenOpType.from_shape(shape, dtype))
+        return Allocate((), T=ATenOpType.from_shape(shape, dtype))
 
 @dataclass(frozen=True)
 class View(ATenOp):
