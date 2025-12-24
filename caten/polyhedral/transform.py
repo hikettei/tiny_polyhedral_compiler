@@ -1,30 +1,65 @@
-from typing import Dict, Callable
+from typing import Dict, Callable, Any
+
 import caten.isl as I
 from .analysis import compute_flow, compute_dependence_relation
 
-def create_constrainted_schedule(
-        schedule: I.Schedule,
-        read_umap: I.Schedule,
-        write_umap: I.Schedule,
-        stmts: Dict[str, Callable]):
-    deps, raw, waw, war = compute_dependence_relation(read_umap, write_umap, schedule)
-    return ConstraintedModel
 
 class ConstraintedModel():
-    def __init__(self):
-        pass
+    def __init__(self, schedule: I.Schedule, deps: I.UnionMap, stmts: Dict[str, Callable]):
+        self.schedule = schedule
+        self.stmts = stmts
+        self.deps = deps
+
+    @classmethod
+    def from_schedule(cls, schedule: I.Schedule, read_umap: I.UnionMap, write_umap: I.UnionMap, stmts: Dict[str, Callable]):
+        deps, _, _, _ = compute_dependence_relation(read_umap, write_umap, schedule)
+        return cls(schedule, deps, stmts)
+
+    def editor(self) -> "Dispatcher":
+        return Dispatcher(self.schedule.get_root(), self)
 
 class Dispatcher():
     # Dispatcher can do pattern match to move to the next editor
     # Dispatcher can trace how the tree was optimized, finally generating optimization tree like beam.
-    def sequence(self):
-        pass
+    def __init__(self, schedule: I.ScheduleNode, model: ConstraintedModel):
+        self.current: I.ScheduleNode = schedule
+        self.model: ConstraintedModel  = model
+
+    def __repr__(self) -> str:
+        from caten.polyhedral.viz import print_schedule
+        return f"{self.__class__.__name__}(\n{print_schedule(self.current)}\n)"
     
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        return self
+
+    def ensure_and_dispatch(self, cls: "Dispatcher", expect: str):
+        if not self.current.get_type_name() == expect:
+            raise RuntimeError(f"(TODO: Decent message), expecting {expect}")
+        return cls(self.schedule, self.model)
+    
+    def domain(self) -> "DomainEditor":
+        return self.ensure_and_dispatch(self, DomainEditor, "domain")
+
     def band(self):
+        return self.ensure_and_dispatch(self, BandEditor, "band")
+
+    def filter(self):
+        return self.ensure_and_dispatch(self, FilterEditor, "filter")
+    
+    def __getitem__(self, key: int):
+        return Dispatcher(self.current.child(key), self.model)
+        
+    
+class DomainEditor(Dispatcher):
+    # Bandでやるべきな気もする
+    def padding(self):
         pass
 
-class DomainEditor(Dispatcher):
-    pass
+    def reshape(self):
+        pass
 
 class FilterEditor(Dispatcher):
     pass

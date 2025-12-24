@@ -239,6 +239,8 @@ def print_schedule(node: "I.ScheduleNode") -> str:
         
         # Header
         marker = "┏ " if has_items else "┗ "
+        if node.is_equal(n):
+            header_text += " (You are here)"
         output_lines.append(f"{indent}{marker}{header_text}")
         
         # Items

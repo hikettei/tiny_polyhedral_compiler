@@ -188,8 +188,8 @@ class domain(ScheduleNodeBase):
 
     def finalize(self):
         assert self.node is not None, "Cannot finalize P.domain before finalizing schedules."
-        from .transform import create_constrainted_schedule
-        return create_constrainted_schedule(self.node, self.reads_map, self.writes_map, self.stmt_lambdas)
+        from .transform import ConstraintedModel
+        return ConstraintedModel.from_schedule(self.node.get_schedule(), self.reads_map, self.writes_map, self.stmt_lambdas)
 
 class band(ScheduleNodeBase):
     """

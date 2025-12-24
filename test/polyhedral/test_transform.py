@@ -16,5 +16,12 @@ def matmul():
                 ]
     return gemm.finalize()
 
-def test_dependency_analysys(matmul):
-    print(matmul)
+# TODO;
+# - test tile (padding)
+def test_matmul_optimization(matmul):
+    with matmul.editor() as mm:
+        print(mm)
+        mm: P.DomainEditor = mm.domain()[0]
+        print(mm)
+        with mm.band()["ijk -> ikj"] as mm: # interchange
+            pass
