@@ -4,7 +4,6 @@ from typing import Optional, Tuple, Union, cast
 
 import caten.isl as I
 
-
 def compute_flow(
     sink: Union[str, "I.UnionMap"], 
     must_source: Union[str, "I.UnionMap"], 

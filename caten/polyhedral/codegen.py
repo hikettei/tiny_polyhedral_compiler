@@ -13,19 +13,9 @@ import caten.isl as I
 class Directive:
     name: ClassVar[str] = "Directive"
     Params: ClassVar[Optional[Type[BaseModel]]] = None
-    _registry: ClassVar[Dict[str, Type["Directive"]]] = {}
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-        if getattr(cls, "name", None):
-            Directive._registry[cls.name] = cls
-
     def __init__(self, **params: Any) -> None:
-        if self.Params is None:
-            self.params = None
-        else:
-            self.params = self.Params(**params)
-
+        self.params = self.Params(**params)
+    
     def dumps(self) -> str:
         payload = "" if self.params is None else self.params.model_dump_json()
         encoded = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
