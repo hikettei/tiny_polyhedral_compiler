@@ -33,21 +33,21 @@ class Dispatcher():
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        return self
+        return None
 
     def ensure_and_dispatch(self, cls: "Dispatcher", expect: str):
         if not self.current.get_type_name() == expect:
-            raise RuntimeError(f"(TODO: Decent message), expecting {expect}")
-        return cls(self.schedule, self.model)
+            raise RuntimeError(f"Cannot switch to the {expect}, you are now at {self.current.get_type_name()}!.\n{self.__repr__()}")
+        return cls(self.current, self.model)
     
     def domain(self) -> "DomainEditor":
-        return self.ensure_and_dispatch(self, DomainEditor, "domain")
+        return self.ensure_and_dispatch(DomainEditor, "domain")
 
     def band(self):
-        return self.ensure_and_dispatch(self, BandEditor, "band")
+        return self.ensure_and_dispatch(BandEditor, "band")
 
     def filter(self):
-        return self.ensure_and_dispatch(self, FilterEditor, "filter")
+        return self.ensure_and_dispatch(FilterEditor, "filter")
     
     def __getitem__(self, key: int):
         return Dispatcher(self.current.child(key), self.model)

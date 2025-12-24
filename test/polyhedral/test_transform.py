@@ -18,10 +18,11 @@ def matmul():
 
 # TODO;
 # - test tile (padding)
-def test_matmul_optimization(matmul):
+def test_matmul_dispatcher(matmul):
     with matmul.editor() as mm:
-        print(mm)
+        assert isinstance(mm, P.Dispatcher)
         mm: P.DomainEditor = mm.domain()[0]
-        print(mm)
-        with mm.band()["ijk -> ikj"] as mm: # interchange
-            pass
+        with mm.band() as mm: # interchange
+            print(mm)
+        
+

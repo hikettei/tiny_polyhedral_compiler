@@ -31,7 +31,6 @@ ignore = ["E501"]
 python_version = "3.11"
 warn_unused_configs = true
 disallow_untyped_defs = true
-ignore_missing_imports = true
 
 [tool.coverage.run]
 omit = [
