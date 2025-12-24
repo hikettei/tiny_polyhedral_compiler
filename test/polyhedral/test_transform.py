@@ -15,15 +15,18 @@ def matmul():
                     lambda i, j, k: C[j, i].assign(C[j, i] + A[k, i] * B[j, k])
                 ]
     return gemm.finalize()
-
-# TODO;
+# TODO:
+# - Repro of the article
 # - test tile (padding)
 def test_matmul_dispatcher(matmul):
     with matmul.editor() as mm:
         assert isinstance(mm, P.Dispatcher)
         mm: P.DomainEditor = mm.domain()[0]
-        with mm.band() as mm: # interchange
-            print(mm)
-            mm @ [32, 32, 32]
-            print(mm)
+        with mm.band() as mm: # todo: interchange
+            mm = mm @ [128, 128, 128]
+            with mm[0].band() as mm:
+                mm @ [32, 32, 32]
+                print(mm)
+                print(mm.to_c())
 
+# def test_matmul_tile(matmul):
