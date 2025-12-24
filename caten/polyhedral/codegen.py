@@ -7,7 +7,11 @@ from caten.isl.specs.enums import isl_ast_node_type, isl_ast_expr_type, isl_ast_
 import caten.isl as I
 
 class Directive():
-    pass
+    def on_ast_generation(self):
+        pass
+
+    def on_schedule(self):
+        pass
 
 # [TODO]
 # Separate AST Generation and Rendering Process

@@ -28,5 +28,4 @@ def test_matmul_dispatcher(matmul):
                 mm @ [32, 32, 32]
                 print(mm)
                 print(mm.to_c())
-
 # def test_matmul_tile(matmul):

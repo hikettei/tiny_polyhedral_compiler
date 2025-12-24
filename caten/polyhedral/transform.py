@@ -63,7 +63,7 @@ class Dispatcher():
         return Dispatcher(self.current.child(key), self.model)
 
 class DomainEditor(Dispatcher):
-    # Bandでやるべきな気もする
+    # Fused Bandでやるべきな気もする
     def padding(self):
         pass
 
@@ -78,7 +78,6 @@ class FilterEditor(Dispatcher):
 # - [ ] Verify the legality of the schedule.
 # - [ ] 最終的にもう一度OptimizationTreeをTraceしたい。
 # - [ ] Band Symbolic, Padding, Isolation.
-
 class BandEditor(Dispatcher):
     # TODO: Loop Transformation
     def get_tiling_sizes(self, sizes: Union[int, List[int]]) -> "I.MultiVal":
@@ -134,6 +133,9 @@ class BandEditor(Dispatcher):
         self.current = self.current.bank_sink()
         return self
 
+    def permute(self, order: List[int]) -> "band":
+        pass
+    
     def __mul__(self, other):      return self.scale(other)
     def __floordiv__(self, other): return self.scale_down(other)
     def __mod__(self, other):      return self.mod(other)
