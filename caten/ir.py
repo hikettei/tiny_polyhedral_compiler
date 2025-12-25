@@ -66,11 +66,8 @@ class ATenOp(metaclass=ATenOpMetaclass):
     args: List[ATenOp]
     T: Union[ATenOpType, None] = None # this should be provided via T=... option, or inferred via verify method. 
     @property
-    def predecessors(self):
-        # TODO:
-        # - Tに含まれるOpsをReadに含める
-        # - RangifyしたらSymbolicのDepsは消える
-        pass
+    def predecessors(self) -> tuple[ATenOp, ...]:
+        return tuple(args) + tuple(*[tuple(axis.size, axis.stride, axis.offset, axis.incf) for axis in self.T.axes]) + () if self.offset is None else tuple([self.offset])
     
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs) -> ATenOpType:
