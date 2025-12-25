@@ -148,12 +148,14 @@ class Neg(UnaryOps, ATenOp):
     """
     OUT = -X
     """
+    python_op = lambda x: -x
 
 @dataclass(frozen=True)
 class Recip(UnaryOps, ATenOp):
     """
     OUT = 1/X
     """
+    python_op = lambda x: 1/x
 
 @dataclass(frozen=True)
 class Sin(UnaryOps, ATenOp):
@@ -167,18 +169,21 @@ class Exp2(UnaryOps, ATenOp):
     """
     OUT = exp2(X)
     """
+    python_op = math.exp2
 
 @dataclass(frozen=True)
 class Log2(UnaryOps, ATenOp):
     """
     OUT = log2(X)
     """
+    python_op = math.log2
 
 @dataclass(frozen=True)
 class Sqrt(UnaryOps, ATenOp):
     """
     OUT = sqrt(X)
     """
+    python_op = math.sqrt
 
 @dataclass(frozen=True)
 class Bitcast(UnaryOps, ATenOp):
@@ -210,6 +215,7 @@ class IDiv(BinaryOps, ATenOp):
     """
     OUT = A // B
     """
+    python_op = operator.floordiv
 
 @dataclass(frozen=True)
 class And(BinaryOps, ATenOp):
@@ -229,30 +235,30 @@ class Xor(BinaryOps, ATenOp):
 
 @dataclass(frozen=True)
 class Max(BinaryOps, ATenOp):
-    pass
+    python_op = max
 
 @dataclass(frozen=True)
 class Mod(BinaryOps, ATenOp):
-    pass
+    python_op = operator.mod
 
 @dataclass(frozen=True)
 class Neq(BinaryOps, ATenOp):
-    pass
+    python_op = operator.ne
 
 @dataclass(frozen=True)
 class Lt(BinaryOps, ATenOp):
-    pass
+    python_op = operator.lt
 ### TernaryOps
 @dataclass(frozen=True)
 class Where(TernaryOps, ATenOp):
-    pass
+    python_op = lambda a, b, c: b if a else c
 
 ### Allocation
 @dataclass(frozen=True)
 class Const(ViewOps, ATenOp):
-    value: Union[int, float, str] = 0.0
+    value: Union[int, float, str, bool] = 0.0
     @staticmethod
-    def new(value: Union[int, float, str], dtype: DType):
+    def new(value: Union[int, float, str, bool], dtype: DType):
         return Const(args=(), value=value, T=ATenOpType(axes=(), dtype=dtype))
 
 @dataclass(frozen=True)
