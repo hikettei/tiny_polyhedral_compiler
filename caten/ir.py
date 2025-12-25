@@ -24,7 +24,7 @@ class ATenOpMetaclass(type):
             return tuple(sorted((k, ATenOpMetaclass._freeze(v)) for k, v in x.items()))
         return x
     def __call__(cls, args: tuple[ATenOp, ...] | list[ATenOp], T: "ATenOpType | None" = None, **kwargs: Any) -> ATenOp:
-        T = cls.verify(tuple(args), T, **kwargs) # run type inference+verification
+        T = cls.verify(tuple(args), T, **kwargs) # type: ignore
         wret = ATenOpMetaclass.cache.get(key:=(cls, tuple(args), ATenOpMetaclass._freeze(T), ATenOpMetaclass._freeze(kwargs)), None)
         if wret is not None and (ret:=wret()) is not None: return ret.simplify()
         ATenOpMetaclass.cache[key] = weakref.ref(created:=super().__call__(tuple(args), T=T, **kwargs))
@@ -52,7 +52,7 @@ class ATenOpType():
     is_ptr: bool = False # TODO: for vectorize?
     def index(self, indices: List[ATenOp]) -> Any:
         assert self.ndim == len(indices)
-        total = itertools.accumulate([b.index(a) for (a, b) in zip(indices, self.axes, strict=True)], lambda a, b: Add((a, b)), initial=Const.new(0, index))
+        total = itertools.accumulate([b.index(a) for (a, b) in zip(indices, self.axes, strict=True)], lambda a, b: Add((a, b)), initial=Const.new(0, index)) # type: ignore
         if self.offset: total = Add((total, self.offset)) # type: ignore
         return total
     @property
@@ -62,7 +62,7 @@ class ATenOpType():
         def _mul(a: Any, b: Any) -> Any: return Mul((_const(a), _const(b)))
         strides = tuple(itertools.accumulate(reversed(shape[1:]), _mul, initial=_const(1)))[::-1]
         return ATenOpType(
-            axes=tuple([ATenAxis(size=_const(size), stride=_const(stride), offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides, strict=True)]),
+            axes=tuple([ATenAxis(size=_const(size), stride=_const(stride), offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides, strict=True)]), # type: ignore
             dtype=dtype,
         )
 
