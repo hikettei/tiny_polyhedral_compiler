@@ -384,3 +384,14 @@ def to_dot(root: ATenOp, *, include_predecessors: bool = False, show_shape: bool
 
     body = "\n  ".join(nodes + edges)
     return 'digraph ATenOp {\n  rankdir=TB;\n  node [fontname="monospace"];\n  edge [fontname="monospace"];\n  ' + body + "\n}\n"
+
+def get_jupyter_graphviz(dot_source: str) -> Any:
+    try:
+        import graphviz  # type: ignore
+        return graphviz.Source(dot_source)
+    except ImportError:
+        class HtmlDot:
+            def __init__(self, src: str) -> None: self.src = src
+            def _repr_html_(self) -> str:
+                return f"<div style='border:1px solid #ccc; padding:10px; white-space:pre; font-family:monospace'>{self.src}</div><div style='color:red'>graphviz module not found. try %pip install graphviz</div>"
+        return HtmlDot(dot_source)

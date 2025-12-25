@@ -95,8 +95,8 @@ class ATenOp(metaclass=ATenOpMetaclass):
         return render(self)
     
     def dot(self) -> str:
-        from caten.viz import to_dot
-        return to_dot(self)
+        from caten.viz import get_jupyter_graphviz, to_dot
+        return get_jupyter_graphviz(to_dot(self))
 
     @property
     def item(self) -> Union[int, float, ATenOp]:
