@@ -321,7 +321,8 @@ class Reduce(ViewOps, ATenOp):
 @dataclass(frozen=True)
 class Range(ATenOp):
     """
-    OUT = Range(SIZE) 
+    OUT = Range(SIZE)
+    OUT is the range of [0, SIZE)
     """
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
@@ -334,7 +335,9 @@ class Range(ATenOp):
 class Aff(ATenOp):
     """
     OUT = Aff(Stride, Range, Offset, Incx)
-    equivalent to: out = 
+    which is the equivalent to `Stride(Incx*Range+Offset)` in ir.INDEX
+    In lexorder, [Range] -> { Stmt[Incx*Range+Offset] }
+                                    Strideth dim
     """
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
