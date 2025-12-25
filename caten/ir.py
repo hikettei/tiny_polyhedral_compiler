@@ -6,7 +6,7 @@ import math
 import operator
 import weakref
 from dataclasses import dataclass
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, Sequence
 
 from .dtype import DType, index
 
@@ -23,11 +23,11 @@ class ATenOpMetaclass(type):
         if isinstance(x, dict):
             return tuple(sorted((k, ATenOpMetaclass._freeze(v)) for k, v in x.items()))
         return x
-    def __call__(cls, args: tuple[ATenOp, ...], T: "ATenOpType | None" = None, **kwargs):
-        T = cls.verify(args, T, **kwargs) # run type inference+verification
+    def __call__(cls, args: tuple[ATenOp, ...] | list[ATenOp], T: "ATenOpType | None" = None, **kwargs: Any) -> ATenOp:
+        T = cls.verify(tuple(args), T, **kwargs) # run type inference+verification
         wret = ATenOpMetaclass.cache.get(key:=(cls, tuple(args), ATenOpMetaclass._freeze(T), ATenOpMetaclass._freeze(kwargs)), None)
         if wret is not None and (ret:=wret()) is not None: return ret.simplify()
-        ATenOpMetaclass.cache[key] = weakref.ref(created:=super().__call__(args, T=T, **kwargs))
+        ATenOpMetaclass.cache[key] = weakref.ref(created:=super().__call__(tuple(args), T=T, **kwargs))
         return created.simplify()
 
 @dataclass(frozen=True)
@@ -36,30 +36,30 @@ class ATenAxis():
     stride: ATenOp
     offset: ATenOp
     incf: ATenOp
-    def index(self, i: ATenOp):
-        assert i.T.dtype == index, "ATenAxis.index: range index should be type of index."
-        return Mul(self.stride, Add(Mul(i, self.incf), self.offset))
+    def index(self, i: ATenOp) -> ATenOp:
+        assert i.T is not None and i.T.dtype == index, "ATenAxis.index: range index should be type of index."
+        return Mul((self.stride, Add((Mul((i, self.incf)), self.offset))))
 
-def _const(val: int, dtype: DType=index):
+def _const(val: int, dtype: DType=index) -> ATenOp:
     if isinstance(val, Const): return val
     else: return Const.new(val, dtype)
             
 @dataclass(frozen=True)
 class ATenOpType():
-    axes: tuple[ATenAxis]
+    axes: tuple[ATenAxis, ...]
     dtype: DType
     offset: Union[ATenOp, None] = None
     is_ptr: bool = False # TODO: for vectorize?
-    def index(self, indices: List[ATenOp]):
+    def index(self, indices: List[ATenOp]) -> Any:
         assert self.ndim == len(indices)
         total = itertools.accumulate([b.index(a) for (a, b) in zip(indices, self.axes, strict=True)], lambda a, b: Add((a, b)), initial=Const.new(0, index))
-        if self.offset: total = Add([total, self.offset])
+        if self.offset: total = Add((total, self.offset)) # type: ignore
         return total
     @property
-    def ndim(self): return len(self.axes)
+    def ndim(self) -> int: return len(self.axes)
     @staticmethod
     def from_shape(shape: List[Any], dtype: DType) -> ATenOpType:
-        def _mul(a, b): return Mul((_const(a), _const(b)))
+        def _mul(a: Any, b: Any) -> Any: return Mul((_const(a), _const(b)))
         strides = tuple(itertools.accumulate(reversed(shape[1:]), _mul, initial=_const(1)))[::-1]
         return ATenOpType(
             axes=tuple([ATenAxis(size=_const(size), stride=_const(stride), offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides, strict=True)]),
@@ -68,52 +68,53 @@ class ATenOpType():
 
 @dataclass(frozen=True)
 class ATenOp(metaclass=ATenOpMetaclass):
-    args: List[ATenOp]
+    args: tuple[ATenOp, ...]
     T: Union[ATenOpType, None] = None # this should be provided via T=... option, or inferred via verify method. 
     @property
     def predecessors(self) -> tuple[ATenOp, ...]:
-        return tuple(self.args) + tuple(*[tuple(axis.size, axis.stride, axis.offset, axis.incf) for axis in self.T.axes]) + () if self.offset is None else tuple([self.offset])
+        return tuple(self.args) + (tuple(*[tuple((axis.size, axis.stride, axis.offset, axis.incf)) for axis in self.T.axes]) + () if self.T is not None else ()) + ((self.offset,) if self.T and self.T.offset is not None else ()) # type: ignore
     
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs) -> ATenOpType:
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         raise NotImplementedError("Not implemented")
 
-    def simplify(self):
+    def simplify(self) -> ATenOp:
         from caten.simplifier import simplifier
         return simplifier.simplify(self)
 
-    def deepwalk(self):
+    def deepwalk(self) -> None:
         pass
 
-    def viz(self):
+    def viz(self) -> None:
         pass
 
     @property
-    def item(self):
+    def item(self) -> Union[int, float, ATenOp]:
         # Returns scalar value if self is constant folded
         if isinstance(self, Const) and isinstance(self.value, (int, float)):
             return self.value
         else: return self
     # Mixin for computing shapes (required by reshape, etc)
     # TODO: Use same semantic of broadcast as tensor
-    def __add__(self, other: Any): return Add((self, _const(other)))
-    def __radd__(self, other: Any): return Add((_const(other), self))
-    def __mul__(self, other: Any): return Mul((self, _const(other)))
-    def __rmul__(self, other: Any): return Mul((_const(other), self))
+    def __add__(self, other: Any) -> ATenOp: return Add((self, _const(other)))
+    def __radd__(self, other: Any) -> ATenOp: return Add((_const(other), self))
+    def __mul__(self, other: Any) -> ATenOp: return Mul((self, _const(other)))
+    def __rmul__(self, other: Any) -> ATenOp: return Mul((_const(other), self))
     # note: do not try to overload __eq__ since it is need to compute hash
     @staticmethod
-    def eql(a: Union[int, float, ATenOp], b: Union[int, float, ATenOp]):
+    def eql(a: Union[int, float, ATenOp], b: Union[int, float, ATenOp]) -> bool:
         """
         Compare two scalars (Python numbers or ATenOp scalars) for equality.
         """
         if isinstance(a, (int, float)) and isinstance(b, (int, float)): return (a == b)
+        assert isinstance(a, ATenOp) and a.T is not None
         dtype = a.T.dtype if isinstance(a, ATenOp) else b.T.dtype # A or B is asserted to have a dtype
-        a, b = _const(a, dtype=dtype), _const(b, dtype=dtype)
+        a, b = _const(a, dtype=dtype), _const(b, dtype=dtype) # type: ignore
         # Note(hikettei): this comparison highly depends on whether they are constant folded.
         # plus, cannot verify the equivalence of A*B and B*A
         return a == b
     @staticmethod
-    def equals(a: List[Union[int, float, ATenOp]], b: List[Union[int, float, ATenOp]]):
+    def equals(a: List[Union[int, float, ATenOp]], b: List[Union[int, float, ATenOp]]) -> bool:
         """
         Compare two lists element-wise using `ATenOp.eql`
         """
@@ -125,25 +126,28 @@ class ATenOp(metaclass=ATenOpMetaclass):
 class UnaryOps():
     # ops whose first argument is returned dtype
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs) -> ATenOpType:
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) == 1, f"UnaryOp {cls.__name__} takes one argument, getting {args}"
+        assert args[0].T is not None
         return args[0].T
 class BinaryOps():
     # ops whose first argument is returned dtype
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs) -> ATenOpType:
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) == 2, f"BinaryOp {cls.__name__} takes two argument, getting {args}"
+        assert args[0].T is not None
         return args[0].T
 class TernaryOps():
     # ops whose first argument is returned dtype
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs) -> ATenOpType:
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) == 3, f"TernaryOp {cls.__name__} takes three argument, getting {args}"
+        assert args[0].T is not None
         return args[0].T
 class ViewOps():
     # ops whose return dtypes are explicitly provided via T option
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs) -> ATenOpType:
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert T is not None, f"Cannot create {cls.__name__} without providing T"
         return T
 ### UnaryOps
@@ -258,7 +262,7 @@ class Where(TernaryOps, ATenOp):
 class Const(ViewOps, ATenOp):
     value: Union[int, float, str, bool] = 0.0
     @staticmethod
-    def new(value: Union[int, float, str, bool], dtype: DType):
+    def new(value: Union[int, float, str, bool], dtype: DType) -> Const:
         return Const(args=(), value=value, T=ATenOpType(axes=(), dtype=dtype))
 
 @dataclass(frozen=True)
@@ -267,7 +271,7 @@ class Allocate(ViewOps, ATenOp):
     Allocate(S1, S2, S3, ...)
     """
     @staticmethod
-    def new(shape: List[Any], dtype: DType):
+    def new(shape: List[Any], dtype: DType) -> Allocate:
         return Allocate((), T=ATenOpType.from_shape(shape, dtype))
 
 @dataclass(frozen=True)
@@ -277,11 +281,13 @@ class View(ViewOps, ATenOp):
     """
     # This is the definition of view
     @staticmethod
-    def reshape(tensor: ATenOp, shape: List[ATenOp]):
+    def reshape(tensor: ATenOp, shape: List[ATenOp]) -> View:
+        assert tensor.T is not None
         return View((tensor,), T=ATenOpType.from_shape(shape, tensor.T.dtype))
 
     @staticmethod
-    def permute(tensor: ATenOp, order: List[int]):
+    def permute(tensor: ATenOp, order: List[int]) -> View:
+        assert tensor.T is not None
         return View((tensor,), T=ATenOpType(
             axes=tuple([tensor.T.axes[i] for i in order]),
             dtype=tensor.T.dtype,
@@ -290,12 +296,13 @@ class View(ViewOps, ATenOp):
         ))
 
     @staticmethod
-    def expand(tensor: ATenOp, shape: List[Union[int, ATenOp]]):
-        def _expand(old_axis: ATenAxis, new_size: ATenOp) -> ATenAxis:
+    def expand(tensor: ATenOp, shape: List[Union[int, ATenOp]]) -> View:
+        assert tensor.T is not None
+        def _expand(old_axis: ATenAxis, new_size: int | float | ATenOp) -> ATenAxis:
             if ATenOp.eql(old_axis.size, new_size): return old_axis
             else:
-                assert ATenOp.eql(old_axis, 1), f"The axis to expand should be evaluated to 1, getting {old_axis}"
-                return ATenAxis(size=_const(new_size), stride=Const.new(0, index), offset=Const.new(0, index), incf=Const.new(1, index))
+                assert ATenOp.eql(old_axis.size, 1), f"The axis to expand should be evaluated to 1, getting {old_axis}" # Fix: old_axis -> old_axis.size
+                return ATenAxis(size=_const(new_size), stride=Const.new(0, index), offset=Const.new(0, index), incf=Const.new(1, index)) # type: ignore
         return View((tensor,), T=ATenOpType(
             axes=tuple([_expand(old_axis, new_size) for (old_axis, new_size) in zip(tensor.T.axes, shape, strict=True)]),
             dtype=tensor.T.dtype,
@@ -308,9 +315,9 @@ class Reduce(ATenOp):
     """
     OUT = Reduce(A, B, op=BinaryOps)
     """
-    op: BinaryOps = Add
+    op: type[BinaryOps] = Add
     @classmethod
-    def from_ast_expr(cls):
+    def from_ast_expr(cls) -> None:
         pass
 
 @dataclass(frozen=True)
@@ -337,7 +344,7 @@ class Progn(ATenOp):
 class Polyhedral(ATenOp):
     pass
 
-def Var():
+def Var() -> None:
     pass
 
 # e.g.:

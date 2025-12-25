@@ -1,20 +1,21 @@
+from typing import Any
 import caten as C
 
 
 class CPUTensor(C.ATenBase):
-    def allocate(self):
+    def allocate(self) -> None:
         pass
 
-    def free(self):
+    def free(self) -> None:
         pass
 
     #@staticmethod
-    def compile(self):
+    def compile(self) -> None:
         pass
 
     @staticmethod
-    def render(op):
-        def _render(node):
+    def render(op: Any) -> None:
+        def _render(node: Any) -> None:
             pass
 
 C.ATenBase.register("CPU", CPUTensor)
