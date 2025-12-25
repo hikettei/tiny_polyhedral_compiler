@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import functools
 import operator
-from typing import Iterable, TypeVar, Any
+from typing import Any, Iterable, TypeVar
 
 T = TypeVar("T")
 

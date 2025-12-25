@@ -6,7 +6,7 @@ import math
 import operator
 import weakref
 from dataclasses import dataclass
-from typing import Any, Dict, List, Union, Sequence
+from typing import Any, Dict, List, Union
 
 from .dtype import DType, index
 

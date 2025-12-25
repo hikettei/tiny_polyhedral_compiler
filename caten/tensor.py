@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from abc import ABCMeta, abstractmethod
-from typing import Any, Callable, ClassVar, List, Self, Tuple, Union
+from typing import Any, Callable, List, Self, Tuple, Union
 
 import caten.ir as ir
 from caten.helpers import align_left, argfix, prod
