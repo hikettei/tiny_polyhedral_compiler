@@ -38,7 +38,7 @@ class ATen:
     @property
     def dtype(self): return self.op.T.dtype
     @staticmethod
-    def wrap_const(self, obj: Any, dtype: DType = index):
+    def wrap_const(obj: Any, dtype: DType = index):
         """
         Ensures obj is a constant of dtype
         """
@@ -57,7 +57,7 @@ class ATen:
 ## movement ops mixin
 class ATenMovements():
     @property
-    def shape(self) -> List[ATen]: return [x.shape for x in self.op.T.axes]
+    def shape(self) -> List[ATen]: return [x.size for x in self.op.T.axes]
     @property
     def strides(self) -> List[ATen]: return [x.stride for x in self.op.T.axes]
     @ATen.top
@@ -80,7 +80,7 @@ class ATenMath():
     @ATen.top
     def sin(self: ATen): return self.forward(ir.Sin, self)
     @ATen.top
-    def cos(self: ATen): return self.forward(ir.Sin, self + Tensor(0.0))
+    def cos(self: ATen): return self.forward(ir.Sin, self + Tensor.const(0.0, dtype=self.dtype))
 ## nn ops mixin
 class ATenNN():
     pass

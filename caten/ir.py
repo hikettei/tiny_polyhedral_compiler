@@ -198,7 +198,7 @@ class View(ATenOp):
     """
     @staticmethod
     def reshape(tensor: ATenOp, shape: List[ATenOp]):
-        pass
+        return View((tensor,), T=ATenOpType.from_shape(shape, tensor.T.dtype))
     
     @staticmethod
     def new(tensor: ATenOp, view: ATenOpType):
