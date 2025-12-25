@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import inspect, operator
-import math
-
+import inspect
 from dataclasses import is_dataclass, replace
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 
-from .ir import ATenOp
 import caten.ir as ir
+
+from .ir import ATenOp
+
 OpType = Type[ATenOp]
 
 class Pat:

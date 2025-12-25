@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from abc import ABCMeta, abstractmethod
-from typing import List, Dict, Any, Union
-import itertools, weakref, dataclasses
+import dataclasses
+import itertools
+import math
+import operator
+import weakref
 from dataclasses import dataclass
-import operator, math
+from typing import Any, Dict, List, Union
+
 from .dtype import DType, index
+
 
 class ATenOpMetaclass(type):
     cache: Dict[tuple, weakref.ReferenceType[ATenOp]] = {}
@@ -87,7 +91,7 @@ class ATenOp(metaclass=ATenOpMetaclass):
     @property
     def item(self):
         # Returns scalar value if self is constant folded
-        if isinstance(self, Const) and isinstance(getattr(self, "value"), (int, float)):
+        if isinstance(self, Const) and isinstance(self.value, (int, float)):
             return self.value
         else: return self
     # Mixin for computing shapes (required by reshape, etc)
@@ -223,10 +227,6 @@ class And(BinaryOps, ATenOp):
 
 @dataclass(frozen=True)
 class Or(BinaryOps, ATenOp):
-    pass
-
-@dataclass(frozen=True)
-class And(BinaryOps, ATenOp):
     pass
 
 @dataclass(frozen=True)

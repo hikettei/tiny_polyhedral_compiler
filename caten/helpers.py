@@ -1,6 +1,8 @@
 from __future__ import annotations
+
+import functools
+import operator
 from typing import Iterable, TypeVar
-import functools, operator
 
 T = TypeVar("T")
 

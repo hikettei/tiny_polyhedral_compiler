@@ -1,10 +1,14 @@
 from __future__ import annotations
-from abc import ABCMeta, abstractmethod
-from typing import Any, Optional, Tuple, Union, ClassVar, Self
+
 import os
+from abc import ABCMeta, abstractmethod
+from typing import Any, Callable, ClassVar, List, Self, Tuple, Union
+
 import caten.ir as ir
-from .dtype import default_float, index, floats, integers
-from caten.helpers import argfix, prod, align_left
+from caten.helpers import align_left, argfix, prod
+
+from .dtype import DType, default_float, floats, index, integers
+
 ## Backend Abstraction
 DEVICE_TO_TENSOR = {}
 def get_backend(): return os.environ.get("BACKEND", "CPU")
@@ -29,7 +33,7 @@ class ATen:
             case _: raise TypeError(f"ATen.const: Only integer or float objects can become constant! getting {obj}")
         return ir.Const.new(obj, dtype)
     def forward(self, op: Callable, *args: List, **kwargs) -> ATen: return Tensor(op=op(*args, **kwargs))
-    def __class_getitem__(cls, item: Union[Any, Tuple[Any, ...]]) -> TensorSpec: return TensorSpec(item)
+    def __class_getitem__(cls, item: Union[Any, Tuple[Any, ...]]) -> ATenSpec: return ATenSpec(item)
     def __repr__(self) -> str:
         # TODO: Display Shape, realized buffer, etc.
         return f"{self.__class__.__name__}<{self.op}>"
@@ -90,7 +94,7 @@ class ATenMovements():
         ret = Tensor(op=ir.View.reshape(self.op, [ATen.wrap_const(s, dtype=index) for s in new_shape]))
         return self if ir.ATenOp.equals(ret.shape, self.shape) else ret
     @ATen.top
-    def shrink(self, arg: tuple[tuple[sint, sint] | None, ...]) -> Self:
+    def shrink(self, arg: tuple[tuple[int, int] | None, ...]) -> Self:
         raise NotImplementedError("shrink todo")
     @ATen.top
     def permute(self, order, *args) -> Self:
@@ -113,14 +117,14 @@ class ATenArith():
             raise TypeError("Cannot add x and y (dtypes mismatch, todo)")
         if reverse: x, y = y, x
         # compute the output shape
-        def _broadcast_shape(*shapes:tuple[sint, ...]) -> tuple[sint, ...]:
+        def _broadcast_shape(*shapes:tuple[int, ...]) -> tuple[int, ...]:
             def smax(a, b):
                 if ir.ATenOp.eql(a, 1): return b
                 elif ir.ATenOp.eql(b, 1): return a
                 else:
                     assert ir.ATenOp.eql(a, b)
                     return a # a != b is asserted here?
-            return tuple(0 if 0 in nth_dim_sizes else smax(nth_dim_sizes) for nth_dim_sizes in zip(*_align_left(*shapes)))
+            return tuple(0 if 0 in nth_dim_sizes else smax(nth_dim_sizes) for nth_dim_sizes in zip(*align_left(*shapes)))
         out_shape = _broadcast_shape(x.shape, y.shape)
         return x._broadcast_to(out_shape), y._broadcast_to(out_shape)
     # TODO:
@@ -181,7 +185,7 @@ class ATenBase(ATen, ATenMovements, ATenArith,ATenMath, ATenNN, ATenLinalg, meta
 
     @staticmethod
     @abstractmethod
-    def render(op: ATenOp):
+    def render(op):
         pass
 
 class Tensor(ATenBase):

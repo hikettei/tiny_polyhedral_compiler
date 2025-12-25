@@ -1,8 +1,7 @@
-from . import dtype, helpers, ir, tensor
 from .dtype import *
-from .tensor import *
 from .runtime import cpu
 from .simplifier import *
+from .tensor import *
 
 __all__ = [
     "dtype",
