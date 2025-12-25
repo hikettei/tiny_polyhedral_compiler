@@ -102,12 +102,41 @@ class ATenMovements():
     def expand(self, shape, *args) -> Self:
         new_shape = tuple(from_ if to == -1 or to is None else to for from_, to in zip(*(align_left(self.shape, argfix(shape, *args)))))
         return self._broadcast_to([ATen.wrap_const(s, dtype=index) for s in new_shape])
+def smax(a, b):
+    # [TODO] Const fold and == 1 is required
+    print("TODO: SMAX")
+    return max(a, b)
 ## arithmetic mixin
 class ATenArith():
+    def _broadcasted(self, y:Tensor|int|float, reverse:bool=False) -> tuple[Tensor, Tensor]:
+        x: ATen = self
+        if not isinstance(y, Tensor):
+            y = Tensor.const(y, dtype=x.dtype)
+        if x.dtype != y.dtype:
+            raise TypeError("Cannot add x and y (dtypes mismatch, todo)")
+        if reverse: x, y = y, x
+        # compute the output shape
+        def _broadcast_shape(*shapes:tuple[sint, ...]) -> tuple[sint, ...]:
+            return tuple(0 if 0 in nth_dim_sizes else smax(nth_dim_sizes) for nth_dim_sizes in zip(*_align_left(*shapes)))
+        out_shape = _broadcast_shape(x.shape, y.shape)
+        return x._broadcast_to(out_shape), y._broadcast_to(out_shape)
+
+    # TODO:
+    # - reduce option
+    # - ir.Add.new (or binop) can have reduce option
     @ATen.top
-    def add(self, other):
+    def add(self, other, reverse:bool=False): return self.forward(ir.Add, tuple(self._broadcasted(self, other, reverse=reverse)))
+    @ATen.top
+    def mul(self, other, reverse:bool=False): return self.forward(ir.Mul, tuple(self._broadcasted(self, other, reverse=reverse)))
+    def __eq__(self, other: Any):
+        print("A")
         pass
-    # TODO: self == 1 is evalued to true if self is const
+    def __add__(self, other: Any): return self.add(other)
+    def __radd__(self, other: Any): return self.add(other, reverse=True)
+    def __mul__(self, other: Any): return self.mul(other)
+    def __rmul__(self, other: Any): return self.mul(other, reverse=True)
+    
+ # TODO: self == 1 is evalued to true if self is const
 ## math mixin
 class ATenMath():
     @ATen.top
@@ -126,7 +155,7 @@ class Facet():
     # TODO: with tensor.facet("CUDA") as tensor: ...
     pass
 ## abstraction over backends
-class ATenBase(ATen, ATenMath, ATenNN, ATenMovements, ATenLinalg, metaclass=ABCMeta):
+class ATenBase(ATen, ATenMovements, ATenArith,ATenMath, ATenNN, ATenLinalg, metaclass=ABCMeta):
     def __init__(self, *args, op=None):
         self.op = op
         

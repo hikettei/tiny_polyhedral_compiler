@@ -35,6 +35,10 @@ class ATenAxis():
         assert i.T.dtype == index, "ATenAxis.index: range index should be type of index."
         return Mul(self.stride, Add(Mul(i, self.incf), self.offset))
 
+def _const(val: int):
+    if isinstance(val, Const): return val
+    else: return Const.new(val, index)
+            
 @dataclass(frozen=True)
 class ATenOpType():
     axes: tuple[ATenAxis]
@@ -50,14 +54,10 @@ class ATenOpType():
     def ndim(self): return len(self.axes)
     @staticmethod
     def from_shape(shape: List[Any], dtype: DType) -> ATenOpType:
-        def _const(val: int): return Const.new(val, index)
-        def _mul(a, b):
-            if not isinstance(a, Const): a = _const(a)
-            if not isinstance(b, Const): b = _const(b)
-            return Mul((a, b))
+        def _mul(a, b): return Mul((_const(a), _const(b)))
         strides = tuple(itertools.accumulate(reversed(shape[1:]), _mul, initial=_const(1)))[::-1]
         return ATenOpType(
-            axes=tuple([ATenAxis(size=size, stride=stride, offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides)]),
+            axes=tuple([ATenAxis(size=_const(size), stride=_const(stride), offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides)]),
             dtype=dtype,
         )
     
@@ -82,6 +82,13 @@ class ATenOp(metaclass=ATenOpMetaclass):
 
     def viz(self):
         pass
+
+    # Mixin for computing shapes (required by reshape, etc)
+    def __add__(self, other: Any): return Add((self, _const(other)))
+    def __radd__(self, other: Any): return Add((_const(other), self))
+    def __mul__(self, other: Any): return Mul((self, _const(other)))
+    def __rmul__(self, other: Any): return Mul((_const(other), self))
+    
 ## == Tensor Graph ============================================================
 class UnaryOps():
     # ops whose first argument is returned dtype
@@ -243,7 +250,7 @@ class View(ViewOps, ATenOp):
             if old_axis.size == new_size: return old_axis
             else:
                 assert old_axis == -1
-                return ATenAxis(size=new_size, stride=Const.new(0, index), offset=Const.new(0, index), incf=Const.new(1, index))
+                return ATenAxis(size=_const(new_size), stride=Const.new(0, index), offset=Const.new(0, index), incf=Const.new(1, index))
         return View((tensor,), T=ATenOpType(
             axes=tuple([_expand(old_axis, new_size) for (old_axis, new_size) in zip(tensor.T.axes, shape)]),
             dtype=tensor.T.dtype,
