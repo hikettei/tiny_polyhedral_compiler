@@ -3,7 +3,7 @@ from abc import ABCMeta, abstractmethod
 from typing import Any, Optional, Tuple, Union, ClassVar, Self
 import os
 import caten.ir as ir
-from .dtype import float32
+from .dtype import default_float, index, floats, integers
 from caten.helpers import argfix, prod
 ## Backend Abstraction
 DEVICE_TO_TENSOR = {}
@@ -20,11 +20,30 @@ class ATenSpec:
 class ATen:
     op: ATenOp # ATen is just a wrapper for ATenOp
     @classmethod
-    def from_shape(cls, shape: List[ATenOp], dtype: DType=float32): return ir.Allocate.new(shape, dtype)
+    def from_shape(cls, shape: List[ATenOp], dtype: DType=default_float): return ir.Allocate.new(shape, dtype)
+    @classmethod
+    def const(cls, obj: Any, dtype: DType=index):
+        match obj:
+            case int():
+                assert dtype in integers
+            case float():
+                assert dtype in floats
+            case _:
+                raise TypeError(f"ATen.const: Only integer or float objects can become constant! getting {obj}")
+        return ir.Const.new(obj, dtype)
     def forward(self, op: Callable, *args: List, **kwargs) -> ATen: return ATen(op=op(*args, **kwargs))
     def __class_getitem__(cls, item: Union[Any, Tuple[Any, ...]]) -> TensorSpec: return TensorSpec(item)
     # TODO: Display Shape, realized buffer, etc.
     def __repr__(self) -> str: return f"{self.__class__.__name__}<{self.node}>"
+    @property
+    def dtype(self): return self.op.T.dtype
+    @staticmethod
+    def ensure_tensor(self, obj: Any, dtype: DType = index):
+        if isinstance(obj, ATen):
+            assert obj.dtype == dtype # todo: decent error msg
+            return obj
+        else:
+            return ATen.const(obj, dtype=dtype)
     @staticmethod
     def top(f: Callable[Any, ATen]):
         """
@@ -38,9 +57,8 @@ class ATen:
 ## movement ops mixin
 class ATenMovements():
     @property
-    def shape(self): -> List[ATen]:
+    def shape(self) -> List[ATen]:
         pass
-    
     @ATen.top
     def reshape(self, shape, *args) -> Self:
         new_shape = tuple([s if s is not None else self.shape[i] for i, s in enumerate(argfix(shape, *args))])
@@ -49,7 +67,7 @@ class ATenMovements():
         if c: new_shape = tuple([-prod(self.shape) // prod(new_shape) if s == -1 else s for s in new_shape])
         if prod(self.shape) != prod(new_shape):
             raise ValueError(f"size mismatch, can't reshape ({self.shape}) -> ({new_shape})")
-        ret = ATen(op=ir.View.reshape(self.op, new_shape)) # TODO: new_shape is ATenOp?
+        ret = ATen(op=ir.View.reshape(self.op, [ATen.ensure_tensor(s, dtype=index) for s in new_shape])) # TODO: new_shape is ATenOp?
         return self if ret.shape == self.shape else ret
 ## arithmetic mixin
 class ATenArith():
