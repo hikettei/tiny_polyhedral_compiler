@@ -2,9 +2,29 @@ from __future__ import annotations
 
 from abc import ABCMeta, abstractmethod
 from typing import List, Dict, Any, Union
-import itertools
+import itertools, weakref, dataclasses
 from dataclasses import dataclass
 from .dtype import DType, index
+
+class ATenOpMetaclass(type):
+    cache: Dict[tuple, weakref.ReferenceType[ATenOp]] = {}
+    @staticmethod
+    def _freeze(x: Any) -> Any:
+        if isinstance(x, ATenOp): return x
+        if dataclasses.is_dataclass(x):
+            return (type(x),) + tuple((f.name, ATenOpMetaclass._freeze(getattr(x, f.name))) for f in dataclasses.fields(x))
+        if isinstance(x, (list, tuple)):
+            return tuple(ATenOpMetaclass._freeze(i) for i in x)
+        if isinstance(x, dict):
+            return tuple(sorted((k, ATenOpMetaclass._freeze(v)) for k, v in x.items()))
+        return x
+    def __call__(cls, args: tuple[ATenOp, ...], T: "ATenOpType | None" = None, **kwargs):
+        T = cls.verify(args, T, **kwargs) # type inference
+        wret = ATenOpMetaclass.cache.get(key:=(cls, tuple(args), ATenOpMetaclass._freeze(T), ATenOpMetaclass._freeze(kwargs)), None)
+        if wret is not None and (ret:=wret()) is not None:
+            return ret
+        ATenOpMetaclass.cache[key] = weakref.ref(created:=super().__call__(args, T=T, **kwargs))
+        return created
 
 @dataclass(frozen=True)
 class ATenAxis():
@@ -38,29 +58,24 @@ class ATenOpType():
             return Mul((a, b))
         strides = tuple(itertools.accumulate(reversed(shape[1:]), _mul, initial=_const(1)))[::-1]
         return ATenOpType(
-            axes=[ATenAxis(size=size, stride=stride, offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides)],
+            axes=tuple([ATenAxis(size=size, stride=stride, offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides)]),
             dtype=dtype,
         )
     
 @dataclass(frozen=True)
-class ATenOp(metaclass=ABCMeta):
+class ATenOp(metaclass=ATenOpMetaclass):
     args: List[ATenOp]
-    T: Union[ATenOpType, None] = None
-    # TODO: Cached?
-    # def __init__(self, ...)
+    T: Union[ATenOpType, None] = None    
     @property
     def predecessors(self):
         # TODO:
         # - Tに含まれるOpsをReadに含める
         # - RangifyしたらSymbolicのDepsは消える
         pass
+    
     @classmethod
-#    @abstractmethod
-    def from_astexpr(cls):
-        pass   
-#    @abstractmethod
-    def verify(self):
-        pass
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs) -> ATenOpType:
+        raise NotImplementedError("Not implemented")
 
     def coalese(self):
         # Simplify myself
@@ -71,45 +86,63 @@ class ATenOp(metaclass=ABCMeta):
         
 ## == Tensor Graph ============================================================
 class UnaryOps():
-    def verify(self): verify_tensor_op(self, 1)
+    # ops whose first argument is returned dtype
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs) -> ATenOpType:
+        assert len(args) == 1
+        return args[0].T
 class BinaryOps():
-    def verify(self): verify_tensor_op(self, 2)
+    # ops whose first argument is returned dtype
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs) -> ATenOpType:
+        assert len(args) == 2
+        return args[0].T
 class TernaryOps():
-    def verify(self): verify_tensor_op(self, 3)
+    # ops whose first argument is returned dtype
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs) -> ATenOpType:
+        assert len(args) == 3
+        return args[0].T
+class ViewOps():
+    # ops whose return dtypes are explicitly provided via T option
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs) -> ATenOpType:
+        assert T is not None, f"Cannot create {cls.__name__} without providing T"
+        return T
 ### UnaryOps
 @dataclass(frozen=True)
-class Neg(ATenOp, UnaryOps):
+class Neg(UnaryOps, ATenOp):
     """
     OUT = -X
     """
     pass
 
 @dataclass(frozen=True)
-class Recip(ATenOp, UnaryOps):
+class Recip(UnaryOps, ATenOp):
     pass
 
 @dataclass(frozen=True)
-class Sin(ATenOp, UnaryOps):
+class Sin(UnaryOps, ATenOp):
     pass
 
 @dataclass(frozen=True)
-class Exp2(ATenOp, UnaryOps):
+class Exp2(UnaryOps, ATenOp):
     pass
 
 @dataclass(frozen=True)
-class Log2(ATenOp, UnaryOps):
+class Log2(UnaryOps, ATenOp):
     pass
 
 @dataclass(frozen=True)
-class Sqrt(ATenOp, UnaryOps):
+class Sqrt(UnaryOps, ATenOp):
     pass
 
 @dataclass(frozen=True)
-class Bitcast(ATenOp, UnaryOps):
+class Bitcast(UnaryOps, ATenOp):
     pass
 
 @dataclass(frozen=True)
-class Not(ATenOp, UnaryOps):
+class Not(UnaryOps, ATenOp):
     """
     Logical not if the X is a boolean
     otherwise lognot ~x
@@ -117,73 +150,66 @@ class Not(ATenOp, UnaryOps):
     pass
 ### BinaryOps
 @dataclass(frozen=True)
-class Add(ATenOp, BinaryOps):
+class Add(BinaryOps, ATenOp):
     """
     OUT = Add(X, Y)
     """
-    @classmethod
-    def from_ast_expr(cls):
-        pass
 
 @dataclass(frozen=True)
-class Mul(ATenOp, BinaryOps):
+class Mul(BinaryOps, ATenOp):
     """
     OUT = Mul(X, Y)
     """
-    @classmethod
-    def from_ast_expr(cls):
-        pass
-
 @dataclass(frozen=True)
-class IDiv(ATenOp, BinaryOps):
+class IDiv(BinaryOps, ATenOp):
     pass
 
 @dataclass(frozen=True)
-class And(ATenOp, BinaryOps):
+class And(BinaryOps, ATenOp):
     pass
 
 @dataclass(frozen=True)
-class Or(ATenOp, BinaryOps):
+class Or(BinaryOps, ATenOp):
     pass
 
 @dataclass(frozen=True)
-class And(ATenOp, BinaryOps):
+class And(BinaryOps, ATenOp):
     pass
 
 @dataclass(frozen=True)
-class Xor(ATenOp, BinaryOps):
+class Xor(BinaryOps, ATenOp):
     pass
 
 @dataclass(frozen=True)
-class Max(ATenOp, BinaryOps):
+class Max(BinaryOps, ATenOp):
     pass
 
 @dataclass(frozen=True)
-class Mod(ATenOp, BinaryOps):
+class Mod(BinaryOps, ATenOp):
     pass
 
 @dataclass(frozen=True)
-class Neq(ATenOp, BinaryOps):
+class Neq(BinaryOps, ATenOp):
     pass
 
 @dataclass(frozen=True)
-class Lt(ATenOp, BinaryOps):
+class Lt(BinaryOps, ATenOp):
     pass
 ### TernaryOps
 @dataclass(frozen=True)
-class Where(ATenOp, TernaryOps):
+class Where(TernaryOps, ATenOp):
     pass
 
 ### Allocation
 @dataclass(frozen=True)
-class Const(ATenOp):
+class Const(ViewOps, ATenOp):
     value: Union[int, float, str] = 0.0
     @staticmethod
     def new(value: Union[int, float, str], dtype: DType):
-        return Const(args=(), value=value, T=ATenOpType(axes=[], dtype=dtype))
+        return Const(args=(), value=value, T=ATenOpType(axes=(), dtype=dtype))
 
 @dataclass(frozen=True)
-class Allocate(ATenOp):
+class Allocate(ViewOps, ATenOp):
     """
     Allocate(S1, S2, S3, ...)
     """
@@ -192,7 +218,7 @@ class Allocate(ATenOp):
         return Allocate((), T=ATenOpType.from_shape(shape, dtype))
 
 @dataclass(frozen=True)
-class View(ATenOp):
+class View(ViewOps, ATenOp):
     """
     View(X, T=T_New)
     """
@@ -204,7 +230,7 @@ class View(ATenOp):
     @staticmethod
     def permute(tensor: ATenOp, order: List[int]):
         return View((tensor,), T=ATenOpType(
-            axes=[tensor.T.axes[i] for i in order],
+            axes=tuple([tensor.T.axes[i] for i in order]),
             dtype=tensor.T.dtype,
             offset=tensor.T.offset,
             is_ptr=tensor.T.is_ptr
@@ -218,12 +244,11 @@ class View(ATenOp):
                 assert old_axis == -1
                 return ATenAxis(size=new_size, stride=Const.new(0, index), offset=Const.new(0, index), incf=Const.new(1, index))
         return View((tensor,), T=ATenOpType(
-            axes=[_expand(old_axis, new_size) for (old_axis, new_size) in zip(tensor.T.axes, shape)],
+            axes=tuple([_expand(old_axis, new_size) for (old_axis, new_size) in zip(tensor.T.axes, shape)]),
             dtype=tensor.T.dtype,
             offset=tensor.T.offset,
             is_ptr=tensor.T.is_ptr
         ))
-        
 ## == JIT =====================================================================
 @dataclass(frozen=True)
 class Reduce(ATenOp):
