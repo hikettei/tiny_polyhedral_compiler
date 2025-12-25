@@ -70,25 +70,25 @@ class ATenMovements():
         """
         Implements Numpy-Semantic Broadcasting operation
         """
-        if self.shape == new_shape: return self
+        if ir.ATenOp.equals(self.shape, new_shape): return self
         if self.ndim > len(new_shape):
-            raise ValueError(f"cannot broadcast tensor to fewer dimensions. shape={self.shape} to {new_shape=}")
+            raise ValueError(f"cannot broadcast tensor to fewer dimensions. shape={self.shape} to {new_shape}")
         shape, _ = align_left(self.shape, new_shape)
-        if not all(s == ns or s == 1 for s, ns in zip(shape, new_shape)):
+        if not all(ir.ATenOp.eql(s, ns) or ir.ATenOp.eql(s, 1) for s, ns in zip(shape, new_shape)):
             raise ValueError(f"cannot broadcast {self.shape} to {new_shape=}")
         reshaped = self.reshape(shape)
         ret = Tensor(op=ir.View.expand(self.op, new_shape))
-        return reshaped if ret.shape == reshaped.shape else ret
+        return reshaped if ir.ATenOp.equals(ret.shape, reshaped.shape) else ret
     @ATen.top
     def reshape(self, shape, *args) -> Self:
         new_shape = tuple([s if s is not None else self.shape[i] for i, s in enumerate(argfix(shape, *args))])
         if (c := new_shape.count(-1)) > 1:
             raise RuntimeError(f"only one dimension can be inferred using -1, getting {new_shape}")
-        if c: new_shape = tuple([-prod(self.shape) // prod(new_shape) if s == -1 else s for s in new_shape])
-        if prod(self.shape) != prod(new_shape):
+        if c: new_shape = tuple([-prod(self.shape) // prod(new_shape) if ir.ATenOp.eql(s, -1) else s for s in new_shape])
+        if not ir.ATenOp.eql(prod(self.shape), prod(new_shape)):
             raise ValueError(f"size mismatch, can't reshape ({self.shape}) -> ({new_shape})")
         ret = Tensor(op=ir.View.reshape(self.op, [ATen.wrap_const(s, dtype=index) for s in new_shape]))
-        return self if ret.shape == self.shape else ret
+        return self if ir.ATenOp.equals(ret.shape, self.shape) else ret
     @ATen.top
     def shrink(self, arg: tuple[tuple[sint, sint] | None, ...]) -> Self:
         raise NotImplementedError("shrink todo")
@@ -100,8 +100,9 @@ class ATenMovements():
         return Tensor(op=ir.View.permute(self.op, order_arg)) if order_arg != tuple(range(self.ndim)) else self
     @ATen.top
     def expand(self, shape, *args) -> Self:
-        new_shape = tuple(from_ if to == -1 or to is None else to for from_, to in zip(*(align_left(self.shape, argfix(shape, *args)))))
+        new_shape = tuple(from_ if ir.ATenOp.eql(to, -1) or to is None else to for from_, to in zip(*(align_left(self.shape, argfix(shape, *args)))))
         return self._broadcast_to([ATen.wrap_const(s, dtype=index) for s in new_shape])
+    
 def smax(a, b):
     # [TODO] Const fold and == 1 is required
     print("TODO: SMAX")
@@ -130,6 +131,9 @@ class ATenArith():
     def mul(self, other, reverse:bool=False): return self.forward(ir.Mul, tuple(self._broadcasted(self, other, reverse=reverse)))
     def __eq__(self, other: Any):
         print("A")
+        pass
+    def __neq__(self, other: Any):
+        print("B")
         pass
     def __add__(self, other: Any): return self.add(other)
     def __radd__(self, other: Any): return self.add(other, reverse=True)

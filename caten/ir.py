@@ -35,9 +35,9 @@ class ATenAxis():
         assert i.T.dtype == index, "ATenAxis.index: range index should be type of index."
         return Mul(self.stride, Add(Mul(i, self.incf), self.offset))
 
-def _const(val: int):
+def _const(val: int, dtype: DType=index):
     if isinstance(val, Const): return val
-    else: return Const.new(val, index)
+    else: return Const.new(val, dtype)
             
 @dataclass(frozen=True)
 class ATenOpType():
@@ -60,7 +60,7 @@ class ATenOpType():
             axes=tuple([ATenAxis(size=_const(size), stride=_const(stride), offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides)]),
             dtype=dtype,
         )
-    
+
 @dataclass(frozen=True)
 class ATenOp(metaclass=ATenOpMetaclass):
     args: List[ATenOp]
@@ -83,12 +83,37 @@ class ATenOp(metaclass=ATenOpMetaclass):
     def viz(self):
         pass
 
+    @property
+    def item(self):
+        # Returns scalar value if self is constant folded
+        if isinstance(self, Const) and isinstance(getattr(self, "value"), (int, float)):
+            return self.value
+        else: return self
     # Mixin for computing shapes (required by reshape, etc)
+    # TODO: Use same semantic of broadcast as tensor
     def __add__(self, other: Any): return Add((self, _const(other)))
     def __radd__(self, other: Any): return Add((_const(other), self))
     def __mul__(self, other: Any): return Mul((self, _const(other)))
     def __rmul__(self, other: Any): return Mul((_const(other), self))
-    
+    @staticmethod
+    def eql(a: Union[int, float, ATenOp], b: Union[int, float, ATenOp]):
+        """
+        """
+        if isinstance(a, (int, float)) and isinstance(b, (int, float)): return (a == b)
+        dtype = a.T.dtype if isinstance(a, ATenOp) else b.T.dtype # A or B is asserted to have a dtype
+        a, b = _const(a, dtype=dtype), _const(b, dtype=dtype)
+        # Note(hikettei): this comparison highly depends on whether they are constant folded.
+        # plus, cannot verify the equivalence of A*B and B*A
+        return a == b
+    @staticmethod
+    def equals(a: List[Union[int, float, ATenOp]], b: List[Union[int, float, ATenOp]]):
+        """
+        Compares the equivalence
+        """
+        if not len(a) == len(b): return False
+        for ai, bi in zip(a, b):
+            if not ATenOp.eql(ai, bi): return False
+        return True
 ## == Tensor Graph ============================================================
 class UnaryOps():
     # ops whose first argument is returned dtype
@@ -247,9 +272,9 @@ class View(ViewOps, ATenOp):
     @staticmethod
     def expand(tensor: ATenOp, shape: List[Union[int, ATenOp]]):
         def _expand(old_axis: ATenAxis, new_size: ATenOp) -> ATenAxis:
-            if old_axis.size == new_size: return old_axis
+            if ATenOp.eql(old_axis.size, new_size): return old_axis
             else:
-                assert old_axis == -1
+                assert ATenOp.eql(old_axis, 1), f"The axis to expand should be evaluated to 1, getting {old_axis}"
                 return ATenAxis(size=_const(new_size), stride=Const.new(0, index), offset=Const.new(0, index), incf=Const.new(1, index))
         return View((tensor,), T=ATenOpType(
             axes=tuple([_expand(old_axis, new_size) for (old_axis, new_size) in zip(tensor.T.axes, shape)]),
