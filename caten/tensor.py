@@ -20,7 +20,7 @@ class ATenSpec:
 class ATen:
     op: ATenOp # ATen is just a wrapper for ATenOp
     @classmethod
-    def from_shape(cls, shape: List[ATenOp], dtype: DType=default_float): return ir.Allocate.new(shape, dtype)
+    def from_shape(cls, shape: List[ATenOp], dtype: DType=default_float): return Tensor(op=ir.Allocate.new(shape, dtype))
     @classmethod
     def const(cls, obj: Any, dtype: DType=index):
         match obj:
@@ -31,10 +31,10 @@ class ATen:
             case _:
                 raise TypeError(f"ATen.const: Only integer or float objects can become constant! getting {obj}")
         return ir.Const.new(obj, dtype)
-    def forward(self, op: Callable, *args: List, **kwargs) -> ATen: return ATen(op=op(*args, **kwargs))
+    def forward(self, op: Callable, *args: List, **kwargs) -> ATen: return Tensor(op=op(*args, **kwargs))
     def __class_getitem__(cls, item: Union[Any, Tuple[Any, ...]]) -> TensorSpec: return TensorSpec(item)
     # TODO: Display Shape, realized buffer, etc.
-    def __repr__(self) -> str: return f"{self.__class__.__name__}<{self.node}>"
+    def __repr__(self) -> str: return f"{self.__class__.__name__}<{self.op}>"
     @property
     def dtype(self): return self.op.T.dtype
     @staticmethod
@@ -68,7 +68,7 @@ class ATenMovements():
         if c: new_shape = tuple([-prod(self.shape) // prod(new_shape) if s == -1 else s for s in new_shape])
         if prod(self.shape) != prod(new_shape):
             raise ValueError(f"size mismatch, can't reshape ({self.shape}) -> ({new_shape})")
-        ret = ATen(op=ir.View.reshape(self.op, [ATen.wrap_const(s, dtype=index) for s in new_shape])) # TODO: new_shape is ATenOp?
+        ret = Tensor(op=ir.View.reshape(self.op, [ATen.wrap_const(s, dtype=index) for s in new_shape])) # TODO: new_shape is ATenOp?
         return self if ret.shape == self.shape else ret
 ## arithmetic mixin
 class ATenArith():
@@ -94,6 +94,9 @@ class Facet():
     pass
 ## abstraction over backends
 class ATenBase(ATen, ATenMath, ATenNN, ATenMovements, ATenLinalg, metaclass=ABCMeta):
+    def __init__(self, *args, op=None):
+        self.op = op
+        
     ## == AbstractionLayer
     @staticmethod
     def register(device_id: str, cls: ClassVar):
