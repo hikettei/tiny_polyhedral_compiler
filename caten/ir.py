@@ -5,7 +5,7 @@ import itertools
 import math
 import operator
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, Union
 
 from .dtype import DType, index
@@ -36,9 +36,9 @@ class ATenAxis():
     stride: ATenOp
     offset: ATenOp
     incf: ATenOp
-    def index(self, i: ATenOp) -> ATenOp:
-        assert i.T is not None and i.T.dtype == index, "ATenAxis.index: range index should be type of index."
-        return Mul((self.stride, Add((Mul((i, self.incf)), self.offset))))
+    def range(self) -> Range: return Range((self.size, ))
+    def aff(self) -> Aff: return Aff((self.stride, self.range(), self.offset, self.incf))
+    def index(self) -> ATenOp: return self.aff().index()
 
 def _const(val: Any, dtype: DType=index) -> ATenOp:
     if isinstance(val, Const): return val
@@ -120,22 +120,30 @@ class ATenOp(metaclass=ATenOpMetaclass):
         for ai, bi in zip(a, b, strict=True):
             if not ATenOp.eql(ai, bi): return False
         return True
+    
+    def lower(self, args: tuple[ATenOp, ...]) -> ATenOp:
+        return replace(self, args=args)
 ## == Tensor Graph ============================================================
-class UnaryOps():
+class TensorOps():
+    def lower(self, args: tuple[ATenOp, ...]) -> ATenOp:
+        out = replace(self, args=args) # type: ignore
+        assert out.T is not None # type: ignore
+        return Aref.from_tensor(out) if out.T.ndim > 0 else out # type: ignore
+class UnaryOps(TensorOps):
     # ops whose first argument is returned dtype
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) == 1, f"UnaryOp {cls.__name__} takes one argument, getting {args}"
         assert args[0].T is not None
         return args[0].T
-class BinaryOps():
+class BinaryOps(TensorOps):
     # ops whose first argument is returned dtype
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) == 2, f"BinaryOp {cls.__name__} takes two argument, getting {args}"
         assert args[0].T is not None
         return args[0].T
-class TernaryOps():
+class TernaryOps(TensorOps):
     # ops whose first argument is returned dtype
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
@@ -347,6 +355,9 @@ class Aff(ATenOp):
         assert isinstance(args[3], Const), f"Aff: The fourth argument should be a constant, getting {args[3].__class__}"
         return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
 
+    def index(self) -> Index:
+        return Index((self.args[0], Mul((self.args[0], Add((Mul((self.args[1], self.args[3])), self.args[2])))),))
+
 @dataclass(frozen=True)
 class Aref(ATenOp):
     """
@@ -359,6 +370,11 @@ class Aref(ATenOp):
         assert args[0].T is not None and args[0].T.ndim > 0, f"Aref: the first argument should be array, getting scalar {args[0].__class__}"
         assert all([isinstance(arg, Aff) for arg in args[1:]]), "Aref: the index should be specified by the list of Aff."
         return ATenOpType(axes=tuple(), dtype=args[0].T.dtype, offset=_const(0, index))
+    
+    @staticmethod
+    def from_tensor(tensor: ATenOp) -> Aref:
+        assert tensor.T is not None
+        return Aref((tensor,) + tuple([axis.aff() for axis in tensor.T.axes]))
 
 @dataclass(frozen=True)
 class Index(ATenOp):
@@ -390,7 +406,14 @@ class Polyhedral(ATenOp):
 
 def Var() -> None:
     pass
+## == Graph Transformations ==================================================
+def lower_into_schedule(root: ATenOp) -> ATenOp:
+    # top down rewriting of the graph
+    def _explore(item: ATenOp) -> ATenOp:
+        return item.lower(tuple([_explore(s) for s in item.args]))
+    return _explore(root)
 
+# TODO: Schedule --> Runtime
 # e.g.:
 # a = T.Var("A[m n]", float32)
 # P.stmt("...")[a]
