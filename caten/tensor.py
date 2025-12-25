@@ -102,11 +102,7 @@ class ATenMovements():
     def expand(self, shape, *args) -> Self:
         new_shape = tuple(from_ if ir.ATenOp.eql(to, -1) or to is None else to for from_, to in zip(*(align_left(self.shape, argfix(shape, *args)))))
         return self._broadcast_to([ATen.wrap_const(s, dtype=index) for s in new_shape])
-    
-def smax(a, b):
-    # [TODO] Const fold and == 1 is required
-    print("TODO: SMAX")
-    return max(a, b)
+
 ## arithmetic mixin
 class ATenArith():
     def _broadcasted(self, y:Tensor|int|float, reverse:bool=False) -> tuple[Tensor, Tensor]:
@@ -118,6 +114,12 @@ class ATenArith():
         if reverse: x, y = y, x
         # compute the output shape
         def _broadcast_shape(*shapes:tuple[sint, ...]) -> tuple[sint, ...]:
+            def smax(a, b):
+                if ir.ATenOp.eql(a, 1): return b
+                elif ir.ATenOp.eql(b, 1): return a
+                else:
+                    assert ir.ATenOp.eql(a, b)
+                    return a # a != b is asserted here?
             return tuple(0 if 0 in nth_dim_sizes else smax(nth_dim_sizes) for nth_dim_sizes in zip(*_align_left(*shapes)))
         out_shape = _broadcast_shape(x.shape, y.shape)
         return x._broadcast_to(out_shape), y._broadcast_to(out_shape)
