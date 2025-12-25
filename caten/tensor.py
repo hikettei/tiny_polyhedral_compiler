@@ -26,7 +26,7 @@ class ATen:
     @classmethod
     def from_shape(cls, shape: List[ATenOp], dtype: DType=float32):
         return ir.Allocate.new(shape, dtype)
-    
+
     def apply(self, op: Callable, *args: List, **kwargs) -> ATen: return ATen(op=op(*args, **kwargs))
     
     def __class_getitem__(cls, item: Union[Any, Tuple[Any, ...]]) -> TensorSpec:
@@ -34,7 +34,16 @@ class ATen:
         # TODO
         pass
 
+    @staticmethod
+    def top():
+        # Register the given method as @C.sin callable
+        pass
+
     def polyhedral(self):
+        pass
+## arithmetic mixin
+class ATenArith():
+    def __add__(self, other):
         pass
 ## math mixin
 class ATenMath():

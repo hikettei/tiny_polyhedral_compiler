@@ -41,22 +41,30 @@ class ATenOpType():
             shape=[ATenAxis(shape=size, stride=stride, offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides)],
             dtype=dtype,
         )
-    def reshape(self):
-        pass
+
+    def reshape(self, shape: List[ATenOp]): 
+        return View.new(x, )
+    
     def permute(self):
         pass
+
     def expand(self):
         pass
 
+    def cast(self):
+        pass
+    
 @dataclass(frozen=True)
 class ATenOp(metaclass=ABCMeta):
     args: List[ATenOp]
     T: Union[ATenOpType, None] = None
     # TODO: Cached?
     # def __init__(self, ...)
+    @property
     def predecessors(self):
         # TODO:
         # - Tに含まれるOpsをReadに含める
+        # - RangifyしたらSymbolicのDepsは消える
         pass
     @classmethod
 #    @abstractmethod
@@ -68,6 +76,9 @@ class ATenOp(metaclass=ABCMeta):
 
     def coalese(self):
         # Simplify myself
+        pass
+
+    def deepwalk(self):
         pass
         
 ## == Tensor Graph ============================================================
