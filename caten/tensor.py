@@ -1,56 +1,67 @@
 from __future__ import annotations
 from abc import ABCMeta, abstractmethod
-from typing import Any, Optional, Tuple, Union, ClassVar
+from typing import Any, Optional, Tuple, Union, ClassVar, Self
 import os
 import caten.ir as ir
 from .dtype import float32
-# [TODO]
-# - Tensor => Fused Tensor Graph Construction
-# - Tensor Kernel Construction
-# - Then, start working on auto scheduler
+from caten.helpers import argfix, prod
 ## Backend Abstraction
 DEVICE_TO_TENSOR = {}
 def get_backend(): return os.environ.get("BACKEND", "CPU")
-## Annotation
+## Tensor annotation for jit/aot shape check
 class ATenSpec:
     """
-    Usage: C.Tensor[float32, "M", "N"] -> TensorSpec(M N)
+    C.Tensor[M, N] -> ATenSpec(M N)
     """
-    def __init__(self, shape: Tuple[Any, ...], dtype: Any = None):
-        self.shape = shape
-        self.dtype = dtype
-    def __repr__(self) -> str: return f"TensorSpec({self.shape}, {self.dtype})"
-## Tensor datastrucure
+    def __init__(self, shape: Tuple[Any, ...]):
+        self.shape: List[Union[int, str]] = shape
+    def __repr__(self) -> str: return f"ATenSpec{self.shape}"
+## Tensor compiler core
 class ATen:
     op: ATenOp # ATen is just a wrapper for ATenOp
     @classmethod
-    def from_shape(cls, shape: List[ATenOp], dtype: DType=float32):
-        return ir.Allocate.new(shape, dtype)
-
-    def apply(self, op: Callable, *args: List, **kwargs) -> ATen: return ATen(op=op(*args, **kwargs))
-    
-    def __class_getitem__(cls, item: Union[Any, Tuple[Any, ...]]) -> TensorSpec:
-        # Usage: C.Tensor[10, 10] -> TensorSpec((10, 10))
-        # TODO
-        pass
-
+    def from_shape(cls, shape: List[ATenOp], dtype: DType=float32): return ir.Allocate.new(shape, dtype)
+    def forward(self, op: Callable, *args: List, **kwargs) -> ATen: return ATen(op=op(*args, **kwargs))
+    def __class_getitem__(cls, item: Union[Any, Tuple[Any, ...]]) -> TensorSpec: return TensorSpec(item)
+    # TODO: Display Shape, realized buffer, etc.
+    def __repr__(self) -> str: return f"{self.__class__.__name__}<{self.node}>"
     @staticmethod
-    def top():
-        # Register the given method as @C.sin callable
-        pass
-
+    def top(f: Callable[Any, ATen]):
+        """
+        Declares the given function as toplevel tensor operation.
+        """
+        # TODO: Toplevel in helpers.py
+        return f
     def polyhedral(self):
         pass
+
+## movement ops mixin
+class ATenMovements():
+    @property
+    def shape(self): -> List[ATen]:
+        pass
+    
+    @ATen.top
+    def reshape(self, shape, *args) -> Self:
+        new_shape = tuple([s if s is not None else self.shape[i] for i, s in enumerate(argfix(shape, *args))])
+        if (c := new_shape.count(-1)) > 1:
+            raise RuntimeError(f"only one dimension can be inferred using -1, getting {new_shape}")
+        if c: new_shape = tuple([-prod(self.shape) // prod(new_shape) if s == -1 else s for s in new_shape])
+        if prod(self.shape) != prod(new_shape):
+            raise ValueError(f"size mismatch, can't reshape ({self.shape}) -> ({new_shape})")
+        ret = ATen(op=ir.View.reshape(self.op, new_shape)) # TODO: new_shape is ATenOp?
+        return self if ret.shape == self.shape else ret
 ## arithmetic mixin
 class ATenArith():
-    def __add__(self, other):
+    @ATen.top
+    def add(self, other):
         pass
 ## math mixin
 class ATenMath():
-    pass
-## movement ops mixin
-class ATenMovements():
-    pass
+    @ATen.top
+    def sin(self: ATen): return self.forward(ir.Sin, self)
+    @ATen.top
+    def cos(self: ATen): return self.forward(ir.Sin, self + Tensor(0.0))
 ## nn ops mixin
 class ATenNN():
     pass
@@ -86,7 +97,7 @@ class Tensor(ATenBase):
         impl = DEVICE_TO_TENSOR.get(get_backend())
         if impl is None: raise ValueError(f"Unknown BACKEND={get_backend()}")
         return impl(*args, **kwargs)
-## For-Style Graph Construction
+## == [Loop-For Style Frontend IR Specs] ======================================
 def kernel(get_kernel: bool = False) -> Callable:
     def decorator(func: Callable) -> Callable:
         pass
@@ -96,8 +107,11 @@ def kernel(get_kernel: bool = False) -> Callable:
 # rangeify -> range/when ==> polyhedral model
 # with C.range(10, 10):
 # with C.when(10, 10)
-class range():
+class Range():
     pass
 
-class when():
+class When():
+    pass
+
+class LocalVar():
     pass

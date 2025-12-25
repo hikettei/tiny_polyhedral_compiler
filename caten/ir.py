@@ -41,18 +41,6 @@ class ATenOpType():
             shape=[ATenAxis(shape=size, stride=stride, offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides)],
             dtype=dtype,
         )
-
-    def reshape(self, shape: List[ATenOp]): 
-        return View.new(x, )
-    
-    def permute(self):
-        pass
-
-    def expand(self):
-        pass
-
-    def cast(self):
-        pass
     
 @dataclass(frozen=True)
 class ATenOp(metaclass=ABCMeta):
@@ -208,6 +196,10 @@ class View(ATenOp):
     """
     View(X, T=T_New)
     """
+    @staticmethod
+    def reshape(tensor: ATenOp, shape: List[ATenOp]):
+        pass
+    
     @staticmethod
     def new(tensor: ATenOp, view: ATenOpType):
         pass
