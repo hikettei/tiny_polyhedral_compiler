@@ -1,9 +1,9 @@
 
-def test_reshape():
+def test_reshape() -> None:
     pass
 
-def test_reshape_const():
+def test_reshape_const() -> None:
     pass
 
-def test_reshape_dynamic():
+def test_reshape_dynamic() -> None:
     pass

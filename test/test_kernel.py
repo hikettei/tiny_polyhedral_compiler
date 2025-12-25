@@ -1,7 +1,7 @@
 import caten as C
 
 
-def test_tensor():
+def test_tensor() -> None:
     tensor = C.Tensor.from_shape([10, 10], dtype=C.float32)
     print(tensor)
     print(tensor.op.T)
