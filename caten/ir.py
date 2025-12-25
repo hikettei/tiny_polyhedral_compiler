@@ -81,6 +81,12 @@ class ATenOp(metaclass=ATenOpMetaclass):
         from caten.simplifier import simplifier
         return simplifier.simplify(self)
 
+    def schedule(self) -> ATenOp:
+        # top down rewriting of the graph
+        def _explore(item: ATenOp) -> ATenOp:
+            return item.lower(tuple([_explore(s) for s in item.args]))
+        return _explore(self)
+    
     def deepwalk(self) -> None:
         pass
 
@@ -406,12 +412,6 @@ class Polyhedral(ATenOp):
 
 def Var() -> None:
     pass
-## == Graph Transformations ==================================================
-def lower_into_schedule(root: ATenOp) -> ATenOp:
-    # top down rewriting of the graph
-    def _explore(item: ATenOp) -> ATenOp:
-        return item.lower(tuple([_explore(s) for s in item.args]))
-    return _explore(root)
 
 # TODO: Schedule --> Runtime
 # e.g.:
