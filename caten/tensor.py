@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from abc import ABCMeta, abstractmethod
 from typing import Any, Callable, Tuple, Union
@@ -142,18 +143,87 @@ class ATen:
     # - reduce option
     # - ir.Add.new (or binop) can have reduce option
     def add(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Add, self._broadcasted(other, reverse=reverse))
+    def sub(self, other: ATen|TOperand, reverse:bool=False) -> Tensor:
+        x: ATen = self
+        y: ATen = Tensor(op=ATen.wrap_const(other, x.dtype))
+        if reverse: x, y = y, x
+        return x.add(y.neg())
     def mul(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Mul, self._broadcasted(other, reverse=reverse))
     def idiv(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.IDiv, self._broadcasted(other, reverse=reverse))
-    # def __eq__(self, other: Any): pass
-    # def __neq__(self, other: Any): pass
+    def div(self, other: ATen|TOperand, reverse:bool=False) -> Tensor:
+        x: ATen = self
+        y: ATen = Tensor(op=ATen.wrap_const(other, x.dtype))
+        if reverse: x, y = y, x
+        return x.mul(y.recip())
+
+    def max(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Max, self._broadcasted(other, reverse=reverse))
+    def mod(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Mod, self._broadcasted(other, reverse=reverse))
+    def ne(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Neq, self._broadcasted(other, reverse=reverse))
+    def lt(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Lt, self._broadcasted(other, reverse=reverse))
+
+    def bitwise_and(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.And, self._broadcasted(other, reverse=reverse))
+    def bitwise_or(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Or, self._broadcasted(other, reverse=reverse))
+    def bitwise_xor(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Xor, self._broadcasted(other, reverse=reverse))
+
+    def where(self, x: ATen|TOperand, y: ATen|TOperand) -> Tensor:
+        dtype = self.dtype
+        if isinstance(x, Tensor): dtype = x.dtype
+        elif isinstance(y, Tensor): dtype = y.dtype
+        
+        x_: ATen = Tensor(op=ATen.wrap_const(x, dtype))
+        y_: ATen = Tensor(op=ATen.wrap_const(y, dtype))
+        return self.forward(ir.Where, (self.op, x_._broadcast_to(self.shape).op, y_._broadcast_to(self.shape).op))
+
     def __add__(self, other: ATen|TOperand) -> Tensor: return self.add(other)
     def __radd__(self, other: ATen|TOperand) -> Tensor: return self.add(other, reverse=True)
+    def __sub__(self, other: ATen|TOperand) -> Tensor: return self.sub(other)
+    def __rsub__(self, other: ATen|TOperand) -> Tensor: return self.sub(other, reverse=True)
     def __mul__(self, other: ATen|TOperand) -> Tensor: return self.mul(other)
     def __rmul__(self, other: ATen|TOperand) -> Tensor: return self.mul(other, reverse=True)
     def __floordiv__(self, other: ATen|TOperand) -> Tensor: return self.idiv(other) 
+    def __truediv__(self, other: ATen|TOperand) -> Tensor: return self.div(other)
+    def __rtruediv__(self, other: ATen|TOperand) -> Tensor: return self.div(other, reverse=True)
+    def __mod__(self, other: ATen|TOperand) -> Tensor: return self.mod(other)
+    def __rmod__(self, other: ATen|TOperand) -> Tensor: return self.mod(other, reverse=True)
+
+    def __lt__(self, other: ATen|TOperand) -> Tensor: return self.lt(other)
+    def __gt__(self, other: ATen|TOperand) -> Tensor: return Tensor(op=ATen.wrap_const(other, self.dtype)).lt(self)
+    def __ne__(self, other: ATen|TOperand) -> Tensor: return self.ne(other) # type: ignore[override]
+    def __matmul__(self, other: ATen|TOperand) -> Tensor: return self.matmul(other)
+
     def neg(self) -> Tensor: return self.forward(ir.Neg, (self.op,))
+    def recip(self) -> Tensor: return self.forward(ir.Recip, (self.op,))
     def sin(self) -> Tensor: return self.forward(ir.Sin, (self.op,))
-    def cos(self) -> Tensor: return self.forward(ir.Sin, ((self + Tensor.const(0.0, dtype=self.dtype)).op,))
+    def cos(self) -> Tensor: return (self + Tensor.const(math.pi / 2, dtype=self.dtype)).sin()
+    def exp2(self) -> Tensor: return self.forward(ir.Exp2, (self.op,))
+    def log2(self) -> Tensor: return self.forward(ir.Log2, (self.op,))
+    def sqrt(self) -> Tensor: return self.forward(ir.Sqrt, (self.op,))
+
+    def sum(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False) -> Tensor:
+        assert self.op.T is not None
+        axes = tuple(range(self.ndim)) if axis is None else (tuple(axis) if isinstance(axis, (tuple, list)) else (axis,))
+        axes = tuple(self._resolve_dim(x) for x in axes)
+        new_axes = []
+        for i in range(self.ndim):
+            if i in axes:
+                if keepdim:
+                    new_axes.append(ir.ATenAxis(size=ir.Const.new(1, index), stride=ir.Const.new(0, index), offset=ir.Const.new(0, index), incf=ir.Const.new(1, index)))
+            else:
+                new_axes.append(self.op.T.axes[i])
+        if not keepdim:
+            new_axes = [self.op.T.axes[i] for i in range(self.ndim) if i not in axes]
+        T = ir.ATenOpType(axes=tuple(new_axes), dtype=self.dtype, offset=self.op.T.offset, is_ptr=self.op.T.is_ptr)
+        return self.forward(ir.Reduce, (self.op,), T=T)
+
+    def matmul(self, other: ATen|TOperand) -> Tensor:
+        x: ATen = self
+        y: ATen = Tensor(op=ATen.wrap_const(other, x.dtype))
+        if x.ndim < 1 or y.ndim < 1: raise ValueError("matmul requires at least 1D tensors")
+        x_shape = x.shape
+        x_expanded = x.reshape(x_shape[:-1] + (1, x_shape[-1]))
+        y_permuted = y.permute(tuple(range(y.ndim-2)) + (y.ndim-1, y.ndim-2))
+        y_expanded = y_permuted.reshape(y_permuted.shape[:-2] + (1,) + y_permuted.shape[-2:])
+        return x_expanded.mul(y_expanded).sum(axis=-1)
 
 class TensorImpl(ATen, metaclass=ABCMeta):
     @abstractmethod

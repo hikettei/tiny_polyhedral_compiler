@@ -193,7 +193,7 @@ class Sqrt(UnaryOps, ATenOp):
     python_op = math.sqrt
 
 @dataclass(frozen=True)
-class Bitcast(UnaryOps, ATenOp):
+class Bitcast(ViewOps, ATenOp):
     pass
 
 @dataclass(frozen=True)
@@ -255,6 +255,11 @@ class Lt(BinaryOps, ATenOp):
 @dataclass(frozen=True)
 class Where(TernaryOps, ATenOp):
     python_op = lambda a, b, c: b if a else c
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        assert len(args) == 3, f"TernaryOp {cls.__name__} takes three argument, getting {args}"
+        assert args[1].T is not None
+        return args[1].T
 
 ### Allocation
 @dataclass(frozen=True)
@@ -310,7 +315,7 @@ class View(ViewOps, ATenOp):
         ))
 ## == JIT =====================================================================
 @dataclass(frozen=True)
-class Reduce(ATenOp):
+class Reduce(ViewOps, ATenOp):
     """
     OUT = Reduce(A, B, op=BinaryOps)
     """
