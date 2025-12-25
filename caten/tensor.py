@@ -212,7 +212,7 @@ class ATen:
                 new_axes.append(self.op.T.axes[i])
         if not keepdim:
             new_axes = [self.op.T.axes[i] for i in range(self.ndim) if i not in axes]
-        T = ir.ATenOpType(axes=tuple(new_axes), dtype=self.dtype, offset=self.op.T.offset, is_ptr=self.op.T.is_ptr)
+        T = ir.ATenOpType(axes=tuple(new_axes), dtype=self.dtype, offset=self.op.T.offset)
         return self.forward(ir.Reduce, (self.op,), T=T)
 
     def matmul(self, other: ATen|TOperand) -> Tensor:

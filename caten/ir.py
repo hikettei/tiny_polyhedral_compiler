@@ -49,7 +49,6 @@ class ATenOpType():
     axes: tuple[ATenAxis, ...]
     dtype: DType
     offset: Union[ATenOp, None] = None
-    is_ptr: bool = False # TODO: for vectorize?
     def index(self, indices: tuple[ATenOp, ...]) -> Any:
         assert self.ndim == len(indices)
         total = itertools.accumulate([b.index(a) for (a, b) in zip(indices, self.axes, strict=True)], lambda a, b: Add((a, b)), initial=Const.new(0, index)) # type: ignore
@@ -296,7 +295,6 @@ class View(ViewOps, ATenOp):
             axes=tuple([tensor.T.axes[i] for i in order]),
             dtype=tensor.T.dtype,
             offset=tensor.T.offset,
-            is_ptr=tensor.T.is_ptr
         ))
 
     @staticmethod
@@ -311,27 +309,50 @@ class View(ViewOps, ATenOp):
             axes=tuple([_expand(old_axis, new_size) for (old_axis, new_size) in zip(tensor.T.axes, shape, strict=True)]),
             dtype=tensor.T.dtype,
             offset=tensor.T.offset,
-            is_ptr=tensor.T.is_ptr
         ))
-## == JIT =====================================================================
 @dataclass(frozen=True)
 class Reduce(ViewOps, ATenOp):
     """
     OUT = Reduce(A, B, op=BinaryOps)
     """
     op: type[BinaryOps] = Add
+## == JIT =====================================================================
+### Array Accessing
+@dataclass(frozen=True)
+class Range(ATenOp):
+    """
+    OUT = Range(SIZE) 
+    """
     @classmethod
-    def from_ast_expr(cls) -> None:
-        pass
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        assert len(args) == 1 and args[0].T is not None
+        assert args[0].T.ndim == 0, "Range: SIZE should be given as a scalar"
+        assert args[0].T.dtype == index, "Range: SIZE should be type of index"
+        return ATenOpType(
+            axes=tuple(),
+            dtype=index,
+            offset=_const(0, index)
+        )
+    
+    
+@dataclass(frozen=True)
+class Aff(ATenOp):
+    """
+    OUT = Aff(Stride, Range, Offset, Incx)
+    equivalent to: out = 
+    """
+
+@dataclass(frozen=True)
+class Aref(ATenOp):
+    """
+    X = Aref(Arr, Aff1, Aff2, ...)
+    """
+    pass
 
 @dataclass(frozen=True)
 class Store(ATenOp):
     pass
 ## ControlFlow
-@dataclass(frozen=True)
-class Range(ATenOp):
-    pass
-
 @dataclass(frozen=True)
 class Loop(ATenOp):
     pass
