@@ -341,15 +341,27 @@ class Aff(ATenOp):
         assert len(args) == 4, "Aff is defined as: Aff(Stride, Range, Offset, Incx)"
         assert all([arg.T is not None and arg.T.ndim == 0 and arg.T.dtype == index for arg in args]), "Aff: Stride/Range/Offset/Incx should be a scalar typed index"
         assert isinstance(args[1], Range), f"Aff: The second argument should be a Range, getting {args[1].__class__}"
+        assert isinstance(args[3], Const), f"Aff: The fourth argument should be a constant, getting {args[3].__class__}"
         return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
-    
 
 @dataclass(frozen=True)
 class Aref(ATenOp):
     """
     X = Aref(Arr, Aff1, Aff2, ...)
     """
-    pass
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        assert len(args) >= 2, "Aref: the number of argument should be larger than two"
+        assert args[0].T is not None and args[0].T.ndim > 0, f"Aref: the first argument should be array, getting scalar {args[0].__class__}"
+        assert all([isinstance(arg, Aff) for arg in args[1:]]), "Aref: the index should be specified by the list of Aff."
+        return ATenOpType(axes=tuple(), dtype=args[0].T.dtype, offset=_const(0, index))
+
+@dataclass(frozen=True)
+class Index(ATenOp):
+    """
+    X = Arr[Aff1.index() + Aff2.index() + ...]
+    """
+    # TODO
 
 @dataclass(frozen=True)
 class Store(ATenOp):
