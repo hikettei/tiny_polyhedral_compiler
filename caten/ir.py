@@ -107,8 +107,7 @@ class ATenOp(metaclass=ATenOpMetaclass):
         Compare two scalars (Python numbers or ATenOp scalars) for equality.
         """
         if isinstance(a, (int, float)) and isinstance(b, (int, float)): return (a == b)
-        assert isinstance(a, ATenOp) and a.T is not None
-        dtype = a.T.dtype if isinstance(a, ATenOp) else b.T.dtype # A or B is asserted to have a dtype
+        dtype = a.T.dtype if isinstance(a, ATenOp) else b.T.dtype # type: ignore
         a, b = _const(a, dtype=dtype), _const(b, dtype=dtype)
         # Note(hikettei): this comparison highly depends on whether they are constant folded.
         # plus, cannot verify the equivalence of A*B and B*A

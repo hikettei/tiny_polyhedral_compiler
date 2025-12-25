@@ -94,7 +94,7 @@ class ATen:
         if not all(ir.ATenOp.eql(s, ns) or ir.ATenOp.eql(s, 1) for s, ns in zip(shape, new_shape, strict=True)):
             raise ValueError(f"cannot broadcast {self.shape} to {new_shape=}")
         reshaped = self.reshape(shape)
-        ret = Tensor(op=ir.View.expand(self.op, new_shape))
+        ret = Tensor(op=ir.View.expand(reshaped.op, new_shape))
         return reshaped if ir.ATenOp.equals(ret.shape, reshaped.shape) else ret
 
     def reshape(self, shape: tuple[Union[int, ir.ATenOp], ...], *args: Any) -> ATen:
