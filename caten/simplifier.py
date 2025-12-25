@@ -94,21 +94,18 @@ def _is_num(x: Any) -> bool:
 constant_folder = Simplifier(
     # UnaryOps
     [(
-        Pat(ops, src=(Pat(ir.Const, name="x"))),
-        lambda x: ir.Const.new(ops.python_op(x.value), x.T.dtype)
-        if _is_num(x.value)
-        else None,)
-     for ops in [ir.Sin]
-     ] + 
+        Pat(op, src=(Pat(ir.Const, name="x"),)),
+        (lambda op: (lambda x: ir.Const.new(op.python_op(x.value), x.T.dtype)
+                     if _is_num(x.value) else None))(op),
+    ) for op in [ir.Neg, ir.Recip, ir.Sin, ir.Exp2, ir.Log2, ir.Sqrt]]
+    +
     # BinaryOps
     [(
-        Pat(ops, src=(Pat(ir.Const, name="a"), Pat(ir.Const, name="b"))),
-        lambda a, b: ir.Const.new(ops.python_op(a.value, b.value), a.T.dtype)
-        if (a.T.dtype == b.T.dtype and _is_num(a.value) and _is_num(b.value))
-        else None,)
-     for ops in [ir.Add, ir.Mul]
-     ]
-    # Ternary Ops?
+        Pat(op, src=(Pat(ir.Const, name="a"), Pat(ir.Const, name="b"))),
+        (lambda op: (lambda a, b: ir.Const.new(op.python_op(a.value, b.value), a.T.dtype)
+                     if (a.T.dtype == b.T.dtype and _is_num(a.value) and _is_num(b.value)) else None))(op),
+    ) for op in [ir.Add, ir.Mul, ir.IDiv, ir.Max, ir.Mod, ir.Neq, ir.Lt]]
 )
+
 
 simplifier = constant_folder
