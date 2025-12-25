@@ -87,22 +87,22 @@ class Simplifier:
         return cur
 
 # Guard Methods
-def Guard(obj): pass
+#def Guard(obj): pass
 def _is_num(x: Any) -> bool:
     return isinstance(x, (int, float)) and not isinstance(x, bool)
 
 constant_folder = Simplifier(
     # UnaryOps
     [(
-        Pat(op, src=(Pat(ir.Const, name="x"),)),
-        (lambda op: (lambda x: ir.Const.new(op.python_op(x.value), x.T.dtype)
+        Pat(op, src=(Pat(ir.Const, name="x"),)), # type: ignore
+        (lambda op: (lambda x: ir.Const.new(op.python_op(x.value), x.T.dtype) # type: ignore
                      if _is_num(x.value) else None))(op),
     ) for op in [ir.Neg, ir.Recip, ir.Sin, ir.Exp2, ir.Log2, ir.Sqrt]]
     +
     # BinaryOps
     [(
-        Pat(op, src=(Pat(ir.Const, name="a"), Pat(ir.Const, name="b"))),
-        (lambda op: (lambda a, b: ir.Const.new(op.python_op(a.value, b.value), a.T.dtype)
+        Pat(op, src=(Pat(ir.Const, name="a"), Pat(ir.Const, name="b"))), # type: ignore
+        (lambda op: (lambda a, b: ir.Const.new(op.python_op(a.value, b.value), a.T.dtype) # type: ignore
                      if (a.T.dtype == b.T.dtype and _is_num(a.value) and _is_num(b.value)) else None))(op),
     ) for op in [ir.Add, ir.Mul, ir.IDiv, ir.Max, ir.Mod, ir.Neq, ir.Lt]]
 )
