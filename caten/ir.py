@@ -40,7 +40,7 @@ class ATenAxis():
         assert i.T is not None and i.T.dtype == index, "ATenAxis.index: range index should be type of index."
         return Mul((self.stride, Add((Mul((i, self.incf)), self.offset))))
 
-def _const(val: int, dtype: DType=index) -> ATenOp:
+def _const(val: Any, dtype: DType=index) -> ATenOp:
     if isinstance(val, Const): return val
     else: return Const.new(val, dtype)
             
@@ -50,7 +50,7 @@ class ATenOpType():
     dtype: DType
     offset: Union[ATenOp, None] = None
     is_ptr: bool = False # TODO: for vectorize?
-    def index(self, indices: List[ATenOp]) -> Any:
+    def index(self, indices: tuple[ATenOp, ...]) -> Any:
         assert self.ndim == len(indices)
         total = itertools.accumulate([b.index(a) for (a, b) in zip(indices, self.axes, strict=True)], lambda a, b: Add((a, b)), initial=Const.new(0, index)) # type: ignore
         if self.offset: total = Add((total, self.offset)) # type: ignore
@@ -58,11 +58,11 @@ class ATenOpType():
     @property
     def ndim(self) -> int: return len(self.axes)
     @staticmethod
-    def from_shape(shape: List[Any], dtype: DType) -> ATenOpType:
+    def from_shape(shape: tuple[Any, ...], dtype: DType) -> ATenOpType:
         def _mul(a: Any, b: Any) -> Any: return Mul((_const(a), _const(b)))
         strides = tuple(itertools.accumulate(reversed(shape[1:]), _mul, initial=_const(1)))[::-1]
         return ATenOpType(
-            axes=tuple([ATenAxis(size=_const(size), stride=_const(stride), offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides, strict=True)]), # type: ignore
+            axes=tuple([ATenAxis(size=_const(size), stride=_const(stride), offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides, strict=True)]),
             dtype=dtype,
         )
 
@@ -72,7 +72,7 @@ class ATenOp(metaclass=ATenOpMetaclass):
     T: Union[ATenOpType, None] = None # this should be provided via T=... option, or inferred via verify method. 
     @property
     def predecessors(self) -> tuple[ATenOp, ...]:
-        return tuple(self.args) + (tuple(*[tuple((axis.size, axis.stride, axis.offset, axis.incf)) for axis in self.T.axes]) + () if self.T is not None else ()) + ((self.offset,) if self.T and self.T.offset is not None else ()) # type: ignore
+        return tuple(self.args) + (tuple(*[tuple((axis.size, axis.stride, axis.offset, axis.incf)) for axis in self.T.axes]) + () if self.T is not None else ()) + ((self.T.offset,) if self.T and self.T.offset is not None else ())
     
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
@@ -109,7 +109,7 @@ class ATenOp(metaclass=ATenOpMetaclass):
         if isinstance(a, (int, float)) and isinstance(b, (int, float)): return (a == b)
         assert isinstance(a, ATenOp) and a.T is not None
         dtype = a.T.dtype if isinstance(a, ATenOp) else b.T.dtype # A or B is asserted to have a dtype
-        a, b = _const(a, dtype=dtype), _const(b, dtype=dtype) # type: ignore
+        a, b = _const(a, dtype=dtype), _const(b, dtype=dtype)
         # Note(hikettei): this comparison highly depends on whether they are constant folded.
         # plus, cannot verify the equivalence of A*B and B*A
         return a == b
@@ -271,7 +271,7 @@ class Allocate(ViewOps, ATenOp):
     Allocate(S1, S2, S3, ...)
     """
     @staticmethod
-    def new(shape: List[Any], dtype: DType) -> Allocate:
+    def new(shape: tuple[Any, ...], dtype: DType) -> Allocate:
         return Allocate((), T=ATenOpType.from_shape(shape, dtype))
 
 @dataclass(frozen=True)
@@ -281,12 +281,12 @@ class View(ViewOps, ATenOp):
     """
     # This is the definition of view
     @staticmethod
-    def reshape(tensor: ATenOp, shape: List[ATenOp]) -> View:
+    def reshape(tensor: ATenOp, shape: tuple[ATenOp, ...]) -> View:
         assert tensor.T is not None
         return View((tensor,), T=ATenOpType.from_shape(shape, tensor.T.dtype))
 
     @staticmethod
-    def permute(tensor: ATenOp, order: List[int]) -> View:
+    def permute(tensor: ATenOp, order: tuple[int, ...]) -> View:
         assert tensor.T is not None
         return View((tensor,), T=ATenOpType(
             axes=tuple([tensor.T.axes[i] for i in order]),
@@ -296,13 +296,13 @@ class View(ViewOps, ATenOp):
         ))
 
     @staticmethod
-    def expand(tensor: ATenOp, shape: List[Union[int, ATenOp]]) -> View:
+    def expand(tensor: ATenOp, shape: tuple[Union[int, ATenOp], ...]) -> View:
         assert tensor.T is not None
         def _expand(old_axis: ATenAxis, new_size: int | float | ATenOp) -> ATenAxis:
             if ATenOp.eql(old_axis.size, new_size): return old_axis
             else:
                 assert ATenOp.eql(old_axis.size, 1), f"The axis to expand should be evaluated to 1, getting {old_axis}" # Fix: old_axis -> old_axis.size
-                return ATenAxis(size=_const(new_size), stride=Const.new(0, index), offset=Const.new(0, index), incf=Const.new(1, index)) # type: ignore
+                return ATenAxis(size=_const(new_size), stride=Const.new(0, index), offset=Const.new(0, index), incf=Const.new(1, index))
         return View((tensor,), T=ATenOpType(
             axes=tuple([_expand(old_axis, new_size) for (old_axis, new_size) in zip(tensor.T.axes, shape, strict=True)]),
             dtype=tensor.T.dtype,

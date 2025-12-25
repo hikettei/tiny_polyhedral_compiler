@@ -3,7 +3,7 @@ from typing import Any
 import caten as C
 
 
-class CPUTensor(C.ATenBase):
+class CPUTensor(C.ATen):
     def allocate(self) -> None:
         pass
 
@@ -19,4 +19,4 @@ class CPUTensor(C.ATenBase):
         def _render(node: Any) -> None:
             pass
 
-C.ATenBase.register("CPU", CPUTensor)
+C.ATen.register("CPU", CPUTensor)
