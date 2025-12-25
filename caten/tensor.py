@@ -147,6 +147,11 @@ class ATenBase(ATen, ATenMath, ATenNN, ATenMovements, ATenLinalg, metaclass=ABCM
     def compile(self):
         pass
 
+    @staticmethod
+    @abstractmethod
+    def render(op: ATenOp):
+        pass
+
 class Tensor(ATenBase):
     def __new__(cls, *args, **kwargs):
         impl = DEVICE_TO_TENSOR.get(get_backend())
@@ -157,7 +162,6 @@ def kernel(get_kernel: bool = False) -> Callable:
     def decorator(func: Callable) -> Callable:
         pass
     return decorator
-
 # how to generate polyhedral model from tensor ops?
 # rangeify -> range/when ==> polyhedral model
 # with C.range(10, 10):

@@ -21,9 +21,9 @@ class ATenOpMetaclass(type):
     def __call__(cls, args: tuple[ATenOp, ...], T: "ATenOpType | None" = None, **kwargs):
         T = cls.verify(args, T, **kwargs) # run type inference+verification
         wret = ATenOpMetaclass.cache.get(key:=(cls, tuple(args), ATenOpMetaclass._freeze(T), ATenOpMetaclass._freeze(kwargs)), None)
-        if wret is not None and (ret:=wret()) is not None: return ret
+        if wret is not None and (ret:=wret()) is not None: return ret.simplify()
         ATenOpMetaclass.cache[key] = weakref.ref(created:=super().__call__(args, T=T, **kwargs))
-        return created
+        return created.simplify()
 
 @dataclass(frozen=True)
 class ATenAxis():
@@ -73,9 +73,9 @@ class ATenOp(metaclass=ATenOpMetaclass):
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs) -> ATenOpType:
         raise NotImplementedError("Not implemented")
 
-    def coalese(self):
-        # Simplify myself
-        pass
+    def simplify(self):
+        from caten.simplifier import simplifier
+        return simplifier.simplify(self)
 
     def deepwalk(self):
         pass

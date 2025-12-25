@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import inspect
+import inspect, operator
+import math
+
 from dataclasses import is_dataclass, replace
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 
-from .ir import ATenOp, Const, Add, Mul
-
+from .ir import ATenOp
+import caten.ir as ir
 OpType = Type[ATenOp]
 
 class Pat:
@@ -40,7 +42,8 @@ class Pat:
 class Simplifier:
     def __init__(self, patterns: List[Tuple[Pat, Callable[..., Any]]]):
         self.patterns = patterns
-
+    def __add__(self, other: Simplifier) -> Simplifier:
+        return Simplifier(self.patterns+other.patterns)
     def rewrite(self, n: ATenOp, ctx_obj: Any = None) -> Optional[ATenOp]:
         for pat, fn in self.patterns:
             m: Dict[str, Any] = {}
@@ -82,3 +85,29 @@ class Simplifier:
             cur, ch = self._walk_once(cur, ctx_obj)
             if not ch: break
         return cur
+
+# Guard Methods
+def Guard(obj): pass
+def _is_num(x: Any) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+constant_folder = Simplifier(
+    # UnaryOps
+    [(
+        Pat(ops[0], src=(Pat(ir.Const, name="x"))),
+        lambda x: ir.Const.new(ops[1](x.value), x.T.dtype)
+        if _is_num(x.value)
+        else None,)
+     for ops in [(ir.Sin, math.sin)]] +
+    # BinaryOps
+    [(
+        Pat(ops[0], src=(Pat(ir.Const, name="a"), Pat(ir.Const, name="b"))),
+        lambda a, b: ir.Const.new(ops[1](a.value, b.value), a.T.dtype)
+        if (a.T.dtype == b.T.dtype and _is_num(a.value) and _is_num(b.value))
+        else None,)
+     for ops in [(ir.Add, operator.add), (ir.Mul, operator.mul)]
+     ]
+    # Ternary Ops?
+)
+
+simplifier = constant_folder
