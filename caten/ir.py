@@ -218,11 +218,11 @@ class View(ATenOp):
                 assert old_axis == -1
                 return ATenAxis(size=new_size, stride=Const.new(0, index), offset=Const.new(0, index), incf=Const.new(1, index))
         return View((tensor,), T=ATenOpType(
-            axes=[_expand(old_axis, new_size) for (old_axis, new_size) in zip(tensor.T.axes, shape)]
+            axes=[_expand(old_axis, new_size) for (old_axis, new_size) in zip(tensor.T.axes, shape)],
             dtype=tensor.T.dtype,
             offset=tensor.T.offset,
             is_ptr=tensor.T.is_ptr
-        )
+        ))
         
 ## == JIT =====================================================================
 @dataclass(frozen=True)
