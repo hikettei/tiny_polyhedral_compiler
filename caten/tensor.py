@@ -4,7 +4,7 @@ from typing import Any, Optional, Tuple, Union, ClassVar, Self
 import os
 import caten.ir as ir
 from .dtype import default_float, index, floats, integers
-from caten.helpers import argfix, prod
+from caten.helpers import argfix, prod, align_left
 ## Backend Abstraction
 DEVICE_TO_TENSOR = {}
 def get_backend(): return os.environ.get("BACKEND", "CPU")
@@ -65,6 +65,20 @@ class ATenMovements():
         if not -max(1, total) <= dim <= max(1, total) - 1:
             raise IndexError(f"{dim=} out of range {[-max(1, total), max(1, total) - 1]}")
         return dim + total if dim < 0 else dim
+    # ref: https://github.com/tinygrad/tinygrad/blob/master/tinygrad/mixin/movement.py#L58
+    def _broadcast_to(self, new_shape: List[ATen]) -> Self:
+        """
+        Implements Numpy-Semantic Broadcasting operation
+        """
+        if self.shape == new_shape: return self
+        if self.ndim > len(new_shape):
+            raise ValueError(f"cannot broadcast tensor to fewer dimensions. shape={self.shape} to {new_shape=}")
+        shape, _ = align_left(self.shape, new_shape)
+        if not all(s == ns or s == 1 for s, ns in zip(shape, new_shape)):
+            raise ValueError(f"cannot broadcast {self.shape} to {new_shape=}")
+        reshaped = self.reshape(shape)
+        ret = Tensor(op=ir.View.expand(self.op, new_shape))
+        return reshaped if ret.shape == reshaped.shape else ret
     @ATen.top
     def reshape(self, shape, *args) -> Self:
         new_shape = tuple([s if s is not None else self.shape[i] for i, s in enumerate(argfix(shape, *args))])
@@ -84,11 +98,16 @@ class ATenMovements():
         if sorted(order_arg) != list(range(self.ndim)):
             raise RuntimeError(f"order is not a valid permutation, getting {order_arg}")
         return Tensor(op=ir.View.permute(self.op, order_arg)) if order_arg != tuple(range(self.ndim)) else self
+    @ATen.top
+    def expand(self, shape, *args) -> Self:
+        new_shape = tuple(from_ if to == -1 or to is None else to for from_, to in zip(*(align_left(self.shape, argfix(shape, *args)))))
+        return self._broadcast_to([ATen.wrap_const(s, dtype=index) for s in new_shape])
 ## arithmetic mixin
 class ATenArith():
     @ATen.top
     def add(self, other):
         pass
+    # TODO: self == 1 is evalued to true if self is const
 ## math mixin
 class ATenMath():
     @ATen.top

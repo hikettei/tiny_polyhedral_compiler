@@ -41,13 +41,6 @@ class ATenOpType():
             axes=[ATenAxis(size=size, stride=stride, offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides)],
             dtype=dtype,
         )
-    def permute(self, order: List[int]):
-        return ATenOpType(
-            axes=[self.axes[i] for i in order],
-            dtype=self.dtype,
-            offset=self.offset,
-            is_ptr=self.is_ptr
-        )
     
 @dataclass(frozen=True)
 class ATenOp(metaclass=ABCMeta):
@@ -203,17 +196,34 @@ class View(ATenOp):
     """
     View(X, T=T_New)
     """
+    # This is the definition of view
     @staticmethod
     def reshape(tensor: ATenOp, shape: List[ATenOp]):
         return View((tensor,), T=ATenOpType.from_shape(shape, tensor.T.dtype))
 
     @staticmethod
     def permute(tensor: ATenOp, order: List[int]):
-        return View((tensor,), T=tensor.T.permute(order))
-    
+        return View((tensor,), T=ATenOpType(
+            axes=[tensor.T.axes[i] for i in order],
+            dtype=tensor.T.dtype,
+            offset=tensor.T.offset,
+            is_ptr=tensor.T.is_ptr
+        ))
+
     @staticmethod
-    def new(tensor: ATenOp, view: ATenOpType):
-        pass
+    def expand(tensor: ATenOp, shape: List[Union[int, ATenOp]]):
+        def _expand(old_axis: ATenAxis, new_size: ATenOp) -> ATenAxis:
+            if old_axis.size == new_size: return old_axis
+            else:
+                assert old_axis == -1
+                return ATenAxis(size=new_size, stride=Const.new(0, index), offset=Const.new(0, index), incf=Const.new(1, index))
+        return View((tensor,), T=ATenOpType(
+            axes=[_expand(old_axis, new_size) for (old_axis, new_size) in zip(tensor.T.axes, shape)]
+            dtype=tensor.T.dtype,
+            offset=tensor.T.offset,
+            is_ptr=tensor.T.is_ptr
+        )
+        
 ## == JIT =====================================================================
 @dataclass(frozen=True)
 class Reduce(ATenOp):
