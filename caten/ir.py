@@ -350,7 +350,8 @@ class Aff(ATenOp):
 @dataclass(frozen=True)
 class Aref(ATenOp):
     """
-    X = Aref(Arr, Aff1, Aff2, ...)
+    X = Aref(Array, Aff1, Aff2, ...)
+    Access the (Aff1.index() + Aff2.index() + ...)th element of Array. The dependency is trackable by Polyhedral Compiler.
     """
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
@@ -362,9 +363,10 @@ class Aref(ATenOp):
 @dataclass(frozen=True)
 class Index(ATenOp):
     """
-    X = Arr[Aff1.index() + Aff2.index() + ...]
+    X = Aref(Array, Index)
+    Access the indexth element of array. The dependency is NOT trackable by Polyhedral Compiler.
     """
-    # TODO
+    pass
 
 @dataclass(frozen=True)
 class Store(ATenOp):
