@@ -379,7 +379,7 @@ def to_dot(root: ATenOp, *, include_predecessors: bool = False, show_shape: bool
 
         for c in _children(n, include_predecessors=include_predecessors):
             cid = ids[id(c)]
-            edges.append(f"n{nid} -> n{cid};")
+            edges.append(f"n{cid} -> n{nid};")
             stack.append(c)
 
     body = "\n  ".join(nodes + edges)
