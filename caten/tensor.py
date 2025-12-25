@@ -60,6 +60,8 @@ class ATen:
 
     def forward(self, op: Callable, args: tuple[ir.ATenOp, ...], **kwargs: Any) -> Tensor: return Tensor(op=op(args, **kwargs))
     def __class_getitem__(cls, item: Union[Any, Tuple[Any, ...]]) -> ATenSpec: return ATenSpec(item)
+    def viz(self) -> str: return self.op.viz()
+    def dot(self) -> str: return self.op.dot()
     def __repr__(self) -> str:
         shape = [s.item for s in self.shape] # if expr, render!
         return f"{self.__class__.__name__}<shape={shape}, dtype={self.dtype}>"
