@@ -19,10 +19,9 @@ class ATenOpMetaclass(type):
             return tuple(sorted((k, ATenOpMetaclass._freeze(v)) for k, v in x.items()))
         return x
     def __call__(cls, args: tuple[ATenOp, ...], T: "ATenOpType | None" = None, **kwargs):
-        T = cls.verify(args, T, **kwargs) # type inference
+        T = cls.verify(args, T, **kwargs) # run type inference+verification
         wret = ATenOpMetaclass.cache.get(key:=(cls, tuple(args), ATenOpMetaclass._freeze(T), ATenOpMetaclass._freeze(kwargs)), None)
-        if wret is not None and (ret:=wret()) is not None:
-            return ret
+        if wret is not None and (ret:=wret()) is not None: return ret
         ATenOpMetaclass.cache[key] = weakref.ref(created:=super().__call__(args, T=T, **kwargs))
         return created
 
@@ -41,7 +40,7 @@ class ATenOpType():
     axes: tuple[ATenAxis]
     dtype: DType
     offset: Union[ATenOp, None] = None
-    is_ptr: bool = False # for vectorize
+    is_ptr: bool = False # TODO: for vectorize?
     def index(self, indices: List[ATenOp]):
         assert self.ndim == len(indices)
         total = itertools.accumulate([b.index(a) for (a, b) in zip(indices, self.axes)], lambda a, b: Add((a, b)), initial=Const.new(0, index))
@@ -89,19 +88,19 @@ class UnaryOps():
     # ops whose first argument is returned dtype
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs) -> ATenOpType:
-        assert len(args) == 1
+        assert len(args) == 1, f"UnaryOp {cls.__name__} takes one argument, getting {args}"
         return args[0].T
 class BinaryOps():
     # ops whose first argument is returned dtype
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs) -> ATenOpType:
-        assert len(args) == 2
+        assert len(args) == 2, f"BinaryOp {cls.__name__} takes two argument, getting {args}"
         return args[0].T
 class TernaryOps():
     # ops whose first argument is returned dtype
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs) -> ATenOpType:
-        assert len(args) == 3
+        assert len(args) == 3, f"TernaryOp {cls.__name__} takes three argument, getting {args}"
         return args[0].T
 class ViewOps():
     # ops whose return dtypes are explicitly provided via T option
