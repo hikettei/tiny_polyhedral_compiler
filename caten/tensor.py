@@ -24,8 +24,9 @@ class ATenSpec:
 
 class ATen:
     op: ir.ATenOp # ATen is just a wrapper for ATenOp
-    def __init__(self, *args: Any, op: Union[None, ir.ATenOp]=None):
-        if op is not None: self.op = op
+    def __init__(self, *args: Any, op: Union[None, ir.ATenOp]=None, dtype:DType=default_float):
+        self.op = op or ir.Allocate.new(tuple(args[0]), dtype)
+
     @staticmethod
     def register(device_id: str, cls: Any) -> None:
         DEVICE_TO_TENSOR[device_id] = cls
@@ -56,7 +57,7 @@ class ATen:
     def unwrap(obj: ATen|TOperand) -> TOperand:
         return obj.op if isinstance(obj, ATen) else obj
 
-    def forward(self, op: Callable, *args: ir.ATenOp, **kwargs: Any) -> Tensor: return Tensor(op=op(*args, **kwargs))
+    def forward(self, op: Callable, args: tuple[ir.ATenOp, ...], **kwargs: Any) -> Tensor: return Tensor(op=op(args, **kwargs))
     def __class_getitem__(cls, item: Union[Any, Tuple[Any, ...]]) -> ATenSpec: return ATenSpec(item)
     def __repr__(self) -> str:
         shape = [s.item for s in self.shape] # if expr, render!
@@ -135,15 +136,14 @@ class ATen:
                     assert ir.ATenOp.eql(a, b)
                     return ir._const(a, index) # a != b is asserted here?
             return tuple(smax(*nth_dim_sizes) for nth_dim_sizes in zip(*align_left(*shapes), strict=True))
-        assert isinstance(x, Tensor) and isinstance(y, Tensor)
         out_shape = _broadcast_shape(x.shape, y.shape)
         return x._broadcast_to(out_shape).op, y._broadcast_to(out_shape).op
     # TODO:
     # - reduce option
     # - ir.Add.new (or binop) can have reduce option
-    def add(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Add, *self._broadcasted(other, reverse=reverse))
-    def mul(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Mul, *self._broadcasted(other, reverse=reverse))
-    def idiv(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.IDiv, *self._broadcasted(other, reverse=reverse))
+    def add(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Add, self._broadcasted(other, reverse=reverse))
+    def mul(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Mul, self._broadcasted(other, reverse=reverse))
+    def idiv(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.IDiv, self._broadcasted(other, reverse=reverse))
     # def __eq__(self, other: Any): pass
     # def __neq__(self, other: Any): pass
     def __add__(self, other: ATen|TOperand) -> Tensor: return self.add(other)
@@ -151,9 +151,9 @@ class ATen:
     def __mul__(self, other: ATen|TOperand) -> Tensor: return self.mul(other)
     def __rmul__(self, other: ATen|TOperand) -> Tensor: return self.mul(other, reverse=True)
     def __floordiv__(self, other: ATen|TOperand) -> Tensor: return self.idiv(other) 
-    def neg(self) -> Tensor: return self.forward(ir.Neg, self.op)
-    def sin(self) -> Tensor: return self.forward(ir.Sin, self.op)
-    def cos(self) -> Tensor: return self.forward(ir.Sin, (self + Tensor.const(0.0, dtype=self.dtype)).op)
+    def neg(self) -> Tensor: return self.forward(ir.Neg, (self.op,))
+    def sin(self) -> Tensor: return self.forward(ir.Sin, (self.op,))
+    def cos(self) -> Tensor: return self.forward(ir.Sin, ((self + Tensor.const(0.0, dtype=self.dtype)).op,))
 
 class TensorImpl(ATen, metaclass=ABCMeta):
     @abstractmethod
