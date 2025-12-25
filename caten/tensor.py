@@ -123,7 +123,6 @@ class ATenArith():
             return tuple(0 if 0 in nth_dim_sizes else smax(nth_dim_sizes) for nth_dim_sizes in zip(*_align_left(*shapes)))
         out_shape = _broadcast_shape(x.shape, y.shape)
         return x._broadcast_to(out_shape), y._broadcast_to(out_shape)
-
     # TODO:
     # - reduce option
     # - ir.Add.new (or binop) can have reduce option
@@ -141,8 +140,6 @@ class ATenArith():
     def __radd__(self, other: Any): return self.add(other, reverse=True)
     def __mul__(self, other: Any): return self.mul(other)
     def __rmul__(self, other: Any): return self.mul(other, reverse=True)
-    
- # TODO: self == 1 is evalued to true if self is const
 ## math mixin
 class ATenMath():
     @ATen.top

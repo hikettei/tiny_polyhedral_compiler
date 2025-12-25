@@ -4,6 +4,7 @@ from abc import ABCMeta, abstractmethod
 from typing import List, Dict, Any, Union
 import itertools, weakref, dataclasses
 from dataclasses import dataclass
+import operator, math
 from .dtype import DType, index
 
 class ATenOpMetaclass(type):
@@ -159,6 +160,7 @@ class Sin(UnaryOps, ATenOp):
     """
     OUT = sin(X)
     """
+    python_op = math.sin
 
 @dataclass(frozen=True)
 class Exp2(UnaryOps, ATenOp):
@@ -194,12 +196,14 @@ class Add(BinaryOps, ATenOp):
     """
     OUT = Add(X, Y)
     """
+    python_op = operator.add
 
 @dataclass(frozen=True)
 class Mul(BinaryOps, ATenOp):
     """
     OUT = Mul(X, Y)
     """
+    python_op = operator.mul
 
 @dataclass(frozen=True)
 class IDiv(BinaryOps, ATenOp):

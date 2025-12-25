@@ -94,18 +94,19 @@ def _is_num(x: Any) -> bool:
 constant_folder = Simplifier(
     # UnaryOps
     [(
-        Pat(ops[0], src=(Pat(ir.Const, name="x"))),
-        lambda x: ir.Const.new(ops[1](x.value), x.T.dtype)
+        Pat(ops, src=(Pat(ir.Const, name="x"))),
+        lambda x: ir.Const.new(ops.python_op(x.value), x.T.dtype)
         if _is_num(x.value)
         else None,)
-     for ops in [(ir.Sin, math.sin)]] +
+     for ops in [ir.Sin]
+     ] + 
     # BinaryOps
     [(
-        Pat(ops[0], src=(Pat(ir.Const, name="a"), Pat(ir.Const, name="b"))),
-        lambda a, b: ir.Const.new(ops[1](a.value, b.value), a.T.dtype)
+        Pat(ops, src=(Pat(ir.Const, name="a"), Pat(ir.Const, name="b"))),
+        lambda a, b: ir.Const.new(ops.python_op(a.value, b.value), a.T.dtype)
         if (a.T.dtype == b.T.dtype and _is_num(a.value) and _is_num(b.value))
         else None,)
-     for ops in [(ir.Add, operator.add), (ir.Mul, operator.mul)]
+     for ops in [ir.Add, ir.Mul]
      ]
     # Ternary Ops?
 )
