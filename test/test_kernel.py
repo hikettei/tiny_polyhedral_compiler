@@ -2,10 +2,10 @@ import caten as C
 
 
 def test_tensor() -> None:
-    tensor = C.Tensor.from_shape([10, 10], dtype=C.float32)
-    print(tensor)
-    print(tensor.op.T)
-    print(tensor.reshape([2, 5, 10]))
+    a = C.Tensor([10, 10], dtype=C.float32)
+    b = C.Tensor([10], dtype=C.float32)
+    print(a.reshape(5, 2, 5, 2))
+    print(a+b)
 
 #def atest_matmul_kernel():
 #    @C.kernel()
