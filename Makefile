@@ -7,4 +7,6 @@ help:
 
 .PHONY: test
 test: ## Runs test harness
+	PYTHONPATH=. $(UV) run ruff check .
+	PYTHONPATH=. $(UV) run mypy ./caten
 	PYTHONPATH=. $(UV) run python -m pytest ./test

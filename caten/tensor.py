@@ -155,9 +155,11 @@ class ATenArith():
 ## math mixin
 class ATenMath():
     @ATen.top
-    def sin(self: ATen): return self.forward(ir.Sin, self) # type: ignore
+    def neg(self: ATen) -> Tensor: return self.forward(ir.Neg, self) # type: ignore
     @ATen.top
-    def cos(self: ATen): return self.forward(ir.Sin, self + Tensor.const(0.0, dtype=self.dtype)) # type: ignore
+    def sin(self: ATen) -> Tensor: return self.forward(ir.Sin, self) # type: ignore
+    @ATen.top
+    def cos(self: ATen) -> Tensor: return self.forward(ir.Sin, self + Tensor.const(0.0, dtype=self.dtype)) # type: ignore
 ## nn ops mixin
 class ATenNN():
     pass
