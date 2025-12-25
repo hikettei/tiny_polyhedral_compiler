@@ -82,7 +82,9 @@ class ATenOp(metaclass=ATenOpMetaclass):
 
     def deepwalk(self):
         pass
-        
+
+    def viz(self):
+        pass
 ## == Tensor Graph ============================================================
 class UnaryOps():
     # ops whose first argument is returned dtype
@@ -153,12 +155,15 @@ class Add(BinaryOps, ATenOp):
     """
     OUT = Add(X, Y)
     """
+    pass
 
 @dataclass(frozen=True)
 class Mul(BinaryOps, ATenOp):
     """
     OUT = Mul(X, Y)
     """
+    pass
+
 @dataclass(frozen=True)
 class IDiv(BinaryOps, ATenOp):
     pass
