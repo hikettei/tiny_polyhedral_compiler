@@ -11,46 +11,51 @@ from .dtype import DType, default_float, floats, index, integers
 
 ## Backend Abstraction
 DEVICE_TO_TENSOR = {}
-def get_backend(): return os.environ.get("BACKEND", "CPU")
+def get_backend() -> str: return os.environ.get("BACKEND", "CPU")
 ## Tensor annotation for jit/aot shape check
 class ATenSpec:
     """
     C.Tensor[M, N] -> ATenSpec(M N)
     """
     def __init__(self, shape: Tuple[Any, ...]):
-        self.shape: List[Union[int, str]] = shape
+        self.shape: tuple[Union[int, str], ...] = shape
     def __repr__(self) -> str: return f"ATenSpec{self.shape}"
 ## Tensor compiler core
 class ATen:
     op: ir.ATenOp # ATen is just a wrapper for ATenOp
     @classmethod
-    def from_shape(cls, shape: List[ir.ATenOp], dtype: DType=default_float): return Tensor(op=ir.Allocate.new(shape, dtype))
+    def from_shape(cls, shape: List[ir.ATenOp], dtype: DType=default_float) -> Tensor: return Tensor(op=ir.Allocate.new(shape, dtype)) # type: ignore
     @classmethod
-    def const(cls, obj: Any, dtype: DType=index):
+    def const(cls, obj: Any, dtype: DType=index) -> ir.Const:
         match obj:
             case int(): assert dtype in integers
             case float(): assert dtype in floats
             case _: raise TypeError(f"ATen.const: Only integer or float objects can become constant! getting {obj}")
         return ir.Const.new(obj, dtype)
-    def forward(self, op: Callable, *args: List, **kwargs) -> ATen: return Tensor(op=op(*args, **kwargs))
+    def forward(self, op: Callable, *args: List, **kwargs) -> Tensor: return Tensor(op=op(*args, **kwargs)) # type: ignore
     def __class_getitem__(cls, item: Union[Any, Tuple[Any, ...]]) -> ATenSpec: return ATenSpec(item)
     def __repr__(self) -> str:
         # TODO: Display Shape, realized buffer, etc.
         return f"{self.__class__.__name__}<{self.op}>"
     @property
-    def dtype(self): return self.op.T.dtype
+    def dtype(self) -> DType:
+        assert self.op.T is not None
+        return self.op.T.dtype
     @staticmethod
-    def wrap_const(obj: Any, dtype: DType = index):
+    def wrap_const(obj: Union[ATen, ir.ATenOp, float, int], dtype: DType = index) -> ir.ATenOp:
         """
         Ensures obj is a constant of dtype
         """
         if isinstance(obj, ATen):
             assert obj.dtype == dtype # todo: decent error msg
+            return obj.op
+        elif isinstance(obj, ir.ATenOp):
+            assert obj.T is not None and obj.T.dtype == dtype # todo: decent error msg
             return obj
         else:
             return ATen.const(obj, dtype=dtype)
     @staticmethod
-    def top(f: Callable[Any, ATen]):
+    def top(f: Callable) -> Callable:
         """
         Declares the given function as toplevel tensor operation.
         """
@@ -59,9 +64,9 @@ class ATen:
 ## movement ops mixin
 class ATenMovements():
     @property
-    def shape(self) -> List[ATen]: return [x.size for x in self.op.T.axes]
+    def shape(self) -> tuple[ir.ATenOp, ...]: return tuple([x.size for x in self.op.T.axes]) # type: ignore
     @property
-    def strides(self) -> List[ATen]: return [x.stride for x in self.op.T.axes]
+    def strides(self) -> tuple[ir.ATenOp, ...]: return tuple([x.stride for x in self.op.T.axes]) # type: ignore
     @property
     def ndim(self) -> int: return len(self.shape)
     def _resolve_dim(self, dim: int, *, extra: bool = False) -> int:
@@ -70,7 +75,7 @@ class ATenMovements():
             raise IndexError(f"{dim=} out of range {[-max(1, total), max(1, total) - 1]}")
         return dim + total if dim < 0 else dim
     # ref: https://github.com/tinygrad/tinygrad/blob/master/tinygrad/mixin/movement.py#L58
-    def _broadcast_to(self, new_shape: List[ATen]) -> Self:
+    def _broadcast_to(self, new_shape: tuple[ir.ATenOp, ...]) -> Self:
         """
         Implements Numpy-Semantic Broadcasting operation
         """
@@ -81,8 +86,8 @@ class ATenMovements():
         if not all(ir.ATenOp.eql(s, ns) or ir.ATenOp.eql(s, 1) for s, ns in zip(shape, new_shape, strict=True)):
             raise ValueError(f"cannot broadcast {self.shape} to {new_shape=}")
         reshaped = self.reshape(shape)
-        ret = Tensor(op=ir.View.expand(self.op, new_shape))
-        return reshaped if ir.ATenOp.equals(ret.shape, reshaped.shape) else ret
+        ret = Tensor(op=ir.View.expand(self.op, new_shape)) # type: ignore
+        return reshaped if ir.ATenOp.equals(ret.shape, reshaped.shape) else ret # type: ignore
     @ATen.top
     def reshape(self, shape, *args) -> Self:
         new_shape = tuple([s if s is not None else self.shape[i] for i, s in enumerate(argfix(shape, *args))])

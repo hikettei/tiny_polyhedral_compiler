@@ -14,7 +14,7 @@ def argfix(*x: Any) -> tuple[Any, ...]:
     return tuple(x[0])
   return x
 
-def align_left(*shapes: tuple[int, ...]) -> tuple[tuple[int, ...], ...]:
+def align_left(*shapes: tuple[Any, ...]) -> tuple[tuple[Any, ...], ...]:
   # unsqueeze left to make every shape same length
   max_dim = max(len(shape) for shape in shapes)
   return tuple((1,) * (max_dim - len(shape)) + shape for shape in shapes)

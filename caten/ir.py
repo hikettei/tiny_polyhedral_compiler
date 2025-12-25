@@ -114,7 +114,7 @@ class ATenOp(metaclass=ATenOpMetaclass):
         # plus, cannot verify the equivalence of A*B and B*A
         return a == b
     @staticmethod
-    def equals(a: List[Union[int, float, ATenOp]], b: List[Union[int, float, ATenOp]]) -> bool:
+    def equals(a: tuple[Union[int, float, ATenOp], ...], b: tuple[Union[int, float, ATenOp], ...]) -> bool:
         """
         Compare two lists element-wise using `ATenOp.eql`
         """
