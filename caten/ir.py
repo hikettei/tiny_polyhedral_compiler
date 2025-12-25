@@ -147,27 +147,36 @@ class Neg(UnaryOps, ATenOp):
     """
     OUT = -X
     """
-    pass
 
 @dataclass(frozen=True)
 class Recip(UnaryOps, ATenOp):
-    pass
+    """
+    OUT = 1/X
+    """
 
 @dataclass(frozen=True)
 class Sin(UnaryOps, ATenOp):
-    pass
+    """
+    OUT = sin(X)
+    """
 
 @dataclass(frozen=True)
 class Exp2(UnaryOps, ATenOp):
-    pass
+    """
+    OUT = exp2(X)
+    """
 
 @dataclass(frozen=True)
 class Log2(UnaryOps, ATenOp):
-    pass
+    """
+    OUT = log2(X)
+    """
 
 @dataclass(frozen=True)
 class Sqrt(UnaryOps, ATenOp):
-    pass
+    """
+    OUT = sqrt(X)
+    """
 
 @dataclass(frozen=True)
 class Bitcast(UnaryOps, ATenOp):
@@ -179,25 +188,24 @@ class Not(UnaryOps, ATenOp):
     Logical not if the X is a boolean
     otherwise lognot ~x
     """
-    pass
 ### BinaryOps
 @dataclass(frozen=True)
 class Add(BinaryOps, ATenOp):
     """
     OUT = Add(X, Y)
     """
-    pass
 
 @dataclass(frozen=True)
 class Mul(BinaryOps, ATenOp):
     """
     OUT = Mul(X, Y)
     """
-    pass
 
 @dataclass(frozen=True)
 class IDiv(BinaryOps, ATenOp):
-    pass
+    """
+    OUT = A // B
+    """
 
 @dataclass(frozen=True)
 class And(BinaryOps, ATenOp):
