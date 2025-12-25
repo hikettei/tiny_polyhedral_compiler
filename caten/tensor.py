@@ -24,17 +24,15 @@ class ATen:
     @classmethod
     def const(cls, obj: Any, dtype: DType=index):
         match obj:
-            case int():
-                assert dtype in integers
-            case float():
-                assert dtype in floats
-            case _:
-                raise TypeError(f"ATen.const: Only integer or float objects can become constant! getting {obj}")
+            case int(): assert dtype in integers
+            case float(): assert dtype in floats
+            case _: raise TypeError(f"ATen.const: Only integer or float objects can become constant! getting {obj}")
         return ir.Const.new(obj, dtype)
     def forward(self, op: Callable, *args: List, **kwargs) -> ATen: return Tensor(op=op(*args, **kwargs))
     def __class_getitem__(cls, item: Union[Any, Tuple[Any, ...]]) -> TensorSpec: return TensorSpec(item)
-    # TODO: Display Shape, realized buffer, etc.
-    def __repr__(self) -> str: return f"{self.__class__.__name__}<{self.op}>"
+    def __repr__(self) -> str:
+        # TODO: Display Shape, realized buffer, etc.
+        return f"{self.__class__.__name__}<{self.op}>"
     @property
     def dtype(self): return self.op.T.dtype
     @staticmethod
@@ -60,6 +58,13 @@ class ATenMovements():
     def shape(self) -> List[ATen]: return [x.size for x in self.op.T.axes]
     @property
     def strides(self) -> List[ATen]: return [x.stride for x in self.op.T.axes]
+    @property
+    def ndim(self) -> int: return len(self.shape)
+    def _resolve_dim(self, dim: int, *, extra: bool = False) -> int:
+        total = self.ndim + int(extra)
+        if not -max(1, total) <= dim <= max(1, total) - 1:
+            raise IndexError(f"{dim=} out of range {[-max(1, total), max(1, total) - 1]}")
+        return dim + total if dim < 0 else dim
     @ATen.top
     def reshape(self, shape, *args) -> Self:
         new_shape = tuple([s if s is not None else self.shape[i] for i, s in enumerate(argfix(shape, *args))])
@@ -68,8 +73,17 @@ class ATenMovements():
         if c: new_shape = tuple([-prod(self.shape) // prod(new_shape) if s == -1 else s for s in new_shape])
         if prod(self.shape) != prod(new_shape):
             raise ValueError(f"size mismatch, can't reshape ({self.shape}) -> ({new_shape})")
-        ret = Tensor(op=ir.View.reshape(self.op, [ATen.wrap_const(s, dtype=index) for s in new_shape])) # TODO: new_shape is ATenOp?
+        ret = Tensor(op=ir.View.reshape(self.op, [ATen.wrap_const(s, dtype=index) for s in new_shape]))
         return self if ret.shape == self.shape else ret
+    @ATen.top
+    def shrink(self, arg: tuple[tuple[sint, sint] | None, ...]) -> Self:
+        raise NotImplementedError("shrink todo")
+    @ATen.top
+    def permute(self, order, *args) -> Self:
+        order_arg = tuple(self._resolve_dim(x) for x in argfix(order, *args))
+        if sorted(order_arg) != list(range(self.ndim)):
+            raise RuntimeError(f"order is not a valid permutation, getting {order_arg}")
+        return Tensor(op=ir.View.permute(self.op, order_arg)) if order_arg != tuple(range(self.ndim)) else self
 ## arithmetic mixin
 class ATenArith():
     @ATen.top

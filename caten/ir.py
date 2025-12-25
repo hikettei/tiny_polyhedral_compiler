@@ -41,6 +41,13 @@ class ATenOpType():
             axes=[ATenAxis(size=size, stride=stride, offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides)],
             dtype=dtype,
         )
+    def permute(self, order: List[int]):
+        return ATenOpType(
+            axes=[self.axes[i] for i in order],
+            dtype=self.dtype,
+            offset=self.offset,
+            is_ptr=self.is_ptr
+        )
     
 @dataclass(frozen=True)
 class ATenOp(metaclass=ABCMeta):
@@ -199,6 +206,10 @@ class View(ATenOp):
     @staticmethod
     def reshape(tensor: ATenOp, shape: List[ATenOp]):
         return View((tensor,), T=ATenOpType.from_shape(shape, tensor.T.dtype))
+
+    @staticmethod
+    def permute(tensor: ATenOp, order: List[int]):
+        return View((tensor,), T=tensor.T.permute(order))
     
     @staticmethod
     def new(tensor: ATenOp, view: ATenOpType):
