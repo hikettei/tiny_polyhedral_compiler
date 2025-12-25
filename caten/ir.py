@@ -325,15 +325,10 @@ class Range(ATenOp):
     """
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
-        assert len(args) == 1 and args[0].T is not None
+        assert len(args) == 1 and args[0].T is not None, "Range is defined as: Range(SIZE)"
         assert args[0].T.ndim == 0, "Range: SIZE should be given as a scalar"
         assert args[0].T.dtype == index, "Range: SIZE should be type of index"
-        return ATenOpType(
-            axes=tuple(),
-            dtype=index,
-            offset=_const(0, index)
-        )
-    
+        return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
     
 @dataclass(frozen=True)
 class Aff(ATenOp):
@@ -341,6 +336,13 @@ class Aff(ATenOp):
     OUT = Aff(Stride, Range, Offset, Incx)
     equivalent to: out = 
     """
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        assert len(args) == 4, "Aff is defined as: Aff(Stride, Range, Offset, Incx)"
+        assert all([arg.T is not None and arg.T.ndim == 0 and arg.T.dtype == index for arg in args]), "Aff: Stride/Range/Offset/Incx should be a scalar typed index"
+        assert isinstance(args[1], Range), f"Aff: The second argument should be a Range, getting {args[1].__class__}"
+        return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
+    
 
 @dataclass(frozen=True)
 class Aref(ATenOp):
