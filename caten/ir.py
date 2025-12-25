@@ -95,9 +95,11 @@ class ATenOp(metaclass=ATenOpMetaclass):
     def __radd__(self, other: Any): return Add((_const(other), self))
     def __mul__(self, other: Any): return Mul((self, _const(other)))
     def __rmul__(self, other: Any): return Mul((_const(other), self))
+    # note: do not try to overload __eq__ since it is need to compute hash
     @staticmethod
     def eql(a: Union[int, float, ATenOp], b: Union[int, float, ATenOp]):
         """
+        Compare two scalars (Python numbers or ATenOp scalars) for equality.
         """
         if isinstance(a, (int, float)) and isinstance(b, (int, float)): return (a == b)
         dtype = a.T.dtype if isinstance(a, ATenOp) else b.T.dtype # A or B is asserted to have a dtype
@@ -108,7 +110,7 @@ class ATenOp(metaclass=ATenOpMetaclass):
     @staticmethod
     def equals(a: List[Union[int, float, ATenOp]], b: List[Union[int, float, ATenOp]]):
         """
-        Compares the equivalence
+        Compare two lists element-wise using `ATenOp.eql`
         """
         if not len(a) == len(b): return False
         for ai, bi in zip(a, b):
