@@ -90,8 +90,13 @@ class ATenOp(metaclass=ATenOpMetaclass):
     def deepwalk(self) -> None:
         pass
 
-    def viz(self) -> None:
-        pass
+    def viz(self) -> str:
+        from caten.viz import render
+        return render(self)
+    
+    def dot(self) -> str:
+        from caten.viz import to_dot
+        return to_dot(self)
 
     @property
     def item(self) -> Union[int, float, ATenOp]:
@@ -135,6 +140,8 @@ class TensorOps():
         out = replace(self, args=args) # type: ignore
         assert out.T is not None # type: ignore
         return Aref.from_tensor(out) if out.T.ndim > 0 else out # type: ignore
+# TODO:
+# UnaryOps verifier: check dtypes/shapes of arguments
 class UnaryOps(TensorOps):
     # ops whose first argument is returned dtype
     @classmethod
