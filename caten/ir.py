@@ -64,7 +64,7 @@ class ATenOpType():
 @dataclass(frozen=True)
 class ATenOp(metaclass=ATenOpMetaclass):
     args: List[ATenOp]
-    T: Union[ATenOpType, None] = None    
+    T: Union[ATenOpType, None] = None # this should be provided via T=... option, or inferred via verify method. 
     @property
     def predecessors(self):
         # TODO:
