@@ -38,7 +38,10 @@ class ATen:
     @property
     def dtype(self): return self.op.T.dtype
     @staticmethod
-    def ensure_tensor(self, obj: Any, dtype: DType = index):
+    def wrap_const(self, obj: Any, dtype: DType = index):
+        """
+        Ensures obj is a constant of dtype
+        """
         if isinstance(obj, ATen):
             assert obj.dtype == dtype # todo: decent error msg
             return obj
@@ -51,14 +54,12 @@ class ATen:
         """
         # TODO: Toplevel in helpers.py
         return f
-    def polyhedral(self):
-        pass
-
 ## movement ops mixin
 class ATenMovements():
     @property
-    def shape(self) -> List[ATen]:
-        pass
+    def shape(self) -> List[ATen]: return [x.shape for x in self.op.T.axes]
+    @property
+    def strides(self) -> List[ATen]: return [x.stride for x in self.op.T.axes]
     @ATen.top
     def reshape(self, shape, *args) -> Self:
         new_shape = tuple([s if s is not None else self.shape[i] for i, s in enumerate(argfix(shape, *args))])
@@ -67,7 +68,7 @@ class ATenMovements():
         if c: new_shape = tuple([-prod(self.shape) // prod(new_shape) if s == -1 else s for s in new_shape])
         if prod(self.shape) != prod(new_shape):
             raise ValueError(f"size mismatch, can't reshape ({self.shape}) -> ({new_shape})")
-        ret = ATen(op=ir.View.reshape(self.op, [ATen.ensure_tensor(s, dtype=index) for s in new_shape])) # TODO: new_shape is ATenOp?
+        ret = ATen(op=ir.View.reshape(self.op, [ATen.wrap_const(s, dtype=index) for s in new_shape])) # TODO: new_shape is ATenOp?
         return self if ret.shape == self.shape else ret
 ## arithmetic mixin
 class ATenArith():

@@ -8,7 +8,7 @@ from .dtype import DType, index
 
 @dataclass(frozen=True)
 class ATenAxis():
-    shape: ATenOp
+    size: ATenOp
     stride: ATenOp
     offset: ATenOp
     incf: ATenOp
@@ -18,17 +18,17 @@ class ATenAxis():
 
 @dataclass(frozen=True)
 class ATenOpType():
-    shape: tuple[ATenAxis]
+    axes: tuple[ATenAxis]
     dtype: DType
     offset: Union[ATenOp, None] = None
     is_ptr: bool = False # for vectorize
     def index(self, indices: List[ATenOp]):
         assert self.ndim == len(indices)
-        total = itertools.accumulate([b.index(a) for (a, b) in zip(indices, self.shape)], lambda a, b: Add((a, b)), initial=Const.new(0, index))
+        total = itertools.accumulate([b.index(a) for (a, b) in zip(indices, self.axes)], lambda a, b: Add((a, b)), initial=Const.new(0, index))
         if self.offset: total = Add([total, self.offset])
         return total
     @property
-    def ndim(self): return len(self.shape)
+    def ndim(self): return len(self.axes)
     @staticmethod
     def from_shape(shape: List[Any], dtype: DType) -> ATenOpType:
         def _const(val: int): return Const.new(val, index)
@@ -38,7 +38,7 @@ class ATenOpType():
             return Mul((a, b))
         strides = tuple(itertools.accumulate(reversed(shape[1:]), _mul, initial=_const(1)))[::-1]
         return ATenOpType(
-            shape=[ATenAxis(shape=size, stride=stride, offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides)],
+            axes=[ATenAxis(size=size, stride=stride, offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides)],
             dtype=dtype,
         )
     
@@ -180,7 +180,7 @@ class Const(ATenOp):
     value: Union[int, float, str] = 0.0
     @staticmethod
     def new(value: Union[int, float, str], dtype: DType):
-        return Const(args=(), value=value, T=ATenOpType(shape=[], dtype=dtype))
+        return Const(args=(), value=value, T=ATenOpType(axes=[], dtype=dtype))
 
 @dataclass(frozen=True)
 class Allocate(ATenOp):
