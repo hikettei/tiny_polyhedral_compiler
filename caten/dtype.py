@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+from typing import Any
+
 class DTypeMetaClass(type):
     dcache: dict[tuple, DType] = {}
-    def __call__(cls, *args, **kwargs):
+    def __call__(cls, *args: Any, **kwargs: Any) -> DType:
         if (ret:=DTypeMetaClass.dcache.get(args, None)) is not None: return ret
         DTypeMetaClass.dcache[args] = ret = super().__call__(*args)
         return ret
@@ -15,7 +17,7 @@ class DTypeMetaClass(type):
 class DType:
     name: str
     @staticmethod
-    def new(name:str): return DType(name)
+    def new(name:str) -> DType: return DType(name)
 
 ## definitions
 float64 = DType.new("float64")
