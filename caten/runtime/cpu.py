@@ -1,5 +1,6 @@
 import caten as C
 
+
 class CPUTensor(C.ATenBase):
     def allocate(self):
         pass

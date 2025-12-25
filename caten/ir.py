@@ -52,7 +52,7 @@ class ATenOpType():
     is_ptr: bool = False # TODO: for vectorize?
     def index(self, indices: List[ATenOp]):
         assert self.ndim == len(indices)
-        total = itertools.accumulate([b.index(a) for (a, b) in zip(indices, self.axes)], lambda a, b: Add((a, b)), initial=Const.new(0, index))
+        total = itertools.accumulate([b.index(a) for (a, b) in zip(indices, self.axes, strict=True)], lambda a, b: Add((a, b)), initial=Const.new(0, index))
         if self.offset: total = Add([total, self.offset])
         return total
     @property
@@ -62,7 +62,7 @@ class ATenOpType():
         def _mul(a, b): return Mul((_const(a), _const(b)))
         strides = tuple(itertools.accumulate(reversed(shape[1:]), _mul, initial=_const(1)))[::-1]
         return ATenOpType(
-            axes=tuple([ATenAxis(size=_const(size), stride=_const(stride), offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides)]),
+            axes=tuple([ATenAxis(size=_const(size), stride=_const(stride), offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides, strict=True)]),
             dtype=dtype,
         )
 
@@ -72,7 +72,7 @@ class ATenOp(metaclass=ATenOpMetaclass):
     T: Union[ATenOpType, None] = None # this should be provided via T=... option, or inferred via verify method. 
     @property
     def predecessors(self) -> tuple[ATenOp, ...]:
-        return tuple(args) + tuple(*[tuple(axis.size, axis.stride, axis.offset, axis.incf) for axis in self.T.axes]) + () if self.offset is None else tuple([self.offset])
+        return tuple(self.args) + tuple(*[tuple(axis.size, axis.stride, axis.offset, axis.incf) for axis in self.T.axes]) + () if self.offset is None else tuple([self.offset])
     
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs) -> ATenOpType:
@@ -118,7 +118,7 @@ class ATenOp(metaclass=ATenOpMetaclass):
         Compare two lists element-wise using `ATenOp.eql`
         """
         if not len(a) == len(b): return False
-        for ai, bi in zip(a, b):
+        for ai, bi in zip(a, b, strict=True):
             if not ATenOp.eql(ai, bi): return False
         return True
 ## == Tensor Graph ============================================================
@@ -297,7 +297,7 @@ class View(ViewOps, ATenOp):
                 assert ATenOp.eql(old_axis, 1), f"The axis to expand should be evaluated to 1, getting {old_axis}"
                 return ATenAxis(size=_const(new_size), stride=Const.new(0, index), offset=Const.new(0, index), incf=Const.new(1, index))
         return View((tensor,), T=ATenOpType(
-            axes=tuple([_expand(old_axis, new_size) for (old_axis, new_size) in zip(tensor.T.axes, shape)]),
+            axes=tuple([_expand(old_axis, new_size) for (old_axis, new_size) in zip(tensor.T.axes, shape, strict=True)]),
             dtype=tensor.T.dtype,
             offset=tensor.T.offset,
             is_ptr=tensor.T.is_ptr

@@ -22,9 +22,9 @@ class ATenSpec:
     def __repr__(self) -> str: return f"ATenSpec{self.shape}"
 ## Tensor compiler core
 class ATen:
-    op: ATenOp # ATen is just a wrapper for ATenOp
+    op: ir.ATenOp # ATen is just a wrapper for ATenOp
     @classmethod
-    def from_shape(cls, shape: List[ATenOp], dtype: DType=default_float): return Tensor(op=ir.Allocate.new(shape, dtype))
+    def from_shape(cls, shape: List[ir.ATenOp], dtype: DType=default_float): return Tensor(op=ir.Allocate.new(shape, dtype))
     @classmethod
     def const(cls, obj: Any, dtype: DType=index):
         match obj:
@@ -78,7 +78,7 @@ class ATenMovements():
         if self.ndim > len(new_shape):
             raise ValueError(f"cannot broadcast tensor to fewer dimensions. shape={self.shape} to {new_shape}")
         shape, _ = align_left(self.shape, new_shape)
-        if not all(ir.ATenOp.eql(s, ns) or ir.ATenOp.eql(s, 1) for s, ns in zip(shape, new_shape)):
+        if not all(ir.ATenOp.eql(s, ns) or ir.ATenOp.eql(s, 1) for s, ns in zip(shape, new_shape, strict=True)):
             raise ValueError(f"cannot broadcast {self.shape} to {new_shape=}")
         reshaped = self.reshape(shape)
         ret = Tensor(op=ir.View.expand(self.op, new_shape))
@@ -104,7 +104,7 @@ class ATenMovements():
         return Tensor(op=ir.View.permute(self.op, order_arg)) if order_arg != tuple(range(self.ndim)) else self
     @ATen.top
     def expand(self, shape, *args) -> Self:
-        new_shape = tuple(from_ if ir.ATenOp.eql(to, -1) or to is None else to for from_, to in zip(*(align_left(self.shape, argfix(shape, *args)))))
+        new_shape = tuple(from_ if ir.ATenOp.eql(to, -1) or to is None else to for from_, to in zip(*(align_left(self.shape, argfix(shape, *args))), strict=True))
         return self._broadcast_to([ATen.wrap_const(s, dtype=index) for s in new_shape])
 
 ## arithmetic mixin
@@ -124,7 +124,7 @@ class ATenArith():
                 else:
                     assert ir.ATenOp.eql(a, b)
                     return a # a != b is asserted here?
-            return tuple(0 if 0 in nth_dim_sizes else smax(nth_dim_sizes) for nth_dim_sizes in zip(*align_left(*shapes)))
+            return tuple(0 if 0 in nth_dim_sizes else smax(nth_dim_sizes) for nth_dim_sizes in zip(*align_left(*shapes), strict=True))
         out_shape = _broadcast_shape(x.shape, y.shape)
         return x._broadcast_to(out_shape), y._broadcast_to(out_shape)
     # TODO:
