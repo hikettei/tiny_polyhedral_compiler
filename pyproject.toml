@@ -27,7 +27,7 @@ exclude = ["*.ipynb"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "Q"]
-ignore = ["E501"]
+ignore = ["E501", "E701", "E401", "E731"]
 
 [tool.mypy]
 python_version = "3.11"
