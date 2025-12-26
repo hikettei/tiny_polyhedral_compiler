@@ -260,6 +260,7 @@ def kernel(get_kernel: bool = False) -> Callable:
         return func
     return decorator
 # 今我々が考えるべきこと
+# Symbolic Array: Add more simplification rules and tests for it, e.g.: A*1 is A
 # C.range/C.when/C.kernel/C.global/C.local Construction
 # how can we construct a polyhedrla model?
 # then how do we fuse them? without searching and fast
