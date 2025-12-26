@@ -3,7 +3,7 @@ from typing import Any
 import caten as C
 
 
-class CPUTensor(C.ATen):
+class CPUTensor(C.TensorImpl):
     def allocate(self) -> None:
         pass
 

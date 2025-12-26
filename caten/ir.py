@@ -5,7 +5,7 @@ import itertools
 import math
 import operator
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, Union
 
 from .dtype import DType, index
@@ -36,9 +36,9 @@ class ATenAxis():
     stride: ATenOp
     offset: ATenOp
     incf: ATenOp
-    def index(self, i: ATenOp) -> ATenOp:
-        assert i.T is not None and i.T.dtype == index, "ATenAxis.index: range index should be type of index."
-        return Mul((self.stride, Add((Mul((i, self.incf)), self.offset))))
+    def range(self) -> Range: return Range((self.size, ))
+    def aff(self) -> Aff: return Aff((self.stride, self.range(), self.offset, self.incf))
+    def index(self) -> ATenOp: return self.aff().index()
 
 def _const(val: Any, dtype: DType=index) -> ATenOp:
     if isinstance(val, Const): return val
@@ -49,7 +49,6 @@ class ATenOpType():
     axes: tuple[ATenAxis, ...]
     dtype: DType
     offset: Union[ATenOp, None] = None
-    is_ptr: bool = False # TODO: for vectorize?
     def index(self, indices: tuple[ATenOp, ...]) -> Any:
         assert self.ndim == len(indices)
         total = itertools.accumulate([b.index(a) for (a, b) in zip(indices, self.axes, strict=True)], lambda a, b: Add((a, b)), initial=Const.new(0, index)) # type: ignore
@@ -82,11 +81,22 @@ class ATenOp(metaclass=ATenOpMetaclass):
         from caten.simplifier import simplifier
         return simplifier.simplify(self)
 
+    def schedule(self) -> ATenOp:
+        # top down rewriting of the graph
+        def _explore(item: ATenOp) -> ATenOp:
+            return item.lower(tuple([_explore(s) for s in item.args]))
+        return _explore(self)
+    
     def deepwalk(self) -> None:
         pass
 
-    def viz(self) -> None:
-        pass
+    def viz(self) -> str:
+        from caten.viz import render
+        return render(self)
+    
+    def dot(self) -> str:
+        from caten.viz import get_jupyter_graphviz, to_dot
+        return get_jupyter_graphviz(to_dot(self))
 
     @property
     def item(self) -> Union[int, float, ATenOp]:
@@ -121,22 +131,32 @@ class ATenOp(metaclass=ATenOpMetaclass):
         for ai, bi in zip(a, b, strict=True):
             if not ATenOp.eql(ai, bi): return False
         return True
+    
+    def lower(self, args: tuple[ATenOp, ...]) -> ATenOp:
+        return replace(self, args=args)
 ## == Tensor Graph ============================================================
-class UnaryOps():
+class TensorOps():
+    def lower(self, args: tuple[ATenOp, ...]) -> ATenOp:
+        out = replace(self, args=args) # type: ignore
+        assert out.T is not None # type: ignore
+        return Aref.from_tensor(out) if out.T.ndim > 0 else out # type: ignore
+# TODO:
+# UnaryOps verifier: check dtypes/shapes of arguments
+class UnaryOps(TensorOps):
     # ops whose first argument is returned dtype
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) == 1, f"UnaryOp {cls.__name__} takes one argument, getting {args}"
         assert args[0].T is not None
         return args[0].T
-class BinaryOps():
+class BinaryOps(TensorOps):
     # ops whose first argument is returned dtype
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) == 2, f"BinaryOp {cls.__name__} takes two argument, getting {args}"
         assert args[0].T is not None
         return args[0].T
-class TernaryOps():
+class TernaryOps(TensorOps):
     # ops whose first argument is returned dtype
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
@@ -193,7 +213,7 @@ class Sqrt(UnaryOps, ATenOp):
     python_op = math.sqrt
 
 @dataclass(frozen=True)
-class Bitcast(UnaryOps, ATenOp):
+class Bitcast(ViewOps, ATenOp):
     pass
 
 @dataclass(frozen=True)
@@ -255,6 +275,11 @@ class Lt(BinaryOps, ATenOp):
 @dataclass(frozen=True)
 class Where(TernaryOps, ATenOp):
     python_op = lambda a, b, c: b if a else c
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        assert len(args) == 3, f"TernaryOp {cls.__name__} takes three argument, getting {args}"
+        assert args[1].T is not None
+        return args[1].T
 
 ### Allocation
 @dataclass(frozen=True)
@@ -291,7 +316,6 @@ class View(ViewOps, ATenOp):
             axes=tuple([tensor.T.axes[i] for i in order]),
             dtype=tensor.T.dtype,
             offset=tensor.T.offset,
-            is_ptr=tensor.T.is_ptr
         ))
 
     @staticmethod
@@ -306,27 +330,77 @@ class View(ViewOps, ATenOp):
             axes=tuple([_expand(old_axis, new_size) for (old_axis, new_size) in zip(tensor.T.axes, shape, strict=True)]),
             dtype=tensor.T.dtype,
             offset=tensor.T.offset,
-            is_ptr=tensor.T.is_ptr
         ))
-## == JIT =====================================================================
 @dataclass(frozen=True)
-class Reduce(ATenOp):
+class Reduce(ViewOps, ATenOp):
     """
     OUT = Reduce(A, B, op=BinaryOps)
     """
     op: type[BinaryOps] = Add
+## == JIT =====================================================================
+### Array Accessing
+@dataclass(frozen=True)
+class Range(ATenOp):
+    """
+    OUT = Range(SIZE)
+    OUT is the range of [0, SIZE)
+    """
     @classmethod
-    def from_ast_expr(cls) -> None:
-        pass
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        assert len(args) == 1 and args[0].T is not None, "Range is defined as: Range(SIZE)"
+        assert args[0].T.ndim == 0, "Range: SIZE should be given as a scalar"
+        assert args[0].T.dtype == index, "Range: SIZE should be type of index"
+        return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
+    
+@dataclass(frozen=True)
+class Aff(ATenOp):
+    """
+    OUT = Aff(Stride, Range, Offset, Incx)
+    which is the equivalent to `Stride(Incx*Range+Offset)` in ir.INDEX
+    In lexorder, [Range] -> { Stmt[Incx*Range+Offset] }
+                                    Strideth dim
+    """
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        assert len(args) == 4, "Aff is defined as: Aff(Stride, Range, Offset, Incx)"
+        assert all([arg.T is not None and arg.T.ndim == 0 and arg.T.dtype == index for arg in args]), "Aff: Stride/Range/Offset/Incx should be a scalar typed index"
+        assert isinstance(args[1], Range), f"Aff: The second argument should be a Range, getting {args[1].__class__}"
+        assert isinstance(args[3], Const), f"Aff: The fourth argument should be a constant, getting {args[3].__class__}"
+        return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
+
+    def index(self) -> Index:
+        return Index((self.args[0], Mul((self.args[0], Add((Mul((self.args[1], self.args[3])), self.args[2])))),))
+
+@dataclass(frozen=True)
+class Aref(ATenOp):
+    """
+    X = Aref(Array, Aff1, Aff2, ...)
+    Access the (Aff1.index() + Aff2.index() + ...)th element of Array. The dependency is trackable by Polyhedral Compiler.
+    """
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        assert len(args) >= 2, "Aref: the number of argument should be larger than two"
+        assert args[0].T is not None and args[0].T.ndim > 0, f"Aref: the first argument should be array, getting scalar {args[0].__class__}"
+        assert all([isinstance(arg, Aff) for arg in args[1:]]), "Aref: the index should be specified by the list of Aff."
+        return ATenOpType(axes=tuple(), dtype=args[0].T.dtype, offset=_const(0, index))
+    
+    @staticmethod
+    def from_tensor(tensor: ATenOp) -> Aref:
+        assert tensor.T is not None
+        return Aref((tensor,) + tuple([axis.aff() for axis in tensor.T.axes]))
+
+@dataclass(frozen=True)
+class Index(ATenOp):
+    """
+    X = Aref(Array, Index)
+    Access the indexth element of array. The dependency is NOT trackable by Polyhedral Compiler.
+    """
+    pass
 
 @dataclass(frozen=True)
 class Store(ATenOp):
     pass
 ## ControlFlow
-@dataclass(frozen=True)
-class Range(ATenOp):
-    pass
-
 @dataclass(frozen=True)
 class Loop(ATenOp):
     pass
@@ -343,9 +417,7 @@ class Progn(ATenOp):
 class Polyhedral(ATenOp):
     pass
 
-def Var() -> None:
-    pass
-
+# TODO: Schedule --> Runtime
 # e.g.:
 # a = T.Var("A[m n]", float32)
 # P.stmt("...")[a]
