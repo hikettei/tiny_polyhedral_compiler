@@ -137,7 +137,7 @@ class ATen:
                 if ir.ATenOp.eql(a, 1): return ir._const(b, index)
                 elif ir.ATenOp.eql(b, 1): return ir._const(a, index)
                 else:
-                    assert ir.ATenOp.eql(a, b), f"Cannot broadcast two shape {a} vs {b}."
+                    assert ir.ATenOp.eql(a, b), f"Cannot broadcast two shape: {a} vs {b}"
                     return ir._const(a, index) # a != b is asserted here?
             return tuple(smax(*nth_dim_sizes) for nth_dim_sizes in zip(*align_left(*shapes), strict=True))
         out_shape = _broadcast_shape(x.shape, y.shape)
