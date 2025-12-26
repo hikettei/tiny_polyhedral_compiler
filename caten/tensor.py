@@ -38,6 +38,7 @@ class ATen:
         match obj:
             case int(): assert dtype in integers
             case float(): assert dtype in floats
+            case str(): pass
             case _: raise TypeError(f"ATen.const: Only integer or float objects can become constant! getting {obj}")
         return ir.Const.new(obj, dtype)
     @staticmethod
@@ -136,7 +137,7 @@ class ATen:
                 if ir.ATenOp.eql(a, 1): return ir._const(b, index)
                 elif ir.ATenOp.eql(b, 1): return ir._const(a, index)
                 else:
-                    assert ir.ATenOp.eql(a, b)
+                    assert ir.ATenOp.eql(a, b), f"Cannot broadcast two shape {a} vs {b}."
                     return ir._const(a, index) # a != b is asserted here?
             return tuple(smax(*nth_dim_sizes) for nth_dim_sizes in zip(*align_left(*shapes), strict=True))
         out_shape = _broadcast_shape(x.shape, y.shape)
@@ -243,15 +244,30 @@ class Tensor(ATen):
         impl = DEVICE_TO_TENSOR.get(get_backend())
         if impl is None: raise ValueError(f"Unknown BACKEND={get_backend()}")
         return impl(*args, **kwargs)
+## == [Symbolic] ==============================================================
+def Placeholder() -> None: ...
+def Local() -> None: ...
+def Vars(contents: str, dtype:DType=index) -> tuple[ir.ATenOp, ...]:
+    """
+    Declares a list of placeholders
+    e.g.: M, N, K = C.vars("M, N, K")
+    """
+    return tuple([Tensor.const(char, dtype=dtype) for char in contents.replace(" ", "").split(",")])
+
 ## == [Loop-For Style Frontend IR Specs] ======================================
 def kernel(get_kernel: bool = False) -> Callable:
     def decorator(func: Callable) -> Callable:
         return func
     return decorator
+# 今我々が考えるべきこと
+# C.range/C.when/C.kernel/C.global/C.local Construction
+# how can we construct a polyhedrla model?
+# then how do we fuse them? without searching and fast
 # how to generate polyhedral model from tensor ops?
 # rangeify -> range/when ==> polyhedral model
 # with C.range(10, 10):
 # with C.when(10, 10)
+# Then, how to fuse?
 class Range():
     pass
 

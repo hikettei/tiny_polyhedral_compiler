@@ -417,9 +417,6 @@ class Progn(ATenOp):
 class Polyhedral(ATenOp):
     pass
 
-def Var() -> None:
-    pass
-
 # TODO: Schedule --> Runtime
 # e.g.:
 # a = T.Var("A[m n]", float32)
