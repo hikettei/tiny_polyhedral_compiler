@@ -138,8 +138,10 @@ class TensorOps():
     def lower(self, args: tuple[ATenOp, ...]) -> ATenOp:
         out = replace(self, args=args) # type: ignore
         assert out.T is not None # type: ignore
-        return Aref.from_tensor(out) if out.T.ndim > 0 else out # type: ignore
-# TODO:
+        tmp = Memory.defglobal(out.T.axes, out.T.dtype, level="global", tmp=True)
+        # TODO: How to detect the uop is lowered?
+        # ==> Add flag
+        return LexFence.sync(tmp, Store.new(Load.from_tensor(tmp), out))
 # UnaryOps verifier: check dtypes/shapes of arguments
 class UnaryOps(TensorOps):
     # ops whose first argument is returned dtype
@@ -280,22 +282,12 @@ class Where(TernaryOps, ATenOp):
         assert args[1].T is not None
         return args[1].T
 
-### Allocation
 @dataclass(frozen=True)
 class Const(ViewOps, ATenOp):
     value: Union[int, float, str, bool] = 0.0
     @staticmethod
     def new(value: Union[int, float, str, bool], dtype: DType) -> Const:
         return Const(args=(), value=value, T=ATenOpType(axes=(), dtype=dtype))
-
-@dataclass(frozen=True)
-class Allocate(ViewOps, ATenOp):
-    """
-    Allocate(S1, S2, S3, ...)
-    """
-    @staticmethod
-    def new(shape: tuple[Any, ...], dtype: DType) -> Allocate:
-        return Allocate((), T=ATenOpType.from_shape(shape, dtype))
 
 @dataclass(frozen=True)
 class View(ViewOps, ATenOp):
@@ -330,14 +322,16 @@ class View(ViewOps, ATenOp):
             dtype=tensor.T.dtype,
             offset=tensor.T.offset,
         ))
+    # TODO
+    # def contiguous
 @dataclass(frozen=True)
 class Reduce(ViewOps, ATenOp):
     """
     OUT = Reduce(A, B, op=BinaryOps)
     """
     op: type[BinaryOps] = Add
-## == JIT =====================================================================
-### Array Accessing
+## == ScheduleOps ============================================================
+### Array access graph constrainted via only affine functions, sorted by lex order (for symbolic shape)
 @dataclass(frozen=True)
 class Range(ATenOp):
     """
@@ -350,7 +344,7 @@ class Range(ATenOp):
         assert args[0].T.ndim == 0, "Range: SIZE should be given as a scalar"
         assert args[0].T.dtype == index, "Range: SIZE should be type of index"
         return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
-    
+
 @dataclass(frozen=True)
 class Aff(ATenOp):
     """
@@ -366,84 +360,63 @@ class Aff(ATenOp):
         assert isinstance(args[1], Range), f"Aff: The second argument should be a Range, getting {args[1].__class__}"
         assert isinstance(args[3], Const), f"Aff: The fourth argument should be a constant, getting {args[3].__class__}"
         return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
-
-    def index(self) -> Index:
-        return Index((self.args[0], Mul((self.args[0], Add((Mul((self.args[1], self.args[3])), self.args[2])))),))
-
+    # def index(self) -> Index:
+    #     return Index((self.args[0], Mul((self.args[0], Add((Mul((self.args[1], self.args[3])), self.args[2])))),))
 @dataclass(frozen=True)
-class Aref(ATenOp):
+class Load(ATenOp):
     """
-    X = Aref(Array, Aff1, Aff2, ...)
+    X = Load(Memory | LexFence, Aff1, Aff2, ...)
     Access the (Aff1.index() + Aff2.index() + ...)th element of Array. The dependency is trackable by Polyhedral Compiler.
     """
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
-        assert len(args) >= 2, "Aref: the number of argument should be larger than two"
-        assert args[0].T is not None and args[0].T.ndim > 0, f"Aref: the first argument should be array, getting scalar {args[0].__class__}"
-        assert all([isinstance(arg, Aff) for arg in args[1:]]), "Aref: the index should be specified by the list of Aff."
+        assert len(args) >= 2, "Load: the number of argument should be larger than two"
+        assert isinstance(args[0], Aff) or isinstance(args[0], LexFence), "Load: Can only load element from Memory or Array."
+        assert args[0].T is not None and args[0].T.ndim > 0, f"Load: the first argument should be array, getting scalar {args[0].__class__}"
+        assert all([isinstance(arg, Aff) for arg in args[1:]]), "Load: the index should be specified by the list of Aff."
         return ATenOpType(axes=tuple(), dtype=args[0].T.dtype, offset=_const(0, index))
-    
+
     @staticmethod
-    def from_tensor(tensor: ATenOp) -> Aref:
+    def from_tensor(tensor: ATenOp) -> Load:
         assert tensor.T is not None
-        return Aref((tensor,) + tuple([axis.aff() for axis in tensor.T.axes]))
+        return Load((tensor,) + tuple([axis.aff() for axis in tensor.T.axes]))
+### Scheduling Graph
+@dataclass(frozen=True)
+class Memory(ViewOps, ATenOp):
+    """
+    Memory(ATenOp, level="global or local")
+    """
+    level: str = "global"
+    tmp: bool = False
+    @staticmethod
+    def defglobal(shape: tuple[Any, ...], dtype: DType, tmp: bool=False) -> Memory:
+        return Memory((), T=ATenOpType.from_shape(shape, dtype), level="global", tmp=tmp)
+
+    @staticmethod
+    def deflocal(shape: tuple[Any, ...], dtype: DType) -> Memory:
+        return Memory((), T=ATenOpType.from_shape(shape, dtype), level="local")
 
 @dataclass(frozen=True)
-class Index(ATenOp):
+class LexFence(ViewOps, ATenOp):
     """
-    X = Aref(Array, Index)
-    Access the indexth element of array. The dependency is NOT trackable by Polyhedral Compiler.
+    ```
+    LexFence(Memory, Store) -> Tensor(Shaped)
+    ```
+    Wait until all schedule in store is executed.
     """
-    pass
+    @staticmethod
+    def sync(memory: Memory, store: Store):
+        assert memory.T is not None
+        return LexFence((memory, store), T=ATenOpType.from_shape(tuple([s.size for s in memory.T.axes]), memory.T.dtype))
 
 @dataclass(frozen=True)
 class Store(ATenOp):
-    pass
-## ControlFlow
-@dataclass(frozen=True)
-class Loop(ATenOp):
-    pass
+    @staticmethod
+    def new(dst: Memory | LexFence, op: ATenOp):
+        assert dst.T is not None
+        return Store((dst, op), T=ATenOpType.from_shape(tuple([]), dst.T.axes))
 
-@dataclass(frozen=True)
-class When(ATenOp):
-    pass
-
-@dataclass(frozen=True)
-class Progn(ATenOp):
-    pass
-## == ScheduleOps ============================================================
-
-## Scheduling Language
-@dataclass(frozen=True)
-class Domain(ATenOp):
-    """"
-    dom = Domain(size1, size2, size3, ...)
-    dom.x is the range of [0, size1), dom.y is the range of [0, size2), ...
-    """
-    @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
-        assert all([arg.T is not None and arg.T.ndim == 0 and arg.T.dtype == index for arg in args]), "Domain is specified by the list of index ops."
-        return ATenOpType(
-            axes=tuple([ATenAxis(size=_const(len(args)), stride=_const(1), offset=_const(0), incf=_const(1))]),
-            dtype=index,
-            offset=_const(0, index)
-        )
-
-    
-## == New Schedule Ops ==============
-@dataclass(frozen=True)
-class Memory():
-    lvl: int = 0 # GLOBAL, LOCAL, etc
-
-@dataclass(frozen=True)
-class Load():
-    pass
-
-# Note: ALU
-@dataclass(frozen=True)
-class Store():
-    pass
-
+# TODO: END or SINK after last STORE
 # - TRANSFER = STORE(Memory(LOCAL), LOAD(Memory(GLOBAL), IDX))
 # - Can have a polyhedron?
 # - Can express loop fusion?
@@ -453,14 +426,9 @@ class Store():
 # - Advanced Symbolic Graph Processing System
 # STORE(AREF(X, IDX(ijk)), AREF(X(IDX(ij))))
 # ↑ Can express reduce, softmax, and so on finally
-
-def transform_op(op: ATenOp):
-    domain = Domain(tuple[arg.size for arg in args.T.axes])
-    # S[i, j] : 0 <= i <= 100 and 0 <= j <= 1000
-    for arg in args.T.axes:
-        domain = Band(tuple([arg]))
-        # S[i, j] -> i
-        # S[i, j] -> j
+# Interop w/ Symbolic+Polyhedral!
+# Real time lowering
+# With the help of Polyhedral Compiler
 
 # TODO: Schedule --> Runtime
 # e.g.:
