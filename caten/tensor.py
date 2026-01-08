@@ -201,21 +201,24 @@ class ATen:
     def log2(self) -> Tensor: return self.forward(ir.Log2, (self.op,))
     def sqrt(self) -> Tensor: return self.forward(ir.Sqrt, (self.op,))
 
-    def sum(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False) -> Tensor:
+    def reduce(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False, op: Callable = ir.Add) -> Tensor:
+        # TODO: initial elements
         assert self.op.T is not None
         axes = tuple(range(self.ndim)) if axis is None else (tuple(axis) if isinstance(axis, (tuple, list)) else (axis,))
         axes = tuple(self._resolve_dim(x) for x in axes)
-        new_axes = []
+        reduce_axes, out_shape = [], []
         for i in range(self.ndim):
             if i in axes:
-                if keepdim:
-                    new_axes.append(ir.ATenAxis(size=ir.Const.new(1, index), stride=ir.Const.new(0, index), offset=ir.Const.new(0, index), incf=ir.Const.new(1, index)))
+                reduce_axes.append(1)
             else:
-                new_axes.append(self.op.T.axes[i])
-        if not keepdim:
-            new_axes = [self.op.T.axes[i] for i in range(self.ndim) if i not in axes]
-        T = ir.ATenOpType(axes=tuple(new_axes), dtype=self.dtype, offset=self.op.T.offset)
-        return self.forward(ir.Reduce, (self.op,), T=T)
+                reduce_axes.append(self.op.T.axes[i].size)
+                out_shape.append(self.op.T.axes[i].size)
+        out = ir.Memory.defglobal(reduce_axes, dtype=self.op.T.dtype, tmp=True)
+        out = ir.View.expand(out, tuple([arg.size for arg in self.op.T.axes]))
+        return self.forward(ir.Reduce, (out, self.op), bop=op, axis=axes, keepdim=keepdim)
+        
+    def sum(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False) -> Tensor:
+        return self.reduce(axis=axis, keepdim=keepdim, op=ir.Add)
 
     def matmul(self, other: ATen|TOperand) -> Tensor:
         x: ATen = self

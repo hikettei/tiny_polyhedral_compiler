@@ -17,7 +17,7 @@ class ATenOpMetaclass(type):
     def _freeze(x: Any) -> Any:
         if isinstance(x, ATenOp): return x
         if dataclasses.is_dataclass(x):
-            return (type(x),) + tuple((f.name, ATenOpMetaclass._freeze(getattr(x, f.name))) for f in dataclasses.fields(x))
+            return (type(x),) + tuple((f.name, ATenOpMetaclass._freeze(getattr(x, f.name))) for f in dataclasses.fields(x) if f.name not in ["args"])
         if isinstance(x, (list, tuple)):
             return tuple(ATenOpMetaclass._freeze(i) for i in x)
         if isinstance(x, dict):
@@ -138,9 +138,9 @@ class TensorOps():
         new_args = []
         is_domain = False
         for arg in args:
-            if isinstance(arg, Memory) or isinstance(arg, LexFence):
+            if arg.T.ndim > 0:
                 is_domain = True
-                new_args.append(arg.domain())
+                new_args.append(Load.from_tensor(arg))
             else:
                 new_args.append(arg)
         out = replace(self, args=tuple(new_args))
@@ -332,14 +332,35 @@ class View(ViewOps, ATenOp):
             dtype=tensor.T.dtype,
             offset=tensor.T.offset,
         ))
-    # TODO
-    # def contiguous
+    
+    def lower(self, args: tuple[ATenOp, ...]):
+        tmp = Memory.defglobal([arg.size for arg in self.T.axes], self.T.dtype, tmp=True)
+        return LexFence.sync(tmp, Store.new(Load.from_tensor(tmp), Load.from_tensor(args[0], T=self.T)))
+
 @dataclass(frozen=True)
-class Reduce(ViewOps, ATenOp):
+class Reduce(ATenOp):
     """
     OUT = Reduce(A, B, op=BinaryOps)
     """
-    op: type[BinaryOps] = Add
+    bop: type[BinaryOps] = Add
+    axis: tuple[int, ...] = ()
+    keepdim: bool = False
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        tensor = args[0]
+        assert len(args) == 2
+        assert tensor.T is not None
+        new_axes = []
+        for dim, i in enumerate(tensor.T.axes):
+            if dim in kwargs["axis"]:
+                if kwargs["keepdim"]: new_axes.append(ATenAxis(size=_const(1, index), stride=_const(1, index), offset=_const(0, index), incf=_const(0, index)))
+            else:
+                new_axes.append(i)
+        return ATenOpType(
+            axes=tuple(new_axes),
+            dtype=tensor.T.dtype,
+            offset=tensor.T.offset,
+        )
 ## == ScheduleOps ============================================================
 ### Array access graph constrainted via only affine functions, sorted by lex order (for symbolic shape)
 @dataclass(frozen=True)
@@ -387,10 +408,11 @@ class Load(ATenOp):
         return ATenOpType(axes=tuple(), dtype=args[0].T.dtype, offset=_const(0, index))
 
     @staticmethod
-    def from_tensor(tensor: ATenOp) -> Load:
-        assert tensor.T is not None
-        if tensor.T.ndim == 0: return tensor
-        return Load((tensor,) + tuple([axis.aff() for axis in tensor.T.axes]))
+    def from_tensor(tensor: ATenOp, T: Optional[ATenOpType] = None) -> Load:
+        dtype = T or tensor.T
+        assert dtype is not None
+        if dtype.ndim == 0: return tensor
+        return Load((tensor,) + tuple([axis.aff() for axis in dtype.axes]))
 ### Scheduling Graph
 @dataclass(frozen=True)
 class Memory(ViewOps, ATenOp):
@@ -407,22 +429,18 @@ class Memory(ViewOps, ATenOp):
     def deflocal(shape: tuple[Any, ...], dtype: DType) -> Memory:
         return Memory((), T=ATenOpType.from_shape(shape, dtype), level="local", tmp=True)
 
-    def domain(self) -> Load: return Load.from_tensor(self)
-
 @dataclass(frozen=True)
 class LexFence(ViewOps, ATenOp):
     """
     ```
-    LexFence(Memory, Store) -> Tensor(Shaped)
+    LexFence(Memory, Store, range1, range2, ...) -> Tensor(Shaped)
     ```
-    Wait until all schedule in store is executed.
+    Wait until all range reaches the end.
     """
     @staticmethod
     def sync(memory: Memory, store: Store):
         assert memory.T is not None
         return LexFence((memory, store), T=ATenOpType.from_shape(tuple([s.size for s in memory.T.axes]), memory.T.dtype))
-
-    def domain(self) -> Load: return Load.from_tensor(self)
 
 @dataclass(frozen=True)
 class Store(ATenOp):
@@ -451,10 +469,14 @@ class Store(ATenOp):
 # TODO: Schedule --> Runtime
 # TODO: class View
 # [TODO]
-# - Where is Fuse
-# - Computation Order in total?
-# - View Semantic
-# - Reduce Semantic
+# 1. Fence
+# 2. View
+# - Priority:
+#  - Semanticを強固にする，View/Reduceの取り扱い
+#  - Where is Fuse
+#  - 基本的には，LexFenceがある地点でKernelを分割するイメージ
+#  - LexFenceに対して，Reshape (= Tile) が可能であるかどうかが知りたい
+#  - LexFebce.syncした時点でRaW/WaW/WaRを解析してもいい
 # e.g.:
 # a = T.Var("A[m n]", float32)
 # P.stmt("...")[a]
