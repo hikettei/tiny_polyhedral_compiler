@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Dict, Union
 
 from .dtype import DType, index
-
+import caten.isl as I
 
 class ATenOpMetaclass(type):
     cache: Dict[tuple, weakref.ReferenceType[ATenOp]] = {}
@@ -77,7 +77,12 @@ class ATenOp(metaclass=ATenOpMetaclass):
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         raise NotImplementedError(f"verify is not implemented for {cls.__name__}")
-        
+
+    def render_isl(self) -> str:
+        from caten.runtime.cpu import CPUTensor
+        # TODO: ISLRenderer
+        return CPUTensor.render(self)
+
     def simplify(self) -> ATenOp:
         from caten.simplifier import simplifier
         return simplifier.simplify(self)
@@ -396,11 +401,8 @@ class Aff(ATenOp):
         assert isinstance(args[1], Range), f"Aff: The second argument should be a Range, getting {args[1].__class__}"
         assert isinstance(args[3], Const), f"Aff: The fourth argument should be a constant, getting {args[3].__class__}"
         return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
-    def as_aff_str(self) -> str:
-        # [TODO] Use renderer
-        return f"{self.args[3]}*gid{self.args[1].dim}+{self.args[1]}"
-    # def index(self) -> Index:
-    #     return Index((self.args[0], Mul((self.args[0], Add((Mul((self.args[1], self.args[3])), self.args[2])))),))
+    def as_aff_str(self) -> str: return self.render_isl()
+
 @dataclass(frozen=True)
 class Load(ATenOp):
     """
@@ -424,8 +426,9 @@ class Load(ATenOp):
 
     def as_union_map_str(self):
         # [TODO] How to write strides
+        # [TODO] Symbolics
         doms = ", ".join([f"gid{aff.args[1].dim}" for aff in self.args[1:]])
-        return "[] -> { S[" + doms + "] -> [" + ", ".join([arg.as_aff_str() for arg in self.args[1:]]) + "]}"
+        return f"S[{doms}] -> [" + "+".join([arg.as_aff_str() for arg in self.args[1:]]) + "]"
 ### Scheduling Graph
 @dataclass(frozen=True)
 class Memory(ViewOps, ATenOp):
@@ -474,13 +477,18 @@ class EndRange(ViewOps, ATenOp):
             for arg in item.args: _explore(arg, write=write)
         _explore(store.args[0], write=True)
         _explore(store.args[1], write=False)
-        print(reads)
-        print(writes)
+        reads_union_map = "{ " + "; ".join(reads) + " }"
+        writes_union_map = "{ " + "; ".join(writes) + " }"
         assert sorted(tuple(dim2range.keys())) == list(range(0, len(dim2range.keys())))
-        endrange = EndRange((memory, store), T=ATenOpType.from_shape(tuple([s.size for s in memory.T.axes]), memory.T.dtype), dims=tuple(sorted(tuple(dim2range.keys()))))
+        endrange = EndRange(
+            (memory, store),
+            T=ATenOpType.from_shape(tuple([s.size for s in memory.T.axes]), memory.T.dtype),
+            dims=tuple(sorted(tuple(dim2range.keys()))),
+            reads=reads_union_map,
+            writes=writes_union_map,
+        )
         parents = endrange.get_parent_groups()
-        for p in parents:
-            endrange = endrange.fuse(p)
+        for p in parents: endrange = endrange.fuse(p)
         # If fused, return fused endrange instead of endrange
         # EndRange can have multiple arrays?
         return endrange
@@ -498,11 +506,19 @@ class EndRange(ViewOps, ATenOp):
         return parents
 
     def fuse(self, other: EndRange):
-        r, w = self.reads, other.writes
-        # union(r, w) compute dependencies using ISL
+        # merge two shape trackers
+        print(self.reads)
+        r, w = I.UnionMap(self.reads), I.UnionMap(other.writes)
+        d1 = w.apply_range(r.reverse())
+        d2 = r.apply_range(w.reverse())
+        print("+ACCESS_REL+")
+        print(r)
+        print(w)
+        print(d1)
+        print(d2)
         return self
-    
-    def reshape(self): pass
+
+    def preimage(self): pass
     def compute_at(self, item: ATenOp): pass
 
 @dataclass(frozen=True)
