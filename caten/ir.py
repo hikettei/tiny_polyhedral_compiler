@@ -140,7 +140,7 @@ class TensorOps():
                 new_args.append(arg)
         out = replace(self, args=tuple(new_args))
         assert out.T is not None
-        tmp = Memory.defglobal(self.T.axes, self.T.dtype, tmp=True)
+        tmp = Memory.defglobal([arg.size for arg in self.T.axes], self.T.dtype, tmp=True)
         return LexFence.sync(tmp, Store.new(Load.from_tensor(tmp), out))
 # UnaryOps verifier: check dtypes/shapes of arguments
 class UnaryOps(TensorOps):
@@ -286,8 +286,12 @@ class Where(TernaryOps, ATenOp):
 class Const(ViewOps, ATenOp):
     value: Union[int, float, str, bool] = 0.0
     @staticmethod
-    def new(value: Union[int, float, str, bool], dtype: DType) -> Const:
-        return Const(args=(), value=value, T=ATenOpType(axes=(), dtype=dtype))
+    def new(value: Union[int, float, str, bool, ATenOp], dtype: DType) -> Const:
+        assert isinstance(value, (int, float, str, bool, ATenOp)), f"{value} should be int/float/str/bool"
+        if isinstance(value, ATenOp):
+            return value
+        else:
+            return Const(args=(), value=value, T=ATenOpType(axes=(), dtype=dtype))
 
 @dataclass(frozen=True)
 class View(ViewOps, ATenOp):
@@ -418,7 +422,7 @@ class Store(ATenOp):
     @staticmethod
     def new(dst: ATenOp, op: ATenOp):
         assert dst.T is not None
-        return Store((dst, op), T=ATenOpType.from_shape(tuple([0]), dst.T.dtype))
+        return Store((dst, op), T=ATenOpType(axes=(), dtype=dst.T.dtype))
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         return cls.T
