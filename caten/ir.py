@@ -396,6 +396,9 @@ class Aff(ATenOp):
         assert isinstance(args[1], Range), f"Aff: The second argument should be a Range, getting {args[1].__class__}"
         assert isinstance(args[3], Const), f"Aff: The fourth argument should be a constant, getting {args[3].__class__}"
         return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
+    def as_aff_str(self) -> str:
+        # [TODO] Use renderer
+        return f"{self.args[3]}*gid{self.args[1].dim}+{self.args[1]}"
     # def index(self) -> Index:
     #     return Index((self.args[0], Mul((self.args[0], Add((Mul((self.args[1], self.args[3])), self.args[2])))),))
 @dataclass(frozen=True)
@@ -418,6 +421,11 @@ class Load(ATenOp):
         assert dtype is not None
         if dtype.ndim == 0: return tensor
         return Load((tensor,) + tuple([axis.aff(dim) for dim, axis in enumerate(dtype.axes)]))
+
+    def as_union_map_str(self):
+        # [TODO] How to write strides
+        doms = ", ".join([f"gid{aff.args[1].dim}" for aff in self.args[1:]])
+        return "[] -> { S[" + doms + "] -> [" + ", ".join([arg.as_aff_str() for arg in self.args[1:]]) + "]}"
 ### Scheduling Graph
 @dataclass(frozen=True)
 class Memory(ViewOps, ATenOp):
@@ -446,10 +454,12 @@ class EndRange(ViewOps, ATenOp):
     reads: str = ""
     writes: str = "" # or dependencies dumped as string?
     @staticmethod
-    def sync(memory: Memory, store: Store, axis: tuple[int, ...]=()):
+    def sync(memory: Memory, store: Store, axis: tuple[int, ...]=()): # rename: sync -> barrier?
+        # [TODO] Softmax
         assert memory.T is not None
         seen, dim2range = {}, {}
-        def _explore(item: ATenOp):
+        reads, writes = [], []
+        def _explore(item: ATenOp, write=False):
             if item in seen: return
             seen[item] = True
             if isinstance(item, Range):
@@ -457,15 +467,22 @@ class EndRange(ViewOps, ATenOp):
                     assert ATenOp.eql((sz1:=dim2range[item.dim].args[0]), (sz2:=item.args[0])), f"Cannot create schedule: {sz1} vs {sz2}"
                 dim2range[item.dim] = item
                 return
-            if isinstance(item, EndRange):
-                return
-            for arg in item.args: _explore(arg)
-        _explore(store)
+            if isinstance(item, EndRange): return
+            if isinstance(item, Load):
+                if write: writes.append(item.as_union_map_str())
+                else: reads.append(item.as_union_map_str())
+            for arg in item.args: _explore(arg, write=write)
+        _explore(store.args[0], write=True)
+        _explore(store.args[1], write=False)
+        print(reads)
+        print(writes)
         assert sorted(tuple(dim2range.keys())) == list(range(0, len(dim2range.keys())))
         endrange = EndRange((memory, store), T=ATenOpType.from_shape(tuple([s.size for s in memory.T.axes]), memory.T.dtype), dims=tuple(sorted(tuple(dim2range.keys()))))
         parents = endrange.get_parent_groups()
         for p in parents:
             endrange = endrange.fuse(p)
+        # If fused, return fused endrange instead of endrange
+        # EndRange can have multiple arrays?
         return endrange
         
     def get_parent_groups(self):
@@ -481,25 +498,12 @@ class EndRange(ViewOps, ATenOp):
         return parents
 
     def fuse(self, other: EndRange):
-        self.reads, other.writes
-
+        r, w = self.reads, other.writes
+        # union(r, w) compute dependencies using ISL
         return self
     
     def reshape(self): pass
-
-    def scop(self): # or verify
-        writes = []
-        loads = []
-        def _explore(item: ATenOp):
-            if isinstance(item, (EndRange, Memory)): return
-            if isinstance(item, Store):
-                writes.append(item.args[0])
-            
-            for arg in item.args: _explore(arg)
-        _explore(item[1])
-
-    def compute_at(self, item: ATenOp):
-        pass
+    def compute_at(self, item: ATenOp): pass
 
 @dataclass(frozen=True)
 class Store(ATenOp):
