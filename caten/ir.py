@@ -36,9 +36,8 @@ class ATenAxis():
     stride: ATenOp
     offset: ATenOp
     incf: ATenOp
-    def range(self) -> Range: return Range((self.size, ))
-    def aff(self) -> Aff: return Aff((self.stride, self.range(), self.offset, self.incf))
-    def index(self) -> ATenOp: return self.aff().index()
+    def range(self, dim: int) -> Range: return Range((self.size, ), dim=dim)
+    def aff(self, dim: int) -> Aff: return Aff((self.stride, self.range(dim), self.offset, self.incf))
 
 def _const(val: Any, dtype: DType=index) -> ATenOp:
     if isinstance(val, Const): return val
@@ -140,7 +139,16 @@ class TensorOps():
         if is_domain is False: return out
         assert out.T is not None
         tmp = Memory.defglobal([arg.size for arg in self.T.axes], self.T.dtype, tmp=True)
-        return LexFence.sync(tmp, Store.new(Load.from_tensor(tmp), out))
+        # This is where "Loop Fusion" occurs?
+        # - The Goal here is to create Compute Bound Graph.
+        # - Fusion is doable?
+        # - How to rewrite graph to fuse them?
+        # 1. Use pattern matcher to label all LexFence
+        # 1. Construct dependency graph
+        # 2. analyse access dependencies
+        # 3. tile if needed
+        # 4. fuse if possible
+        return EndRange.sync(tmp, Store.new(Load.from_tensor(tmp), out))
 # UnaryOps verifier: check dtypes/shapes of arguments
 class UnaryOps(TensorOps):
     # ops whose first argument is returned dtype
@@ -328,7 +336,7 @@ class View(ViewOps, ATenOp):
     
     def lower(self):
         tmp = Memory.defglobal([arg.size for arg in self.T.axes], self.T.dtype, tmp=True)
-        return LexFence.sync(tmp, Store.new(Load.from_tensor(tmp), Load.from_tensor(self.args[0], T=self.T)))
+        return EndRange.sync(tmp, Store.new(Load.from_tensor(tmp), Load.from_tensor(self.args[0], T=self.T)))
 
 @dataclass(frozen=True)
 class Reduce(ATenOp):
@@ -356,8 +364,8 @@ class Reduce(ATenOp):
         )
     def lower(self) -> ATenOp:
         x, y = self.args[0].lower(), self.args[1].lower()
-        return LexFence.sync(x, Store.new(x, self.bop((x, y)))) # todo: wait only reduced dims
-## == ScheduleOps ============================================================
+        return EndRange.sync(x, Store.new(x, self.bop((x, y)))) # todo: wait only reduced dims
+## == EndRangeOps ============================================================
 ### Array access graph constrainted via only affine functions, sorted by lex order (for symbolic shape)
 @dataclass(frozen=True)
 class Range(ATenOp):
@@ -365,6 +373,7 @@ class Range(ATenOp):
     OUT = Range(SIZE)
     OUT is the range of [0, SIZE)
     """
+    dim: int = 0
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) == 1 and args[0].T is not None, "Range is defined as: Range(SIZE)"
@@ -392,13 +401,13 @@ class Aff(ATenOp):
 @dataclass(frozen=True)
 class Load(ATenOp):
     """
-    X = Load(Memory | LexFence, Aff1, Aff2, ...)
+    X = Load(Memory | EndRange, Aff1, Aff2, ...)
     Access the (Aff1.index() + Aff2.index() + ...)th element of Array. The dependency is trackable by Polyhedral Compiler.
     """
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) >= 2, "Load: the number of argument should be larger than two"
-        assert isinstance(args[0], Memory) or isinstance(args[0], LexFence), "Load: Can only load element from Memory or Array."
+        assert isinstance(args[0], Memory) or isinstance(args[0], EndRange), "Load: Can only load element from Memory or Array."
         assert args[0].T is not None and args[0].T.ndim > 0, f"Load: the first argument should be array, getting scalar {args[0].__class__}"
         assert all([isinstance(arg, Aff) for arg in args[1:]]), "Load: the index should be specified by the list of Aff."
         return ATenOpType(axes=tuple(), dtype=args[0].T.dtype, offset=_const(0, index))
@@ -408,7 +417,7 @@ class Load(ATenOp):
         dtype = T or tensor.T
         assert dtype is not None
         if dtype.ndim == 0: return tensor
-        return Load((tensor,) + tuple([axis.aff() for axis in dtype.axes]))
+        return Load((tensor,) + tuple([axis.aff(dim) for dim, axis in enumerate(dtype.axes)]))
 ### Scheduling Graph
 @dataclass(frozen=True)
 class Memory(ViewOps, ATenOp):
@@ -426,17 +435,44 @@ class Memory(ViewOps, ATenOp):
         return Memory((), T=ATenOpType.from_shape(shape, dtype), level="local", tmp=True)
 
 @dataclass(frozen=True)
-class LexFence(ViewOps, ATenOp):
+class EndRange(ViewOps, ATenOp):
     """
     ```
-    LexFence(Memory, Store, range1, range2, ...) -> Tensor(Shaped)
+    EndRange(Memory, Store, range1, range2, ...) -> Tensor(Shaped)
     ```
-    Wait until all range reaches the end.
+    Proceeds to the next when range1 == max(range1) and range2 == max(range2) and ...
     """
+    # or rename to endrange?
     @staticmethod
-    def sync(memory: Memory, store: Store):
+    def sync(memory: Memory, store: Store, axis: tuple[int, ...]=()):
         assert memory.T is not None
-        return LexFence((memory, store), T=ATenOpType.from_shape(tuple([s.size for s in memory.T.axes]), memory.T.dtype))
+        dim2range = {}
+        def _explore(item: ATenOp):
+            if isinstance(item, Range):
+                if item.dim in dim2range:
+                    assert ATenOp.eql((sz1:=dim2range[item.dim].args[0]), (sz2:=item.args[0])), f"Cannot create schedule: {sz1} vs {sz2}"
+                dim2range[item.dim] = item
+                return
+            if isinstance(item, EndRange):
+                return
+            for arg in item.args: _explore(arg)
+        _explore(store)
+        assert sorted(tuple(dim2range.keys())) == list(range(0, len(dim2range.keys())))
+        return EndRange((memory, store), T=ATenOpType.from_shape(tuple([s.size for s in memory.T.axes]), memory.T.dtype))
+
+    def group(self): # or verify
+        writes = []
+        loads = []
+        def _explore(item: ATenOp):
+            if isinstance(item, (EndRange, Memory)): return
+            if isinstance(item, Store):
+                writes.append(item.args[0])
+            
+            for arg in item.args: _explore(arg)
+        _explore(item[1])
+
+    def compute_at(self, item: ATenOp):
+        pass
 
 @dataclass(frozen=True)
 class Store(ATenOp):
@@ -462,7 +498,7 @@ class Store(ATenOp):
 # With the help of Polyhedral Compiler
 # Refactor: Const val is not ATenOp
 # TODO: Update Viz
-# TODO: Schedule --> Runtime
+# TODO: EndRange --> Runtime
 # TODO: class View
 # [TODO]
 # 1. Fence
@@ -470,8 +506,8 @@ class Store(ATenOp):
 # - Priority:
 #  - Semanticを強固にする，View/Reduceの取り扱い
 #  - Where is Fuse
-#  - 基本的には，LexFenceがある地点でKernelを分割するイメージ
-#  - LexFenceに対して，Reshape (= Tile) が可能であるかどうかが知りたい
+#  - 基本的には，EndRangeがある地点でKernelを分割するイメージ
+#  - EndRangeに対して，Reshape (= Tile) が可能であるかどうかが知りたい
 #  - LexFebce.syncした時点でRaW/WaW/WaRを解析してもいい
 #  - LeafだけをTileして，あとはType Inferenceで自動で再構築したい。
 # e.g.:
