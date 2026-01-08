@@ -136,12 +136,15 @@ class ATenOp(metaclass=ATenOpMetaclass):
 class TensorOps():
     def lower(self, args: tuple[ATenOp, ...]) -> ATenOp:
         new_args = []
+        is_domain = False
         for arg in args:
             if isinstance(arg, Memory) or isinstance(arg, LexFence):
+                is_domain = True
                 new_args.append(arg.domain())
             else:
                 new_args.append(arg)
         out = replace(self, args=tuple(new_args))
+        if is_domain is False: return out
         assert out.T is not None
         tmp = Memory.defglobal([arg.size for arg in self.T.axes], self.T.dtype, tmp=True)
         return LexFence.sync(tmp, Store.new(Load.from_tensor(tmp), out))
@@ -446,6 +449,12 @@ class Store(ATenOp):
 # Refactor: Const val is not ATenOp
 # TODO: Update Viz
 # TODO: Schedule --> Runtime
+# TODO: class View
+# [TODO]
+# - Where is Fuse
+# - Computation Order in total?
+# - View Semantic
+# - Reduce Semantic
 # e.g.:
 # a = T.Var("A[m n]", float32)
 # P.stmt("...")[a]
