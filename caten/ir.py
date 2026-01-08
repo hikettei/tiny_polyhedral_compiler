@@ -442,12 +442,16 @@ class EndRange(ViewOps, ATenOp):
     ```
     Proceeds to the next when range1 == max(range1) and range2 == max(range2) and ...
     """
-    # or rename to endrange?
+    dims: tuple[int, ...] = ()
+    reads: str = ""
+    writes: str = "" # or dependencies dumped as string?
     @staticmethod
     def sync(memory: Memory, store: Store, axis: tuple[int, ...]=()):
         assert memory.T is not None
-        dim2range = {}
+        seen, dim2range = {}, {}
         def _explore(item: ATenOp):
+            if item in seen: return
+            seen[item] = True
             if isinstance(item, Range):
                 if item.dim in dim2range:
                     assert ATenOp.eql((sz1:=dim2range[item.dim].args[0]), (sz2:=item.args[0])), f"Cannot create schedule: {sz1} vs {sz2}"
@@ -458,9 +462,32 @@ class EndRange(ViewOps, ATenOp):
             for arg in item.args: _explore(arg)
         _explore(store)
         assert sorted(tuple(dim2range.keys())) == list(range(0, len(dim2range.keys())))
-        return EndRange((memory, store), T=ATenOpType.from_shape(tuple([s.size for s in memory.T.axes]), memory.T.dtype))
+        endrange = EndRange((memory, store), T=ATenOpType.from_shape(tuple([s.size for s in memory.T.axes]), memory.T.dtype), dims=tuple(sorted(tuple(dim2range.keys()))))
+        parents = endrange.get_parent_groups()
+        for p in parents:
+            endrange = endrange.fuse(p)
+        return endrange
+        
+    def get_parent_groups(self):
+        seen, parents = {}, []
+        def _explore(item: ATenOp):
+            if item in seen: return
+            seen[item] = True
+            if isinstance(item, EndRange):
+                parents.append(item)
+                return
+            for arg in item.args: _explore(arg)
+        for arg in self.args: _explore(arg)
+        return parents
 
-    def group(self): # or verify
+    def fuse(self, other: EndRange):
+        self.reads, other.writes
+
+        return self
+    
+    def reshape(self): pass
+
+    def scop(self): # or verify
         writes = []
         loads = []
         def _explore(item: ATenOp):
