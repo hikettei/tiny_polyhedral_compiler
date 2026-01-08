@@ -82,11 +82,6 @@ class ATenOp(metaclass=ATenOpMetaclass):
     def simplify(self) -> ATenOp:
         from caten.simplifier import simplifier
         return simplifier.simplify(self)
-
-    def schedule(self):
-        def _explore(item: ATenOp):
-            return item.lower(tuple([_explore(arg) for arg in item.args]))
-        return _explore(self)
     
     def viz(self) -> str:
         from caten.viz import render
@@ -130,17 +125,15 @@ class ATenOp(metaclass=ATenOpMetaclass):
             if not ATenOp.eql(ai, bi): return False
         return True
     
-    def lower(self, args: tuple[ATenOp, ...]) -> ATenOp:
-        return replace(self, args=args)
+    def lower(self) -> ATenOp: return self
 ## == Tensor Graph ============================================================
 class TensorOps():
-    def lower(self, args: tuple[ATenOp, ...]) -> ATenOp:
-        new_args = []
-        is_domain = False
-        for arg in args:
+    def lower(self) -> ATenOp:
+        new_args, is_domain = [], False
+        for arg in self.args:
             if arg.T.ndim > 0:
                 is_domain = True
-                new_args.append(Load.from_tensor(arg))
+                new_args.append(Load.from_tensor(arg.lower()))
             else:
                 new_args.append(arg)
         out = replace(self, args=tuple(new_args))
@@ -333,9 +326,9 @@ class View(ViewOps, ATenOp):
             offset=tensor.T.offset,
         ))
     
-    def lower(self, args: tuple[ATenOp, ...]):
+    def lower(self):
         tmp = Memory.defglobal([arg.size for arg in self.T.axes], self.T.dtype, tmp=True)
-        return LexFence.sync(tmp, Store.new(Load.from_tensor(tmp), Load.from_tensor(args[0], T=self.T)))
+        return LexFence.sync(tmp, Store.new(Load.from_tensor(tmp), Load.from_tensor(self.args[0], T=self.T)))
 
 @dataclass(frozen=True)
 class Reduce(ATenOp):
@@ -361,6 +354,9 @@ class Reduce(ATenOp):
             dtype=tensor.T.dtype,
             offset=tensor.T.offset,
         )
+    def lower(self) -> ATenOp:
+        x, y = self.args[0].lower(), self.args[1].lower()
+        return LexFence.sync(x, Store.new(x, self.bop((x, y)))) # todo: wait only reduced dims
 ## == ScheduleOps ============================================================
 ### Array access graph constrainted via only affine functions, sorted by lex order (for symbolic shape)
 @dataclass(frozen=True)
@@ -477,6 +473,7 @@ class Store(ATenOp):
 #  - 基本的には，LexFenceがある地点でKernelを分割するイメージ
 #  - LexFenceに対して，Reshape (= Tile) が可能であるかどうかが知りたい
 #  - LexFebce.syncした時点でRaW/WaW/WaRを解析してもいい
+#  - LeafだけをTileして，あとはType Inferenceで自動で再構築したい。
 # e.g.:
 # a = T.Var("A[m n]", float32)
 # P.stmt("...")[a]
