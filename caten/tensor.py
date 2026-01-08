@@ -269,10 +269,36 @@ def kernel(get_kernel: bool = False) -> Callable:
 # with C.range(10, 10):
 # with C.when(10, 10)
 # Then, how to fuse?
+# TODO: relocated to ir.py (and rename ir.py -> air(abstraction ir).py?)
+# TODO: with style constructor
+
+# Lowered IR Design 3 Requirements:
+# - Smart polyhedral model integration (can fuse!)
+# - Rangifyみたく，Lowerされた/されてないOpを一緒に計算したい。
+# - TopologicalSortするとTopDownである, ASTもTopDownである？
+# - Reduction Semantic
+# - When(Filter) Semantic
+# TensorOp
+# X2[0..3, 0..3] = sin(X1[0..3, 0..3))
+# i = C.range(3)
+# j = C.range(3)
+# x3[i, j] = cos(x2[i, j])
+# cond = C.when(i < j)
+# 
+# What would be smth like intersection(TensorOp, KernelGraph)
+# TensorOp: DAG, TopDown, every variable has a shape
+# KernelGraph: BottomUp+TopDown,
+# Then, early rangify should be doable!
+# IRの理論をきちんと構築してからコードを書こう
+# Workload:
+# - [ ] Perfect IR for tensor
+#   - [ ] Polyhedral Loop Fusion
 class Range():
+    # ctx: contextlib.contextmanager
+    # __with__ will append ...
     pass
 
-class When():
+class When(): # its root should be always Range!
     pass
 
 class LocalVar():

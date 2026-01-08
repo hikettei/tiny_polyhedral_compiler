@@ -10,7 +10,6 @@ from typing import Any, Dict, Union
 
 from .dtype import DType, index
 
-
 class ATenOpMetaclass(type):
     cache: Dict[tuple, weakref.ReferenceType[ATenOp]] = {}
     @staticmethod
@@ -324,7 +323,7 @@ class View(ViewOps, ATenOp):
         def _expand(old_axis: ATenAxis, new_size: int | float | ATenOp) -> ATenAxis:
             if ATenOp.eql(old_axis.size, new_size): return old_axis
             else:
-                assert ATenOp.eql(old_axis.size, 1), f"The axis to expand should be evaluated to 1, getting {old_axis}" # Fix: old_axis -> old_axis.size
+                assert ATenOp.eql(old_axis.size, 1), f"The axis to expand should be evaluated to 1, getting {old_axis.size}"
                 return ATenAxis(size=_const(new_size), stride=Const.new(0, index), offset=Const.new(0, index), incf=Const.new(1, index))
         return View((tensor,), T=ATenOpType(
             axes=tuple([_expand(old_axis, new_size) for (old_axis, new_size) in zip(tensor.T.axes, shape, strict=True)]),
@@ -413,9 +412,55 @@ class When(ATenOp):
 class Progn(ATenOp):
     pass
 ## == ScheduleOps ============================================================
+
+## Scheduling Language
 @dataclass(frozen=True)
-class Polyhedral(ATenOp):
+class Domain(ATenOp):
+    """"
+    dom = Domain(size1, size2, size3, ...)
+    dom.x is the range of [0, size1), dom.y is the range of [0, size2), ...
+    """
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        assert all([arg.T is not None and arg.T.ndim == 0 and arg.T.dtype == index for arg in args]), "Domain is specified by the list of index ops."
+        return ATenOpType(
+            axes=tuple([ATenAxis(size=_const(len(args)), stride=_const(1), offset=_const(0), incf=_const(1))]),
+            dtype=index,
+            offset=_const(0, index)
+        )
+
+    
+## == New Schedule Ops ==============
+@dataclass(frozen=True)
+class Memory():
+    lvl: int = 0 # GLOBAL, LOCAL, etc
+
+@dataclass(frozen=True)
+class Load():
     pass
+
+# Note: ALU
+@dataclass(frozen=True)
+class Store():
+    pass
+
+# - TRANSFER = STORE(Memory(LOCAL), LOAD(Memory(GLOBAL), IDX))
+# - Can have a polyhedron?
+# - Can express loop fusion?
+# 最終的に何がしたい？効率的にUnionAccessRelからFusionがしたい。
+# - IDXにRangeが繋がってくってイメージ？
+# - Fusion = IDXをReshapeすることで共通のRangeを参照すること？
+# - Advanced Symbolic Graph Processing System
+# STORE(AREF(X, IDX(ijk)), AREF(X(IDX(ij))))
+# ↑ Can express reduce, softmax, and so on finally
+
+def transform_op(op: ATenOp):
+    domain = Domain(tuple[arg.size for arg in args.T.axes])
+    # S[i, j] : 0 <= i <= 100 and 0 <= j <= 1000
+    for arg in args.T.axes:
+        domain = Band(tuple([arg]))
+        # S[i, j] -> i
+        # S[i, j] -> j
 
 # TODO: Schedule --> Runtime
 # e.g.:
