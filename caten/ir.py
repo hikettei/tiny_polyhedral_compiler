@@ -10,6 +10,7 @@ from typing import Any, Dict, Union
 
 from .dtype import DType, index
 
+
 class ATenOpMetaclass(type):
     cache: Dict[tuple, weakref.ReferenceType[ATenOp]] = {}
     @staticmethod
@@ -57,6 +58,8 @@ class ATenOpType():
     def ndim(self) -> int: return len(self.axes)
     @staticmethod
     def from_shape(shape: tuple[Any, ...], dtype: DType) -> ATenOpType:
+        if len(shape) == 0:
+            return ATenOpType(axes=(), dtype=dtype)
         def _mul(a: Any, b: Any) -> Any: return Mul((_const(a), _const(b)))
         strides = tuple(itertools.accumulate(reversed(shape[1:]), _mul, initial=_const(1)))[::-1]
         return ATenOpType(
@@ -383,6 +386,7 @@ class Load(ATenOp):
     @staticmethod
     def from_tensor(tensor: ATenOp) -> Load:
         assert tensor.T is not None
+        if tensor.T.ndim == 0: return tensor
         return Load((tensor,) + tuple([axis.aff() for axis in tensor.T.axes]))
 ### Scheduling Graph
 @dataclass(frozen=True)
@@ -440,6 +444,7 @@ class Store(ATenOp):
 # Real time lowering
 # With the help of Polyhedral Compiler
 # Refactor: Const val is not ATenOp
+# TODO: Update Viz
 # TODO: Schedule --> Runtime
 # e.g.:
 # a = T.Var("A[m n]", float32)
