@@ -42,7 +42,7 @@ class ATenAxis():
 def _const(val: Any, dtype: DType=index) -> ATenOp:
     if isinstance(val, Const): return val
     else: return Const.new(val, dtype)
-            
+
 @dataclass(frozen=True)
 class ATenOpType():
     axes: tuple[ATenAxis, ...]
@@ -67,28 +67,24 @@ class ATenOpType():
 @dataclass(frozen=True)
 class ATenOp(metaclass=ATenOpMetaclass):
     args: tuple[ATenOp, ...]
-    T: Union[ATenOpType, None] = None # this should be provided via T=... option, or inferred via verify method. 
+    T: Union[ATenOpType, None] = None # this should be provided via T=... option, or inferred via verify method.
     @property
     def predecessors(self) -> tuple[ATenOp, ...]:
         return tuple(self.args) + (tuple(*[tuple((axis.size, axis.stride, axis.offset, axis.incf)) for axis in self.T.axes]) + () if self.T is not None else ()) + ((self.T.offset,) if self.T and self.T.offset is not None else ())
     
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
-        raise NotImplementedError("Not implemented")
-
+        raise NotImplementedError(f"verify is not implemented for {cls.__name__}")
+        
     def simplify(self) -> ATenOp:
         from caten.simplifier import simplifier
         return simplifier.simplify(self)
 
-    def schedule(self) -> ATenOp:
-        # top down rewriting of the graph
-        def _explore(item: ATenOp) -> ATenOp:
-            return item.lower(tuple([_explore(s) for s in item.args]))
+    def schedule(self):
+        def _explore(item: ATenOp):
+            return item.lower(tuple([_explore(arg) for arg in item.args]))
         return _explore(self)
     
-    def deepwalk(self) -> None:
-        pass
-
     def viz(self) -> str:
         from caten.viz import render
         return render(self)
@@ -136,11 +132,15 @@ class ATenOp(metaclass=ATenOpMetaclass):
 ## == Tensor Graph ============================================================
 class TensorOps():
     def lower(self, args: tuple[ATenOp, ...]) -> ATenOp:
-        out = replace(self, args=args) # type: ignore
-        assert out.T is not None # type: ignore
-        tmp = Memory.defglobal(out.T.axes, out.T.dtype, level="global", tmp=True)
-        # TODO: How to detect the uop is lowered?
-        # ==> Add flag
+        new_args = []
+        for arg in args:
+            if isinstance(arg, Memory) or isinstance(arg, LexFence):
+                new_args.append(arg.domain())
+            else:
+                new_args.append(arg)
+        out = replace(self, args=tuple(new_args))
+        assert out.T is not None
+        tmp = Memory.defglobal(self.T.axes, self.T.dtype, tmp=True)
         return LexFence.sync(tmp, Store.new(Load.from_tensor(tmp), out))
 # UnaryOps verifier: check dtypes/shapes of arguments
 class UnaryOps(TensorOps):
@@ -371,7 +371,7 @@ class Load(ATenOp):
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) >= 2, "Load: the number of argument should be larger than two"
-        assert isinstance(args[0], Aff) or isinstance(args[0], LexFence), "Load: Can only load element from Memory or Array."
+        assert isinstance(args[0], Memory) or isinstance(args[0], LexFence), "Load: Can only load element from Memory or Array."
         assert args[0].T is not None and args[0].T.ndim > 0, f"Load: the first argument should be array, getting scalar {args[0].__class__}"
         assert all([isinstance(arg, Aff) for arg in args[1:]]), "Load: the index should be specified by the list of Aff."
         return ATenOpType(axes=tuple(), dtype=args[0].T.dtype, offset=_const(0, index))
@@ -394,7 +394,9 @@ class Memory(ViewOps, ATenOp):
 
     @staticmethod
     def deflocal(shape: tuple[Any, ...], dtype: DType) -> Memory:
-        return Memory((), T=ATenOpType.from_shape(shape, dtype), level="local")
+        return Memory((), T=ATenOpType.from_shape(shape, dtype), level="local", tmp=True)
+
+    def domain(self) -> Load: return Load.from_tensor(self)
 
 @dataclass(frozen=True)
 class LexFence(ViewOps, ATenOp):
@@ -409,13 +411,17 @@ class LexFence(ViewOps, ATenOp):
         assert memory.T is not None
         return LexFence((memory, store), T=ATenOpType.from_shape(tuple([s.size for s in memory.T.axes]), memory.T.dtype))
 
+    def domain(self) -> Load: return Load.from_tensor(self)
+
 @dataclass(frozen=True)
 class Store(ATenOp):
     @staticmethod
-    def new(dst: Memory | LexFence, op: ATenOp):
+    def new(dst: ATenOp, op: ATenOp):
         assert dst.T is not None
-        return Store((dst, op), T=ATenOpType.from_shape(tuple([]), dst.T.axes))
-
+        return Store((dst, op), T=ATenOpType.from_shape(tuple([0]), dst.T.dtype))
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        return cls.T
 # TODO: END or SINK after last STORE
 # - TRANSFER = STORE(Memory(LOCAL), LOAD(Memory(GLOBAL), IDX))
 # - Can have a polyhedron?
@@ -429,7 +435,7 @@ class Store(ATenOp):
 # Interop w/ Symbolic+Polyhedral!
 # Real time lowering
 # With the help of Polyhedral Compiler
-
+# Refactor: Const val is not ATenOp
 # TODO: Schedule --> Runtime
 # e.g.:
 # a = T.Var("A[m n]", float32)

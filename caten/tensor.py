@@ -26,8 +26,7 @@ class ATenSpec:
 class ATen:
     op: ir.ATenOp # ATen is just a wrapper for ATenOp
     def __init__(self, *args: Any, op: Union[None, ir.ATenOp]=None, dtype:DType=default_float):
-        self.op = op or ir.Memory.defglobal(tuple(args[0]), dtype)
-
+        self.op = (op or ir.Memory.defglobal(tuple(args[0]), dtype)).schedule()
     @staticmethod
     def register(device_id: str, cls: Any) -> None:
         DEVICE_TO_TENSOR[device_id] = cls

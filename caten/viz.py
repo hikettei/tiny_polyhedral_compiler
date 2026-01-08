@@ -162,11 +162,11 @@ def _strides_str(n: ATenOp) -> str:
 def _node_kind_color(n: ATenOp) -> str:
     if isinstance(n, ir.Const):
         return _Ansi.FG_YELLOW
-    if isinstance(n, ir.Allocate):
+    if isinstance(n, ir.Memory):
         return _Ansi.FG_GREEN
     if isinstance(n, (ir.View, ir.Reduce)):
         return _Ansi.FG_CYAN
-    if isinstance(n, (ir.Aref, ir.Aff, ir.Range, ir.Index)):
+    if isinstance(n, (ir.Load, ir.Aff, ir.Range)):
         return _Ansi.FG_MAGENTA
     # arithmetic default
     return _Ansi.FG_BLUE
