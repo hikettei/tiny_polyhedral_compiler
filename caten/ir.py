@@ -319,6 +319,9 @@ class Const(ViewOps, ATenOp):
 class View(ViewOps, ATenOp):
     """
     View(X, T=T_New)
+    View always materializes data contiguously. Each View operation creates
+    an EndRange that copies data to a new contiguous buffer. Fusion via _fuse
+    can merge consecutive Views into a single kernel.
     """
     # This is the definition of view
     @staticmethod
