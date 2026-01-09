@@ -507,22 +507,24 @@ class Aff(ATenOp):
         assert len(args) == 4, "Aff is defined as: Aff(Stride, Range, Offset, Incx)"
         assert all([arg.T is not None and arg.T.ndim == 0 and arg.T.dtype == index for arg in args]), "Aff: Stride/Range/Offset/Incx should be a scalar typed index"
         assert isinstance(args[1], Range), f"Aff: The second argument should be a Range, getting {args[1].__class__}"
-        assert isinstance(args[3], Const), f"Aff: The fourth argument should be a constant, getting {args[3].__class__}"
+        # incf can be Const or any scalar index expression (e.g., Mul for tiled fusion)
         return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
     def as_aff_str(self) -> str: return self.render_isl()
 
 @dataclass(frozen=True)
 class Load(ATenOp):
     """
-    X = Load(Memory | EndRange, Aff1, Aff2, ...)
-    Access the (Aff1.index() + Aff2.index() + ...)th element of Array.
+    X = Load(Memory | EndRange, idx1, idx2, ...)
+    Access the (idx1 + idx2 + ...)th element of Array.
+    Indices can be Aff nodes or scalar index expressions (for fused reshape).
     """
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) >= 2, "Load: the number of argument should be larger than two"
         assert isinstance(args[0], Memory) or isinstance(args[0], EndRange), "Load: Can only load element from Memory or Array."
         assert args[0].T is not None and args[0].T.ndim > 0, f"Load: the first argument should be array, getting scalar {args[0].__class__}"
-        assert all([isinstance(arg, Aff) for arg in args[1:]]), "Load: the index should be specified by the list of Aff."
+        # Indices can be Aff or any scalar index expression
+        assert all([arg.T is not None and arg.T.ndim == 0 for arg in args[1:]]), "Load: indices should be scalar expressions."
         return ATenOpType(axes=tuple(), dtype=args[0].T.dtype, offset=_const(0, index))
 
     @staticmethod
@@ -780,98 +782,159 @@ class EndRange(ViewOps, ATenOp):
 
     def _fuse(self, producer: "EndRange") -> "EndRange":
         """
-        Fusion via direct inlining or affine dependency analysis.
+        Unified fusion via iteration space morphism.
 
-        Strategy:
-        1. Try simple fusion: if producer dims ⊆ consumer dims, inline directly
-        2. Fall back to affine analysis for complex cases (tiling, etc.)
-
-        Simple fusion handles common patterns:
-        - Element-wise chains: sin(sin(x))
-        - Mul → Reduce: producer and consumer share iteration space
-        - View → anything: fold view into access pattern
+        All fusion cases reduce to: find a mapping from producer dims to consumer dims
+        such that the linear address spaces align. This handles:
+        - Element-wise: identity mapping
+        - Reduce inner: producer dims ⊃ consumer dims, extras reference outer scope
+        - Reshape: same total elements, decompose via div/mod
+        - Permute/broadcast: size-based matching
         """
-        producer_dims = set(producer.dims)
-        consumer_dims = set(self.dims)
+        subst = self._find_subst(producer)
+        if subst is None:
+            return self
+        return self._apply_fusion(producer, subst)
+
+    def _find_subst(self, producer: "EndRange") -> "dict[int, ATenOp] | None":
+        """
+        Find iteration space morphism: producer_dims → consumer_dims.
+
+        Returns dict mapping producer dim → IR expression over consumer Range nodes,
+        or None if fusion is not possible.
+
+        Algorithm:
+        1. Compare producer's OUTPUT shape (not iteration shape) with consumer's iteration
+        2. Handle broadcast (size 1) and reduction (output smaller than iteration)
+        3. Use identity mapping when shapes match
+        4. Use linear decomposition for reshape
+        """
         prod_sizes = {r.dim: r.args[0] for r in producer.ranges if isinstance(r, Range)}
         cons_sizes = {r.dim: r.args[0] for r in self.ranges if isinstance(r, Range)}
 
-        # Case 1: Exact match (producer dims == consumer dims with matching sizes)
-        # Example: sin(sin(x)) where both have same iteration space
-        if producer_dims == consumer_dims:
-            sizes_match = all(
-                ATenOp.eql(prod_sizes.get(d, _const(0)), cons_sizes.get(d, _const(0)))
-                for d in producer_dims
-            )
-            if sizes_match:
-                subst = {d: A.AffExpr.var(f"gid{d}") for d in producer_dims}
-                return self._apply_fusion(producer, subst)
+        # Build dim -> Range mapping for consumer
+        cons_dim_to_range: dict[int, Range] = {}
+        for rng in self.ranges:
+            if isinstance(rng, Range):
+                cons_dim_to_range[rng.dim] = rng
 
-        # Case 2: Consumer dims ⊂ Producer dims (producer iterates more)
-        # Example: Mul[i,j,k] → Reduce inner loop[k]
-        # The extra producer dims become "free" referencing outer scope
-        if consumer_dims < producer_dims:
-            # Check sizes match for shared dims
-            shared_dims = consumer_dims
-            sizes_match = all(
-                ATenOp.eql(prod_sizes.get(d, _const(0)), cons_sizes.get(d, _const(0)))
-                for d in shared_dims
-            )
-            if sizes_match:
-                # Identity mapping for all producer dims (extras reference outer scope)
-                subst = {d: A.AffExpr.var(f"gid{d}") for d in producer_dims}
-                return self._apply_fusion(producer, subst)
-
-        # Case 3: Producer dims ⊂ Consumer dims (producer iterates less)
-        # Example: Transpose[j,k] → Mul/Reduce[i,j,k]
-        # Match producer dims to consumer dims by SIZE
-        if producer_dims < consumer_dims or (producer_dims != consumer_dims and len(producer_dims) <= len(consumer_dims)):
-            # Build size → dim mapping for consumer
-            cons_size_to_dim: dict[int, int] = {}
-            for d, size in cons_sizes.items():
-                if isinstance(size, Const) and isinstance(size.value, int):
-                    cons_size_to_dim[size.value] = d
-
-            # Try to map each producer dim to a consumer dim with same size
-            subst: dict[int, A.AffExpr] = {}
-            mapping_valid = True
-            for prod_dim, prod_size in prod_sizes.items():
-                if isinstance(prod_size, Const) and isinstance(prod_size.value, int):
-                    if prod_size.value in cons_size_to_dim:
-                        cons_dim = cons_size_to_dim[prod_size.value]
-                        subst[prod_dim] = A.AffExpr.var(f"gid{cons_dim}")
-                    else:
-                        mapping_valid = False
-                        break
+        # Get integer sizes (bail on symbolic for now)
+        def get_int_sizes(sizes: dict[int, ATenOp]) -> dict[int, int] | None:
+            result = {}
+            for d, s in sizes.items():
+                if isinstance(s, Const) and isinstance(s.value, int):
+                    result[d] = s.value
                 else:
-                    mapping_valid = False
-                    break
+                    return None
+            return result
 
-            if mapping_valid and len(subst) == len(producer_dims):
-                return self._apply_fusion(producer, subst)
+        prod_int = get_int_sizes(prod_sizes)
+        cons_int = get_int_sizes(cons_sizes)
 
-        # Complex fusion: try affine analysis
-        prod_reads, prod_writes = producer._collect_access_maps()
-        cons_reads, cons_writes = self._collect_access_maps()
+        # Also get producer's OUTPUT shape (may differ from iteration due to reduction)
+        prod_out_sizes: dict[int, int] = {}
+        if producer.output.T and producer.output.T.axes:
+            for i, ax in enumerate(producer.output.T.axes):
+                if isinstance(ax.size, Const) and isinstance(ax.size.value, int):
+                    prod_out_sizes[i] = ax.size.value
 
-        if not prod_writes or not cons_reads:
-            return self
+        if prod_int is None or cons_int is None:
+            return None
 
-        result = A.attempt_fusion(
-            A.UnionMap.from_maps(prod_writes),
-            A.UnionMap.from_maps(prod_reads),
-            A.UnionMap.from_maps(cons_writes),
-            A.UnionMap.from_maps(cons_reads),
-        )
+        producer_dims = set(prod_int.keys())
+        consumer_dims = set(cons_int.keys())
 
-        if not result.success:
-            return self
+        # Check if dims match with broadcast handling (size 1 matches any size)
+        def sizes_compatible(prod_size: int, cons_size: int) -> bool:
+            return prod_size == cons_size or prod_size == 1
 
-        subst = self._extract_substitution(result, producer)
-        if subst is None:
-            return self
+        # Case: Consumer matches producer's OUTPUT shape (e.g., after reduction)
+        # Producer iterates [20, 50, 30] but outputs [20, 50, 1]
+        # Consumer iterates [20, 50, 1] - should fuse
+        if prod_out_sizes and set(prod_out_sizes.keys()) == consumer_dims:
+            if all(sizes_compatible(prod_out_sizes.get(d, 1), cons_int[d]) for d in consumer_dims):
+                # Map consumer dims to producer's output dims
+                subst: dict[int, ATenOp] = {}
+                for d in producer_dims:
+                    if d in consumer_dims and d in cons_dim_to_range:
+                        if prod_int[d] == 1 and cons_int[d] != 1:
+                            subst[d] = _const(0)
+                        elif prod_int[d] == cons_int[d]:
+                            subst[d] = cons_dim_to_range[d]
+                        else:
+                            # Producer iterates more than consumer (reduction dim)
+                            # Don't substitute - keep producer's Range for reduction
+                            pass
+                    # Dims not in consumer stay as-is (use producer's Range)
+                if subst:
+                    return subst
 
-        return self._apply_fusion(producer, subst)
+        if producer_dims == consumer_dims:
+            # Same dims - check if sizes match (with broadcast)
+            if all(sizes_compatible(prod_int[d], cons_int[d]) for d in consumer_dims):
+                # For broadcast dims (size 1), use constant 0; otherwise identity
+                subst = {}
+                for d in producer_dims:
+                    if prod_int[d] == 1 and cons_int[d] != 1:
+                        subst[d] = _const(0)  # Broadcast: always index 0
+                    else:
+                        subst[d] = cons_dim_to_range[d]
+                return subst
+
+        if consumer_dims < producer_dims:
+            # Reduce case: producer iterates more, consumer is inner loop
+            # All producer dims must have matching consumer dims
+            if consumer_dims == producer_dims & consumer_dims:
+                if all(prod_int.get(d) == cons_int.get(d) for d in consumer_dims):
+                    # Identity for shared dims, extras reference outer scope
+                    return {d: cons_dim_to_range[d] for d in producer_dims if d in cons_dim_to_range}
+
+        # Check: same total elements (reshape case)
+        prod_total = 1
+        for v in prod_int.values():
+            prod_total *= v
+        cons_total = 1
+        for v in cons_int.values():
+            cons_total *= v
+
+        if prod_total != cons_total:
+            return None
+
+        # Build linear IR expression from consumer Range nodes (row-major order)
+        sorted_cons = sorted(cons_int.keys())
+        cons_strides: list[int] = []
+        stride = 1
+        for d in reversed(sorted_cons):
+            cons_strides.insert(0, stride)
+            stride *= cons_int[d]
+
+        # linear = Σ cons_stride[d] * Range(d)
+        linear: ATenOp = _const(0)
+        for d, s in zip(sorted_cons, cons_strides):
+            rng = cons_dim_to_range[d]
+            if s == 1:
+                linear = Add((linear, rng))
+            else:
+                linear = Add((linear, Mul((rng, _const(s)))))
+
+        # Decompose linear into producer dims (row-major order)
+        sorted_prod = sorted(prod_int.keys())
+        prod_strides: list[int] = []
+        stride = 1
+        for d in reversed(sorted_prod):
+            prod_strides.insert(0, stride)
+            stride *= prod_int[d]
+
+        subst: dict[int, ATenOp] = {}
+        remaining = linear
+        for d, s in zip(sorted_prod, prod_strides):
+            if s == 1:
+                subst[d] = remaining
+            else:
+                subst[d] = IDiv((remaining, _const(s)))
+                remaining = Mod((remaining, _const(s)))
+
+        return subst
 
     def _extract_substitution(
         self,
@@ -947,7 +1010,7 @@ class EndRange(ViewOps, ATenOp):
     def _apply_fusion(
         self,
         producer: "EndRange",
-        subst: "dict[int, A.AffExpr]"
+        subst: "dict[int, ATenOp]"
     ) -> "EndRange":
         """
         Apply fusion by transforming producer and inlining.
@@ -981,35 +1044,43 @@ class EndRange(ViewOps, ATenOp):
             n_ranges=self.n_ranges,
         )
 
-    def _preimage(self, node: ATenOp, subst: "dict[int, A.AffExpr]") -> ATenOp:
+    def _preimage(self, node: ATenOp, subst: "dict[int, ATenOp]") -> ATenOp:
         """
-        Apply preimage transform: rewrite Aff nodes using substitution.
+        Apply preimage transform: replace Range/Aff nodes using substitution.
 
-        For Aff with Range(dim=d), if d in subst, transform using subst[d].
+        For Range(dim=d), if d in subst, replace with subst[d].
+        For Aff with Range(dim=d), if d in subst, expand to scalar expression.
+        subst maps producer dims to IR expressions over consumer's Range nodes.
         """
+        # Direct Range replacement (for already-transformed expressions)
+        if isinstance(node, Range) and node.dim in subst:
+            return subst[node.dim]
+
         if isinstance(node, Aff):
             stride, range_node, offset, incf = node.args
             if isinstance(range_node, Range) and range_node.dim in subst:
-                expr = subst[range_node.dim]
-
-                # Simple case: expr = c * gid{new_dim} + const
-                if len(expr.coeff) == 1:
-                    var, coeff = next(iter(expr.coeff.items()))
-                    if var.startswith("gid"):
-                        try:
-                            new_dim = int(var[3:])
-                            for rng in self.ranges:
-                                if isinstance(rng, Range) and rng.dim == new_dim:
-                                    new_incf = Mul((incf, _const(coeff))) if coeff != 1 else incf
-                                    new_off = Add((offset, _const(expr.const))) if expr.const != 0 else offset
-                                    return Aff((stride, rng, new_off, new_incf))
-                        except ValueError:
-                            pass
+                ir_expr = subst[range_node.dim]
+                # Aff computes: stride * (incf * range + offset)
+                # With substitution: stride * (incf * ir_expr + offset)
+                scaled = Mul((incf, ir_expr)) if not ATenOp.eql(incf, _const(1)) else ir_expr
+                shifted = Add((scaled, offset)) if not ATenOp.eql(offset, _const(0)) else scaled
+                result = Mul((stride, shifted)) if not ATenOp.eql(stride, _const(1)) else shifted
+                return result
             return node
 
         if isinstance(node, Load):
-            new_args = (node.args[0],) + tuple(self._preimage(a, subst) for a in node.args[1:])
-            return Load(new_args)
+            # Transform indices recursively
+            new_indices = [self._preimage(a, subst) for a in node.args[1:]]
+            # If any index changed, rebuild Load
+            if new_indices != list(node.args[1:]):
+                # Sum all indices for scalar access
+                if any(not isinstance(idx, Aff) for idx in new_indices):
+                    total: ATenOp = _const(0)
+                    for idx in new_indices:
+                        total = Add((total, idx))
+                    return Load((node.args[0], total), T=node.T)
+                return Load((node.args[0],) + tuple(new_indices))
+            return node
 
         if isinstance(node, (EndRange, Memory)):
             return node

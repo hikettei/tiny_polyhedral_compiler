@@ -239,6 +239,28 @@ class AffExpr:
     def __rmul__(self, k: Coeff) -> "AffExpr":
         return self * k
 
+    def floordiv(self, divisor: int) -> "AffExpr":
+        """
+        Quasi-affine floor division: expr // divisor.
+        Creates a synthetic variable representing the floordiv result.
+        """
+        if divisor == 1:
+            return self
+        # Create synthetic var: (expr)//divisor
+        synth_name = f"({self})_div_{divisor}"
+        return AffExpr({synth_name: 1}, 0)
+
+    def mod(self, divisor: int) -> "AffExpr":
+        """
+        Quasi-affine modulo: expr % divisor.
+        Creates a synthetic variable representing the mod result.
+        """
+        if divisor == 1:
+            return AffExpr.zero()
+        # Create synthetic var: (expr)%divisor
+        synth_name = f"({self})_mod_{divisor}"
+        return AffExpr({synth_name: 1}, 0)
+
     def substitute(self, var: str, expr: "AffExpr") -> "AffExpr":
         """
         Substitute var := expr.

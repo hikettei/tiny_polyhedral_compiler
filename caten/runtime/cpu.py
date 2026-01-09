@@ -100,6 +100,14 @@ class CPUTensor(C.TensorImpl):
                     lines.append(f"{ind()}float {v} = ({a} > {b}) ? {a} : {b};")
                     return v
 
+                case ir.IDiv():
+                    a, b = emit(node.args[0]), emit(node.args[1])
+                    return f"(({a}) / ({b}))"
+
+                case ir.Mod():
+                    a, b = emit(node.args[0]), emit(node.args[1])
+                    return f"(({a}) % ({b}))"
+
                 case ir.Neg():
                     a = emit(node.args[0])
                     v = var()
