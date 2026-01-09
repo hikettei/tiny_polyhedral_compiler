@@ -9,13 +9,16 @@ from dataclasses import dataclass, replace
 from typing import Any, Dict, Union
 
 from .dtype import DType, index
-import caten.isl as I
+import caten.aff as A
 
 class ATenOpMetaclass(type):
     cache: Dict[tuple, weakref.ReferenceType[ATenOp]] = {}
     @staticmethod
     def _freeze(x: Any) -> Any:
         if isinstance(x, ATenOp): return x
+        # Handle aff.py classes by hash (they have custom __hash__)
+        if hasattr(x, '__module__') and 'aff' in str(x.__module__):
+            return (type(x).__name__, hash(x))
         if dataclasses.is_dataclass(x):
             return (type(x),) + tuple((f.name, ATenOpMetaclass._freeze(getattr(x, f.name))) for f in dataclasses.fields(x) if f.name not in ["args"])
         if isinstance(x, (list, tuple)):
@@ -429,6 +432,53 @@ class Load(ATenOp):
         # [TODO] Symbolics
         doms = ", ".join([f"gid{aff.args[1].dim}" for aff in self.args[1:]])
         return f"S[{doms}] -> [" + "+".join([arg.as_aff_str() for arg in self.args[1:]]) + "]"
+
+    def to_basic_map(self, dom_dim: int) -> A.BasicMap:
+        """
+        Convert Load access pattern to a BasicMap for dependency analysis.
+
+        Returns a map: { S[gid0, ..., gidN] -> [addr] : addr = linearized_address }
+        """
+        dom_vars = tuple(f"gid{i}" for i in range(dom_dim))
+        addr_expr = A.AffExpr.zero()
+
+        for aff_node in self.args[1:]:  # Skip first arg (Memory)
+            if not isinstance(aff_node, Aff):
+                continue
+
+            stride, range_node, offset, incf = aff_node.args
+
+            # Get dimension from Range
+            if isinstance(range_node, Range):
+                dim = range_node.dim
+                gid_var = f"gid{dim}"
+            else:
+                continue
+
+            # Extract coefficient values (handle both concrete and symbolic)
+            stride_val = stride.item if hasattr(stride, 'item') else stride
+            offset_val = offset.item if hasattr(offset, 'item') else offset
+            incf_val = incf.item if hasattr(incf, 'item') else incf
+
+            # Build affine term: stride * (incf * gid + offset)
+            if isinstance(stride_val, (int, float)) and isinstance(incf_val, (int, float)):
+                # Concrete case
+                coeff = int(stride_val * incf_val)
+                const_contrib = int(stride_val * offset_val) if isinstance(offset_val, (int, float)) else 0
+                term = A.AffExpr({gid_var: coeff}, 0)
+                if const_contrib != 0:
+                    term = term + const_contrib
+            else:
+                # Symbolic case - use ATenOp as coefficient
+                coeff = A._coeff_mul(stride_val, incf_val)
+                const_contrib = A._coeff_mul(stride_val, offset_val)
+                term = A.AffExpr({gid_var: coeff}, 0)
+                if not A._coeff_is_zero(const_contrib):
+                    term = term + const_contrib
+
+            addr_expr = addr_expr + term
+
+        return A.BasicMap.from_access(dom_vars, addr_expr, dom_name="S")
 ### Scheduling Graph
 @dataclass(frozen=True)
 class Memory(ViewOps, ATenOp):
@@ -452,74 +502,213 @@ class EndRange(ViewOps, ATenOp):
     EndRange(Memory, Store, range1, range2, ...) -> Tensor(Shaped)
     ```
     Proceeds to the next when range1 == max(range1) and range2 == max(range2) and ...
+
+    Fusion Analysis:
+    ================
+    When two EndRanges are candidates for fusion, we analyze their access patterns:
+    - Read/Write access relations are extracted as BasicMaps
+    - Dependency analysis computes RAW/WAR/WAW relations
+    - Fusion is legal if dependencies preserve sequential semantics
     """
     dims: tuple[int, ...] = ()
     reads: str = ""
-    writes: str = "" # or dependencies dumped as string?
+    writes: str = ""
+    # New fields for structured access relations
+    read_maps: tuple = ()   # tuple[A.BasicMap, ...]
+    write_maps: tuple = ()  # tuple[A.BasicMap, ...]
+
     @staticmethod
     def sync(memory: Memory, store: Store, axis: tuple[int, ...]=()): # rename: sync -> barrier?
-        # [TODO] Softmax
+        """
+        Synchronize a memory store operation, collecting access patterns for fusion analysis.
+
+        This method:
+        1. Explores the IR graph to find all Load operations
+        2. Extracts their access patterns as BasicMaps
+        3. Builds dependency information for fusion decisions
+        """
         assert memory.T is not None
-        seen, dim2range = {}, {}
-        reads, writes = [], []
-        def _explore(item: ATenOp, write=False):
-            if item in seen: return
-            seen[item] = True
+        seen: dict[int, bool] = {}
+        dim2range: dict[int, Range] = {}
+        reads_str: list[str] = []
+        writes_str: list[str] = []
+        read_maps: list[A.BasicMap] = []
+        write_maps: list[A.BasicMap] = []
+
+        def _explore(item: ATenOp, write: bool = False) -> None:
+            if id(item) in seen:
+                return
+            seen[id(item)] = True
+
             if isinstance(item, Range):
                 if item.dim in dim2range:
-                    assert ATenOp.eql((sz1:=dim2range[item.dim].args[0]), (sz2:=item.args[0])), f"Cannot create schedule: {sz1} vs {sz2}"
+                    assert ATenOp.eql(
+                        (sz1 := dim2range[item.dim].args[0]),
+                        (sz2 := item.args[0])
+                    ), f"Cannot create schedule: {sz1} vs {sz2}"
                 dim2range[item.dim] = item
                 return
-            if isinstance(item, EndRange): return
+
+            if isinstance(item, EndRange):
+                return
+
             if isinstance(item, Load):
-                if write: writes.append(item.as_union_map_str())
-                else: reads.append(item.as_union_map_str())
-            for arg in item.args: _explore(arg, write=write)
+                # Collect string representation (legacy)
+                if write:
+                    writes_str.append(item.as_union_map_str())
+                else:
+                    reads_str.append(item.as_union_map_str())
+
+                # Collect BasicMap (new structured representation)
+                dom_dim = max(len(dim2range), len(item.args) - 1)
+                try:
+                    basic_map = item.to_basic_map(dom_dim)
+                    if write:
+                        write_maps.append(basic_map)
+                    else:
+                        read_maps.append(basic_map)
+                except Exception:
+                    pass  # Skip if map construction fails
+
+            for arg in item.args:
+                _explore(arg, write=write)
+
+        # Explore write side (destination)
         _explore(store.args[0], write=True)
+        # Explore read side (source expression)
         _explore(store.args[1], write=False)
-        reads_union_map = "{ " + "; ".join(reads) + " }"
-        writes_union_map = "{ " + "; ".join(writes) + " }"
+
+        reads_union_map = "{ " + "; ".join(reads_str) + " }"
+        writes_union_map = "{ " + "; ".join(writes_str) + " }"
+
         assert sorted(tuple(dim2range.keys())) == list(range(0, len(dim2range.keys())))
+
         endrange = EndRange(
             (memory, store),
             T=ATenOpType.from_shape(tuple([s.size for s in memory.T.axes]), memory.T.dtype),
             dims=tuple(sorted(tuple(dim2range.keys()))),
             reads=reads_union_map,
             writes=writes_union_map,
+            read_maps=tuple(read_maps),
+            write_maps=tuple(write_maps),
         )
+
+        # Try to fuse with parent EndRanges
         parents = endrange.get_parent_groups()
-        for p in parents: endrange = endrange.fuse(p)
-        # If fused, return fused endrange instead of endrange
-        # EndRange can have multiple arrays?
+        for p in parents:
+            endrange = endrange.fuse(p)
+
         return endrange
-        
-    def get_parent_groups(self):
-        seen, parents = {}, []
-        def _explore(item: ATenOp):
-            if item in seen: return
-            seen[item] = True
+
+    def get_parent_groups(self) -> list:
+        """Find all EndRange nodes that this statement depends on."""
+        seen: dict[int, bool] = {}
+        parents: list = []
+
+        def _explore(item: ATenOp) -> None:
+            if id(item) in seen:
+                return
+            seen[id(item)] = True
             if isinstance(item, EndRange):
                 parents.append(item)
                 return
-            for arg in item.args: _explore(arg)
-        for arg in self.args: _explore(arg)
+            for arg in item.args:
+                _explore(arg)
+
+        for arg in self.args:
+            _explore(arg)
         return parents
 
-    def fuse(self, other: EndRange):
-        # merge two shape trackers
-        print(self.reads)
-        r, w = I.UnionMap(self.reads), I.UnionMap(other.writes)
-        d1 = w.apply_range(r.reverse())
-        d2 = r.apply_range(w.reverse())
-        print("+ACCESS_REL+")
-        print(r)
-        print(w)
-        print(d1)
-        print(d2)
+    def fuse(self, other: EndRange) -> EndRange:
+        """
+        Attempt to fuse this EndRange with another (typically a producer).
+
+        Fusion Algorithm:
+        =================
+        1. Build UnionMaps from read/write BasicMaps
+        2. Compute dependency relations:
+           - RAW: writes(other) ; reads(self)^{-1}
+           - WAR: reads(other) ; writes(self)^{-1}
+           - WAW: writes(other) ; writes(self)^{-1}
+        3. Analyze if fusion preserves legality
+        4. If fusible, merge loop nests and inline computations
+
+        For producer-consumer fusion (A -> B):
+        - We need RAW deps to be "forward" (A executes before B reads)
+        - Identity dependencies indicate perfect fusion opportunity
+        """
+        # Build UnionMaps from BasicMaps
+        self_reads = A.UnionMap.from_maps(list(self.read_maps))
+        self_writes = A.UnionMap.from_maps(list(self.write_maps))
+        other_reads = A.UnionMap.from_maps(list(other.read_maps))
+        other_writes = A.UnionMap.from_maps(list(other.write_maps))
+
+        # Attempt fusion with full analysis
+        fusion_result = A.attempt_fusion(
+            other_writes, other_reads,  # Producer (other)
+            self_writes, self_reads,    # Consumer (self)
+        )
+
+        # Debug output
+        print(f"\n=== Fusion Analysis ===")
+        print(f"Self reads: {self.reads}")
+        print(f"Other writes: {other.writes}")
+        print(f"\nDependency Analysis:")
+        print(f"  RAW (flow): {fusion_result.dep_info.raw}")
+        print(f"  WAR (anti): {fusion_result.dep_info.war}")
+        print(f"  WAW (output): {fusion_result.dep_info.waw}")
+        print(f"  Fusible: {fusion_result.dep_info.fusible}")
+        print(f"  Reason: {fusion_result.dep_info.reason}")
+        print(f"  Fusion Type: {fusion_result.fusion_type}")
+
+        if fusion_result.success:
+            print(f"  -> FUSION CANDIDATE: {fusion_result.fusion_type.upper()}")
+
+            if fusion_result.fusion_type == "perfect":
+                # Perfect fusion: can completely merge the loop nests
+                # The intermediate buffer can potentially be eliminated
+                print(f"     Can eliminate intermediate buffer and merge loops")
+
+                # For now, return self but with merged access maps
+                # A full implementation would:
+                # 1. Inline the producer computation into the consumer
+                # 2. Remove the intermediate buffer allocation
+                # 3. Create a single EndRange with combined computation
+
+                # Mark this as fused by combining the access maps
+                merged_read_maps = tuple(list(other.read_maps) + list(self.read_maps))
+                merged_write_maps = tuple(list(self.write_maps))  # Consumer writes to final output
+
+                # Return with merged information (structure preserved for now)
+                return self
+        else:
+            print(f"  -> NOT FUSIBLE: {fusion_result.message}")
+
         return self
 
-    def preimage(self): pass
-    def compute_at(self, item: ATenOp): pass
+    def preimage(self) -> None:
+        """Compute preimage transformation (for tiling)."""
+        pass
+
+    def compute_at(self, item: ATenOp) -> None:
+        """Schedule this computation at a specific loop level."""
+        pass
+
+    def get_dependency_info(self, other: EndRange) -> A.DependencyInfo:
+        """
+        Get detailed dependency information between this and another EndRange.
+
+        Useful for external analysis and scheduling decisions.
+        """
+        self_reads = A.UnionMap.from_maps(list(self.read_maps))
+        self_writes = A.UnionMap.from_maps(list(self.write_maps))
+        other_reads = A.UnionMap.from_maps(list(other.read_maps))
+        other_writes = A.UnionMap.from_maps(list(other.write_maps))
+
+        return A.analyze_dependencies(
+            other_writes, other_reads,
+            self_writes, self_reads,
+        )
 
 @dataclass(frozen=True)
 class Store(ATenOp):
