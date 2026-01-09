@@ -192,8 +192,6 @@ def _node_line(
         extra = f" val={expr_to_str(n)}"
     if isinstance(n, ir.EndRange):
         extra = f" dims={n.dims}"
-        if n.reduce_dims:
-            extra += f" reduce={n.reduce_dims}"
 
     # Reduce op type
     if isinstance(n, ir.Reduce):

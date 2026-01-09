@@ -64,8 +64,15 @@ class ATenOpType():
             return ATenOpType(axes=(), dtype=dtype)
         def _mul(a: Any, b: Any) -> Any: return Mul((_const(a), _const(b)))
         strides = tuple(itertools.accumulate(reversed(shape[1:]), _mul, initial=_const(1)))[::-1]
+        # Size-1 dimensions get stride=0 for broadcast semantics
+        axes = []
+        for size, stride in zip(shape, strides, strict=True):
+            if ATenOp.eql(size, 1):
+                axes.append(ATenAxis(size=_const(size), stride=_const(0), offset=_const(0), incf=_const(1)))
+            else:
+                axes.append(ATenAxis(size=_const(size), stride=_const(stride), offset=_const(0), incf=_const(1)))
         return ATenOpType(
-            axes=tuple([ATenAxis(size=_const(size), stride=_const(stride), offset=_const(0), incf=_const(1)) for (size, stride) in zip(shape, strides, strict=True)]),
+            axes=tuple(axes),
             dtype=dtype,
         )
 
@@ -386,26 +393,36 @@ class Reduce(ATenOp):
 
     def lower(self) -> ATenOp:
         """
-        Lower Reduce to EndRange with proper reduction semantics.
+        Lower Reduce to nested EndRange with proper reduction semantics.
 
         For sum reduction over axis k:
-            for i in range(M):        # parallel
-                for j in range(N):    # parallel
-                    for k in range(K):# reduction
-                        acc = Add(acc, x[i,j,k])  # expressed via Store(acc, Add(acc, x))
-                    out[i,j] = acc
+        ```c
+        for (int i = 0; i < M; i++) {
+            for (int j = 0; j < N; j++) {
+                float acc = 0.0f;
+                for (int k = 0; k < K; k++) {
+                    acc += x[i,j,k];
+                }
+                out[i,j] = acc;
+            }
+        }
+        ```
 
-        The reduction is expressed through the computation graph:
-        - Store(acc, Add(acc, input)) for sum
-        - Store(acc, Max(acc, input)) for max
-        The initialization (acc = 0 or acc = -inf) is implicit in the accumulator memory.
+        Represented as:
+            EndRange(
+                Range(M, dim=0), Range(N, dim=1),
+                out,
+                Store(Load(out, ...),
+                    EndRange(
+                        Range(K, dim=2),
+                        acc,  # Memory(0.0)
+                        Store(Load(acc), Add(Load(acc), x[i,j,k])))))
         """
-        # args[0] is the expanded output view (View.expand(Memory, shape))
-        # args[1] is the input tensor
+        # args[0] is the expanded output view, args[1] is the input tensor
         out_view = self.args[0]
         input_tensor = self.args[1].lower()
 
-        # Get the underlying memory from the output view
+        # Get underlying memory from output view
         def find_memory(node: ATenOp) -> Memory:
             if isinstance(node, Memory):
                 return node
@@ -414,28 +431,52 @@ class Reduce(ATenOp):
             raise ValueError(f"Cannot find Memory in {node}")
 
         out_memory = find_memory(out_view)
+        input_T = input_tensor.T
+        assert input_T is not None
 
-        # Create Load nodes for output (accumulator) and input
-        # The output Load uses the expanded view's type for access pattern
-        out_load = Load.from_tensor(out_memory, T=out_view.T)
+        # Determine initial value based on operation
+        if self.bop == Add:
+            init_val = 0.0
+        elif self.bop == Max:
+            init_val = float('-inf')
+        else:
+            init_val = 0.0
+
+        # Create scalar accumulator for reduction
+        acc = Memory.deflocal((), input_T.dtype)
+        acc_init = Const.new(init_val, input_T.dtype)
+
+        # Build ranges for reduction dimensions
+        reduce_ranges: list[Range] = []
+        for dim in self.axis:
+            if dim < len(input_T.axes):
+                reduce_ranges.append(input_T.axes[dim].range(dim))
+
+        # Inner body: acc = reduce_op(acc, input[...])
         input_load = Load.from_tensor(input_tensor)
+        acc_load = Load.from_tensor(acc)
+        reduction_expr = self.bop((acc_load, input_load))
+        inner_store = Store.new(acc_load, reduction_expr)
 
-        # The reduction: acc = reduce_op(acc, input)
-        # This is expressed in the computation graph as Store(acc, Add(acc, input))
-        reduction_expr = self.bop((out_load, input_load))
-
-        # Store the result back to output
-        store = Store.new(out_load, reduction_expr)
-
-        # Create EndRange with reduction semantics
-        # reduce_dims indicates which dimensions have loop-carried dependencies
-        return EndRange.sync(
-            out_memory,
-            store,
-            reduce_dims=self.axis,
+        # Build inner EndRange for reduction loop
+        inner_args = tuple(reduce_ranges) + (acc, inner_store)
+        inner_endrange = EndRange(
+            inner_args,
+            T=ATenOpType(axes=(), dtype=input_T.dtype),
+            n_ranges=len(reduce_ranges),
         )
+        # Try to fuse inner EndRange with its load sources (e.g., Mul)
+        for src in inner_endrange.load_sources():
+            inner_endrange = inner_endrange._fuse(src)
+
+        # Outer body: out[i,j] = inner_endrange (which produces the reduced acc)
+        out_load = Load.from_tensor(out_memory, T=out_view.T)
+        outer_store = Store.new(out_load, inner_endrange)
+
+        # Build outer EndRange for parallel dimensions
+        return EndRange.sync(out_memory, outer_store)
 ## == EndRangeOps ============================================================
-### Array access graph constrainted via only affine functions, sorted by lex order (for symbolic shape)
+### Array access graph constrained via only affine functions, sorted by lex order (for symbolic shape)
 @dataclass(frozen=True)
 class Range(ATenOp):
     """
@@ -471,7 +512,7 @@ class Aff(ATenOp):
 class Load(ATenOp):
     """
     X = Load(Memory | EndRange, Aff1, Aff2, ...)
-    Access the (Aff1.index() + Aff2.index() + ...)th element of Array. The dependency is trackable by Polyhedral Compiler.
+    Access the (Aff1.index() + Aff2.index() + ...)th element of Array.
     """
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
@@ -482,89 +523,18 @@ class Load(ATenOp):
         return ATenOpType(axes=tuple(), dtype=args[0].T.dtype, offset=_const(0, index))
 
     @staticmethod
-    def from_tensor(tensor: ATenOp, T: Optional[ATenOpType] = None) -> ATenOp:
-        """
-        Create a Load from a tensor, or return scalar directly if 0-dim.
-
-        Args:
-            tensor: Memory, EndRange, or scalar (Const) to load from
-            T: Optional type override for access pattern
-
-        Returns:
-            Load node for arrays, or the scalar directly for 0-dim
-        """
+    def from_tensor(tensor: ATenOp, T: "ATenOpType | None" = None) -> ATenOp:
+        """Create a Load from a tensor, or return scalar directly if 0-dim."""
         dtype = T or tensor.T
         assert dtype is not None
-
-        # Scalars don't need Load - return directly
-        if dtype.ndim == 0:
-            return tensor
-
-        # For Const scalars being broadcast, we return the const directly
-        # since it will be used element-wise
-        if isinstance(tensor, Const):
-            return tensor
-
+        if dtype.ndim == 0: return tensor
+        if isinstance(tensor, Const): return tensor
         return Load((tensor,) + tuple([axis.aff(dim) for dim, axis in enumerate(dtype.axes)]))
 
-    def as_union_map_str(self):
-        # [TODO] How to write strides
-        # [TODO] Symbolics
-        doms = ", ".join([f"gid{aff.args[1].dim}" for aff in self.args[1:]])
-        return f"S[{doms}] -> [" + "+".join([arg.as_aff_str() for arg in self.args[1:]]) + "]"
-
-    def to_basic_map(self, dom_dim: int) -> A.BasicMap:
-        """
-        Convert Load access pattern to a BasicMap for dependency analysis.
-
-        Returns a map: { S[gid0, ..., gidN] -> [addr] : addr = linearized_address }
-        """
-        dom_vars = tuple(f"gid{i}" for i in range(dom_dim))
-        addr_expr = A.AffExpr.zero()
-
-        for aff_node in self.args[1:]:  # Skip first arg (Memory)
-            if not isinstance(aff_node, Aff):
-                continue
-
-            stride, range_node, offset, incf = aff_node.args
-
-            # Get dimension from Range
-            if isinstance(range_node, Range):
-                dim = range_node.dim
-                gid_var = f"gid{dim}"
-            else:
-                continue
-
-            # Extract coefficient values (handle both concrete and symbolic)
-            stride_val = stride.item if hasattr(stride, 'item') else stride
-            offset_val = offset.item if hasattr(offset, 'item') else offset
-            incf_val = incf.item if hasattr(incf, 'item') else incf
-
-            # Build affine term: stride * (incf * gid + offset)
-            if isinstance(stride_val, (int, float)) and isinstance(incf_val, (int, float)):
-                # Concrete case
-                coeff = int(stride_val * incf_val)
-                const_contrib = int(stride_val * offset_val) if isinstance(offset_val, (int, float)) else 0
-                term = A.AffExpr({gid_var: coeff}, 0)
-                if const_contrib != 0:
-                    term = term + const_contrib
-            else:
-                # Symbolic case - use ATenOp as coefficient
-                coeff = A._coeff_mul(stride_val, incf_val)
-                const_contrib = A._coeff_mul(stride_val, offset_val)
-                term = A.AffExpr({gid_var: coeff}, 0)
-                if not A._coeff_is_zero(const_contrib):
-                    term = term + const_contrib
-
-            addr_expr = addr_expr + term
-
-        return A.BasicMap.from_access(dom_vars, addr_expr, dom_name="S")
 ### Scheduling Graph
 @dataclass(frozen=True)
 class Memory(ViewOps, ATenOp):
-    """
-    Memory(ATenOp, level="global or local")
-    """
+    """Memory(ATenOp, level="global or local")"""
     level: str = "global"
     tmp: bool = False
     @staticmethod
@@ -578,503 +548,489 @@ class Memory(ViewOps, ATenOp):
 @dataclass(frozen=True)
 class EndRange(ViewOps, ATenOp):
     """
-    EndRange marks loop boundaries with explicit parallel/reduction semantics.
-
-    ```
-    EndRange(Memory, Store, dims=(0,1,2), reduce_dims=(2,))
-    ```
+    EndRange represents a loop nest with ranges, output, and body.
 
     Structure:
     ==========
-    - dims: All iteration dimensions this EndRange closes
-    - reduce_dims: Subset of dims that are reductions (loop-carried dependencies)
+    args = (range1, range2, ..., output, body)
 
-    Reduction is expressed through the computation graph:
-    - Initialization: Store(acc, init_val) before the reduction loop
-    - Accumulation: Store(acc, Add(acc, x)) inside the reduction loop
+    Where:
+    - args[0:n_ranges]: Range nodes - iteration space
+    - args[n_ranges]: Memory node - the output array
+    - args[-1]: Body (Store or nested EndRange)
 
-    Example - GEMM with k-reduction:
-    ================================
-    ```
-    for i in range(M):        # parallel (dim 0)
-        for j in range(N):    # parallel (dim 1)
-            Store(acc, 0.0)   # initialization (expressed in graph)
-            for k in range(K):# reduction (dim 2)
-                Store(acc, Add(acc, A[i,k] * B[k,j]))  # accumulation
-            C[i,j] = acc
+    Example - Element-wise sin:
+    ===========================
+    ```c
+    float out[10*10];
+    for (int i0 = 0; i0 < 10; i0++) {
+        for (int i1 = 0; i1 < 10; i1++) {
+            out[i0*10 + i1] = sinf(in[i0*10 + i1]);
+        }
+    }
     ```
     Represented as:
-        EndRange(C, Store(acc, Add(acc, mul)), dims=(0,1,2), reduce_dims=(2,))
+        EndRange(Range(10, dim=0), Range(10, dim=1), out_mem, Store(...))
 
-    Fusion Analysis:
-    ================
-    When two EndRanges are candidates for fusion, we analyze their access patterns:
-    - Read/Write access relations are extracted as BasicMaps
-    - Dependency analysis computes RAW/WAR/WAW relations
-    - Reduction dims create loop-carried dependencies that affect fusion legality
+    Example - GEMM with k-reduction (nested EndRange):
+    ==================================================
+    ```c
+    float C[M*N];
+    for (int i = 0; i < M; i++) {
+        for (int j = 0; j < N; j++) {
+            float acc = 0.0f;
+            for (int k = 0; k < K; k++) {
+                acc += A[i*K+k] * B[k*N+j];
+            }
+            C[i*N+j] = acc;
+        }
+    }
+    ```
+    Represented as:
+        EndRange(
+            Range(M, dim=0), Range(N, dim=1),
+            C,
+            Store(Load(C, ...),
+                EndRange(
+                    Range(K, dim=2),
+                    acc,  # Memory(0.0)
+                    Store(acc, Add(Load(acc), Mul(A[i,k], B[k,j]))))))
     """
-    dims: tuple[int, ...] = ()
-    reduce_dims: tuple[int, ...] = ()  # Subset of dims that are reductions
-    reads: str = ""
-    writes: str = ""
-    # Structured access relations for fusion analysis
-    read_maps: tuple = ()   # tuple[A.BasicMap, ...]
-    write_maps: tuple = ()  # tuple[A.BasicMap, ...]
+    n_ranges: int = 0
+
+    @property
+    def ranges(self) -> tuple[ATenOp, ...]:
+        """Get all Range nodes (iteration space)."""
+        return self.args[:self.n_ranges]
+
+    @property
+    def output(self) -> ATenOp:
+        """Get the output memory."""
+        return self.args[self.n_ranges]
+
+    @property
+    def body(self) -> ATenOp:
+        """Get the body computation (Store node)."""
+        return self.args[-1]
+
+    @property
+    def dims(self) -> tuple[int, ...]:
+        """Get dimension indices from ranges."""
+        return tuple(r.dim for r in self.ranges if isinstance(r, Range))
+
+    def load_sources(self) -> "list[EndRange]":
+        """
+        Get EndRanges that are Load sources (require separate kernels).
+
+        Loop separation condition:
+        - Load(EndRange, ...) means the EndRange is a data source
+        - These must be computed as separate kernels before this one
+        - EndRanges appearing directly in computation (like reduction) are inline
+
+        Used by renderers (CPU, CUDA, etc.) to determine kernel boundaries.
+        """
+        seen: set[int] = set()
+        sources: list[EndRange] = []
+
+        def _find(node: ATenOp) -> None:
+            if id(node) in seen:
+                return
+            seen.add(id(node))
+            if isinstance(node, Load) and isinstance(node.args[0], EndRange):
+                sources.append(node.args[0])
+            if hasattr(node, 'args'):
+                for arg in node.args:
+                    _find(arg)
+
+        _find(self.body)
+        return sources
 
     @staticmethod
     def sync(
-        memory: Memory,
-        store: Store,
-        reduce_dims: tuple[int, ...] = (),
-    ):
+        output: "Memory",
+        body: "Store",
+    ) -> "EndRange":
         """
-        Synchronize a memory store operation, collecting access patterns for fusion analysis.
+        Create an EndRange by synchronizing output with a computation body.
 
-        This method:
-        1. Explores the IR graph to find all Load operations and Range nodes
-        2. Extracts their access patterns as BasicMaps
-        3. Builds dependency information for fusion decisions
+        Builds args = (ranges..., output, body)
 
-        Args:
-            memory: Output memory buffer
-            store: Store operation containing the computation
-            reduce_dims: Dimensions that are reductions (loop-carried)
+        Complexity: O(n) for collection, O(d log d) for sorting ranges
         """
-        assert memory.T is not None
-        seen: dict[int, bool] = {}
+        # Collect all Range nodes from the body (not nested EndRanges) - O(n)
+        seen: set[int] = set()
         dim2range: dict[int, Range] = {}
-        reads_str: list[str] = []
-        writes_str: list[str] = []
-        read_maps: list[A.BasicMap] = []
-        write_maps: list[A.BasicMap] = []
 
-        def _explore(item: ATenOp, write: bool = False) -> None:
-            if id(item) in seen:
+        def _collect_ranges(node: ATenOp) -> None:
+            if id(node) in seen:
                 return
-            seen[id(item)] = True
+            seen.add(id(node))
+            if isinstance(node, Range):
+                if node.dim in dim2range:
+                    assert ATenOp.eql(dim2range[node.dim].args[0], node.args[0]), \
+                        f"Conflicting Range sizes for dim {node.dim}"
+                dim2range[node.dim] = node
+            elif isinstance(node, EndRange):
+                return  # Don't collect ranges from nested EndRanges
+            if hasattr(node, 'args'):
+                for arg in node.args:
+                    _collect_ranges(arg)
 
-            if isinstance(item, Range):
-                if item.dim in dim2range:
-                    assert ATenOp.eql(
-                        (sz1 := dim2range[item.dim].args[0]),
-                        (sz2 := item.args[0])
-                    ), f"Cannot create schedule: {sz1} vs {sz2}"
-                dim2range[item.dim] = item
-                return
+        _collect_ranges(body)
 
-            if isinstance(item, EndRange):
-                return
+        # Sort ranges by dimension - O(d log d)
+        sorted_dims = sorted(dim2range.keys())
+        ranges = tuple(dim2range[d] for d in sorted_dims)
 
-            if isinstance(item, Load):
-                # Collect string representation (legacy)
-                if write:
-                    writes_str.append(item.as_union_map_str())
-                else:
-                    reads_str.append(item.as_union_map_str())
+        # Build args: (ranges..., output, body)
+        args = ranges + (output, body)
 
-                # Collect BasicMap (new structured representation)
-                dom_dim = max(len(dim2range), len(item.args) - 1)
-                try:
-                    basic_map = item.to_basic_map(dom_dim)
-                    if write:
-                        write_maps.append(basic_map)
-                    else:
-                        read_maps.append(basic_map)
-                except Exception:
-                    pass  # Skip if map construction fails
-
-            for arg in item.args:
-                _explore(arg, write=write)
-
-        # Explore write side (destination)
-        _explore(store.args[0], write=True)
-        # Explore read side (source expression)
-        _explore(store.args[1], write=False)
-
-        reads_union_map = "{ " + "; ".join(reads_str) + " }"
-        writes_union_map = "{ " + "; ".join(writes_str) + " }"
-
-        assert sorted(tuple(dim2range.keys())) == list(range(0, len(dim2range.keys())))
+        assert output.T is not None
+        T = ATenOpType.from_shape(
+            tuple(s.size for s in output.T.axes),
+            output.T.dtype
+        )
 
         endrange = EndRange(
-            (memory, store),
-            T=ATenOpType.from_shape(tuple([s.size for s in memory.T.axes]), memory.T.dtype),
-            dims=tuple(sorted(tuple(dim2range.keys()))),
-            reduce_dims=reduce_dims,
-            reads=reads_union_map,
-            writes=writes_union_map,
-            read_maps=tuple(read_maps),
-            write_maps=tuple(write_maps),
+            args,
+            T=T,
+            n_ranges=len(ranges),
         )
 
         # Try to fuse with parent EndRanges
-        parents = endrange.get_parent_groups()
+        parents = endrange._find_parent_endranges()
         for p in parents:
-            endrange = endrange.fuse(p)
+            endrange = endrange._fuse(p)
 
         return endrange
 
-    def get_parent_groups(self) -> list:
-        """Find all EndRange nodes that this statement depends on."""
-        seen: dict[int, bool] = {}
-        parents: list = []
+    def _find_parent_endranges(self) -> "list[EndRange]":
+        """Find all EndRange nodes that this computation depends on. O(n)"""
+        seen: set[int] = set()
+        parents: list[EndRange] = []
 
-        def _explore(item: ATenOp) -> None:
-            if id(item) in seen:
+        def _explore(node: ATenOp) -> None:
+            if id(node) in seen:
                 return
-            seen[id(item)] = True
-            if isinstance(item, EndRange):
-                parents.append(item)
+            seen.add(id(node))
+            if isinstance(node, EndRange) and node is not self:
+                parents.append(node)
                 return
-            for arg in item.args:
-                _explore(arg)
+            if hasattr(node, 'args'):
+                for arg in node.args:
+                    _explore(arg)
 
-        for arg in self.args:
-            _explore(arg)
+        _explore(self.body)
         return parents
 
-    def fuse(self, other: EndRange) -> EndRange:
+    def _load_to_basic_map(self, load: "Load") -> "A.BasicMap":
+        """Convert Load node to BasicMap for dependency analysis. O(d)"""
+        dom_vars = tuple(f"gid{d}" for d in self.dims)
+        addr_expr = A.AffExpr.zero()
+
+        for aff_node in load.args[1:]:
+            if not isinstance(aff_node, Aff):
+                continue
+            stride, range_node, offset, incf = aff_node.args
+            if not isinstance(range_node, Range):
+                continue
+
+            gid_var = f"gid{range_node.dim}"
+            s = stride.item if hasattr(stride, 'item') else stride
+            o = offset.item if hasattr(offset, 'item') else offset
+            i = incf.item if hasattr(incf, 'item') else incf
+
+            if isinstance(s, (int, float)) and isinstance(i, (int, float)):
+                coeff = int(s * i)
+                const = int(s * o) if isinstance(o, (int, float)) else 0
+                addr_expr = addr_expr + A.AffExpr({gid_var: coeff}, const)
+            else:
+                addr_expr = addr_expr + A.AffExpr({gid_var: A._coeff_mul(s, i)}, A._coeff_mul(s, o))
+
+        return A.BasicMap.from_access(dom_vars, addr_expr, dom_name="S")
+
+    def _collect_access_maps(self) -> tuple["list[A.BasicMap]", "list[A.BasicMap]"]:
+        """Collect (read_maps, write_maps) from body. O(n)"""
+        reads, writes = [], []
+        seen: set[int] = set()
+
+        def collect(node: ATenOp, is_write: bool = False) -> None:
+            if id(node) in seen:
+                return
+            seen.add(id(node))
+            if isinstance(node, Load):
+                try:
+                    m = self._load_to_basic_map(node)
+                    (writes if is_write else reads).append(m)
+                except Exception:
+                    pass
+            if isinstance(node, EndRange):
+                return
+            if hasattr(node, 'args'):
+                for arg in node.args:
+                    collect(arg, is_write)
+
+        if isinstance(self.body, Store):
+            collect(self.body.args[0], is_write=True)
+            collect(self.body.args[1], is_write=False)
+        return reads, writes
+
+    def _fuse(self, producer: "EndRange") -> "EndRange":
         """
-        Attempt to fuse this EndRange with another (typically a producer).
+        Fusion via direct inlining or affine dependency analysis.
 
-        Fusion Algorithm (Unified for all fusion types):
-        =================================================
-        1. Compute dependency relation: producer_iter -> consumer_iter
-        2. Extract variable substitution from the relation's constraint
-        3. Apply preimage to transform producer's iteration space
-        4. Use compute_at to inline transformed producer into consumer
+        Strategy:
+        1. Try simple fusion: if producer dims ⊆ consumer dims, inline directly
+        2. Fall back to affine analysis for complex cases (tiling, etc.)
 
-        The key insight is that all fusion types differ only in the substitution:
-        - Perfect: identity (gid0 -> gid0)
-        - Tiled: scaled + offset (h -> 4*hp + rh)
-        - Partial: subset of dimensions fused
+        Simple fusion handles common patterns:
+        - Element-wise chains: sin(sin(x))
+        - Mul → Reduce: producer and consumer share iteration space
+        - View → anything: fold view into access pattern
         """
-        # Build UnionMaps from BasicMaps
-        self_reads = A.UnionMap.from_maps(list(self.read_maps))
-        self_writes = A.UnionMap.from_maps(list(self.write_maps))
-        other_reads = A.UnionMap.from_maps(list(other.read_maps))
-        other_writes = A.UnionMap.from_maps(list(other.write_maps))
+        producer_dims = set(producer.dims)
+        consumer_dims = set(self.dims)
+        prod_sizes = {r.dim: r.args[0] for r in producer.ranges if isinstance(r, Range)}
+        cons_sizes = {r.dim: r.args[0] for r in self.ranges if isinstance(r, Range)}
 
-        # Attempt fusion with full analysis
-        fusion_result = A.attempt_fusion(
-            other_writes, other_reads,  # Producer (other)
-            self_writes, self_reads,    # Consumer (self)
-        )
+        # Case 1: Exact match (producer dims == consumer dims with matching sizes)
+        # Example: sin(sin(x)) where both have same iteration space
+        if producer_dims == consumer_dims:
+            sizes_match = all(
+                ATenOp.eql(prod_sizes.get(d, _const(0)), cons_sizes.get(d, _const(0)))
+                for d in producer_dims
+            )
+            if sizes_match:
+                subst = {d: A.AffExpr.var(f"gid{d}") for d in producer_dims}
+                return self._apply_fusion(producer, subst)
 
-        if not fusion_result.success:
+        # Case 2: Consumer dims ⊂ Producer dims (producer iterates more)
+        # Example: Mul[i,j,k] → Reduce inner loop[k]
+        # The extra producer dims become "free" referencing outer scope
+        if consumer_dims < producer_dims:
+            # Check sizes match for shared dims
+            shared_dims = consumer_dims
+            sizes_match = all(
+                ATenOp.eql(prod_sizes.get(d, _const(0)), cons_sizes.get(d, _const(0)))
+                for d in shared_dims
+            )
+            if sizes_match:
+                # Identity mapping for all producer dims (extras reference outer scope)
+                subst = {d: A.AffExpr.var(f"gid{d}") for d in producer_dims}
+                return self._apply_fusion(producer, subst)
+
+        # Case 3: Producer dims ⊂ Consumer dims (producer iterates less)
+        # Example: Transpose[j,k] → Mul/Reduce[i,j,k]
+        # Match producer dims to consumer dims by SIZE
+        if producer_dims < consumer_dims or (producer_dims != consumer_dims and len(producer_dims) <= len(consumer_dims)):
+            # Build size → dim mapping for consumer
+            cons_size_to_dim: dict[int, int] = {}
+            for d, size in cons_sizes.items():
+                if isinstance(size, Const) and isinstance(size.value, int):
+                    cons_size_to_dim[size.value] = d
+
+            # Try to map each producer dim to a consumer dim with same size
+            subst: dict[int, A.AffExpr] = {}
+            mapping_valid = True
+            for prod_dim, prod_size in prod_sizes.items():
+                if isinstance(prod_size, Const) and isinstance(prod_size.value, int):
+                    if prod_size.value in cons_size_to_dim:
+                        cons_dim = cons_size_to_dim[prod_size.value]
+                        subst[prod_dim] = A.AffExpr.var(f"gid{cons_dim}")
+                    else:
+                        mapping_valid = False
+                        break
+                else:
+                    mapping_valid = False
+                    break
+
+            if mapping_valid and len(subst) == len(producer_dims):
+                return self._apply_fusion(producer, subst)
+
+        # Complex fusion: try affine analysis
+        prod_reads, prod_writes = producer._collect_access_maps()
+        cons_reads, cons_writes = self._collect_access_maps()
+
+        if not prod_writes or not cons_reads:
             return self
 
-        # Extract substitution from RAW dependency
-        # The constraint tells us how producer vars map to consumer vars
-        subst = self._extract_substitution(fusion_result)
+        result = A.attempt_fusion(
+            A.UnionMap.from_maps(prod_writes),
+            A.UnionMap.from_maps(prod_reads),
+            A.UnionMap.from_maps(cons_writes),
+            A.UnionMap.from_maps(cons_reads),
+        )
+
+        if not result.success:
+            return self
+
+        subst = self._extract_substitution(result, producer)
         if subst is None:
             return self
 
-        # Transform producer using preimage and inline via compute_at
-        transformed_producer = other.preimage(subst, self)
-        return self.compute_at(transformed_producer, other)
+        return self._apply_fusion(producer, subst)
 
-    def _extract_substitution(self, fusion_result: A.FusionResult) -> dict[str, A.AffExpr] | None:
+    def _extract_substitution(
+        self,
+        result: "A.FusionResult",
+        producer: "EndRange"
+    ) -> "dict[int, A.AffExpr] | None":
         """
-        Extract variable substitution from fusion result.
+        Extract dim -> expr substitution from fusion result.
 
-        For a constraint like: 128*h - 512*hp - 128*rh = 0
-        We derive: h = 4*hp + rh
+        For RAW constraint like: 128*h - 512*hp - 128*rh = 0
+        Solve for producer vars to get: h = 4*hp + rh
 
-        Returns dict mapping producer vars to expressions in consumer vars.
+        Returns dict mapping producer dim -> consumer AffExpr, or None if unsolvable.
         """
-        if not fusion_result.dep_info.raw.maps:
-            return {}
+        subst: dict[int, A.AffExpr] = {}
+        producer_dims = set(producer.dims)
+        consumer_dims = set(self.dims)
 
-        raw_map = fusion_result.dep_info.raw.maps[0]
-        producer_vars = set(raw_map.dom_vars)
-        consumer_vars = set(raw_map.rng_vars)
+        # Identity for shared dims
+        for d in producer_dims & consumer_dims:
+            subst[d] = A.AffExpr.var(f"gid{d}")
 
-        subst: dict[str, A.AffExpr] = {}
+        # Handle tiled fusion
+        if result.tiling_info:
+            for pvar, (tile_size, rvar) in result.tiling_info.tile_dims.items():
+                if pvar.startswith("gid"):
+                    try:
+                        pdim = int(pvar[3:])
+                    except ValueError:
+                        continue
 
-        # For shared variables (same name), identity mapping
-        shared = producer_vars & consumer_vars
-        for v in shared:
-            subst[v] = A.AffExpr.var(v)
+                    # Find scaled consumer var from constraint
+                    if result.tiling_info.constraint:
+                        expr = result.tiling_info.constraint.expr
+                        p_coeff = expr.coeff_of(pvar)
+                        if isinstance(p_coeff, int) and p_coeff != 0:
+                            for var in expr.variables():
+                                if var in (pvar, rvar):
+                                    continue
+                                c = expr.coeff_of(var)
+                                if isinstance(c, int) and abs(c) == abs(p_coeff * tile_size):
+                                    # pdim = tile_size * var + rvar
+                                    subst[pdim] = tile_size * A.AffExpr.var(var) + A.AffExpr.var(rvar)
+                                    break
+            return subst if subst else None
 
-        # For tiled fusion, use tiling info
-        if fusion_result.tiling_info:
-            tinfo = fusion_result.tiling_info
-            # For each tiled producer dim, compute: p = tile_size * q + r
-            # where q is the scaled consumer var and r is the reduction var
-            for pvar, (tile_size, rvar) in tinfo.tile_dims.items():
-                # Find the scaled variable q (has coefficient tile_size * coeff(p))
-                if raw_map.constraints:
-                    expr = raw_map.constraints[0].expr
-                    p_coeff = expr.coeff_of(pvar)
-                    if isinstance(p_coeff, int) and p_coeff != 0:
-                        # Find q with coefficient = tile_size * p_coeff
-                        for cvar in consumer_vars - producer_vars:
-                            c_coeff = expr.coeff_of(cvar)
-                            if isinstance(c_coeff, int) and abs(c_coeff) == abs(p_coeff * tile_size):
-                                # p = tile_size * q + r
-                                subst[pvar] = tile_size * A.AffExpr.var(cvar) + A.AffExpr.var(rvar)
-                                break
-        else:
-            # For perfect/partial fusion, try to solve the constraint
-            if raw_map.constraints:
-                constraint = raw_map.constraints[0]
-                for pvar in producer_vars - consumer_vars:
+        # Handle perfect/partial: solve from RAW constraint
+        if result.dep_info.raw.maps:
+            raw_map = result.dep_info.raw.maps[0]
+            for pvar in raw_map.dom_vars:
+                if not pvar.startswith("gid"):
+                    continue
+                try:
+                    pdim = int(pvar[3:])
+                except ValueError:
+                    continue
+
+                if pdim in subst:
+                    continue
+
+                # Try to solve constraint for this var
+                for constraint in raw_map.constraints:
                     sol = A._try_solve_for(constraint, pvar)
                     if sol is not None:
-                        # Check that solution only uses consumer vars
-                        if sol.variables() <= consumer_vars:
-                            subst[pvar] = sol
+                        # Verify solution uses only consumer vars
+                        sol_vars = sol.variables()
+                        if all(v.startswith("gid") and int(v[3:]) in consumer_dims for v in sol_vars if v.startswith("gid")):
+                            subst[pdim] = sol
+                            break
 
-        # If we couldn't find substitutions for all producer-only vars,
-        # it might still be valid if they cancel out
-        return subst
+        return subst if subst else None
 
-    def preimage(self, subst: dict[str, A.AffExpr], consumer: EndRange) -> EndRange:
+    def _apply_fusion(
+        self,
+        producer: "EndRange",
+        subst: "dict[int, A.AffExpr]"
+    ) -> "EndRange":
         """
-        Transform this EndRange's iteration space using the substitution.
+        Apply fusion by transforming producer and inlining.
 
-        This rewrites all Aff nodes to use consumer's iteration variables.
-
-        Args:
-            subst: Mapping from producer vars (gid0, gid1, ...) to expressions
-                   in consumer vars
-            consumer: The consumer EndRange (provides the new iteration space)
-
-        Returns:
-            New EndRange with transformed access patterns
+        In DAG, EndRange itself is the output reference.
+        Replace Load(producer) with transformed computation.
         """
-        if not subst:
-            return self
+        producer_comp = producer.body.args[1] if isinstance(producer.body, Store) else producer.body
 
-        # Build mapping from old Range dims to new expressions
-        dim_to_expr: dict[int, A.AffExpr] = {}
-        for var, expr in subst.items():
-            if var.startswith("gid"):
-                try:
-                    dim = int(var[3:])
-                    dim_to_expr[dim] = expr
-                except ValueError:
-                    pass
+        # Transform producer's computation
+        transformed = self._preimage(producer_comp, subst)
 
-        # Transform the Store node's access patterns
-        def transform_node(node: ATenOp) -> ATenOp:
-            if isinstance(node, Aff):
-                stride, range_node, offset, incf = node.args
-                if isinstance(range_node, Range):
-                    dim = range_node.dim
-                    if dim in dim_to_expr:
-                        # Transform this Aff using the substitution
-                        new_aff = self._transform_aff(node, dim_to_expr[dim], consumer)
-                        if new_aff is not None:
-                            return new_aff
-                return node
-
+        # Inline into consumer: replace Load(producer) with producer's computation
+        def inline(node: ATenOp) -> ATenOp:
             if isinstance(node, Load):
-                # Transform each Aff in the Load
-                new_args = [node.args[0]]  # Keep Memory reference
-                for arg in node.args[1:]:
-                    new_args.append(transform_node(arg))
-                return Load(tuple(new_args))
-
-            if isinstance(node, Store):
-                new_dst = transform_node(node.args[0])
-                new_src = transform_node(node.args[1])
-                return Store((new_dst, new_src), T=node.T)
-
+                if node.args[0] is producer:
+                    return transformed
             if isinstance(node, EndRange):
-                return node  # Don't recurse into other EndRanges
-
-            if isinstance(node, Memory):
                 return node
-
-            # For other ops, recursively transform children
             if hasattr(node, 'args') and node.args:
-                new_args = tuple(transform_node(arg) for arg in node.args)
+                new_args = tuple(inline(arg) for arg in node.args)
                 if new_args != node.args:
                     return replace(node, args=new_args)
             return node
 
-        # Transform the computation
-        new_store = transform_node(self.args[1])
+        new_body = inline(self.body)
 
-        # Create new EndRange with consumer's dimensions
         return EndRange(
-            (self.args[0], new_store),  # Keep memory, use transformed store
+            self.ranges + (self.output, new_body),
             T=self.T,
-            dims=consumer.dims,  # Use consumer's loop dimensions
-            reads=self.reads,
-            writes=self.writes,
-            read_maps=self.read_maps,
-            write_maps=self.write_maps,
+            n_ranges=self.n_ranges,
         )
 
-    def _transform_aff(self, aff: Aff, expr: A.AffExpr, consumer: EndRange) -> Aff | None:
+    def _preimage(self, node: ATenOp, subst: "dict[int, A.AffExpr]") -> ATenOp:
         """
-        Transform a single Aff node using the affine expression.
+        Apply preimage transform: rewrite Aff nodes using substitution.
 
-        If expr = c0*v0 + c1*v1 + ... + const, we expand to multiple Aff nodes
-        summed together, or create a composite Aff.
+        For Aff with Range(dim=d), if d in subst, transform using subst[d].
         """
-        stride, range_node, offset, incf = aff.args
+        if isinstance(node, Aff):
+            stride, range_node, offset, incf = node.args
+            if isinstance(range_node, Range) and range_node.dim in subst:
+                expr = subst[range_node.dim]
 
-        # For simple case: expr = c * var + const
-        if len(expr.coeff) == 1:
-            var, coeff = next(iter(expr.coeff.items()))
-            if var.startswith("gid"):
-                try:
-                    new_dim = int(var[3:])
-                    # Find the Range for this dimension in consumer
-                    for cdim in consumer.dims:
-                        if cdim == new_dim:
-                            # Create new Aff with transformed range
-                            new_size = consumer._get_dim_size(cdim)
-                            if new_size is not None:
-                                new_range = Range((new_size,), dim=new_dim)
-                                new_offset = _const(expr.const) if expr.const != 0 else offset
-                                new_incf = Mul((incf, _const(coeff))) if coeff != 1 else incf
-                                return Aff((stride, new_range, new_offset, new_incf))
-                except ValueError:
-                    pass
-
-        # For complex expressions (tiled), we need to generate multiple Aff nodes
-        # This happens with expr = tile_size * q + r
-        # We create: stride * (tile_size * q + r) = stride*tile_size*q + stride*r
-        # But this should be handled by expanding into separate Load terms
-        return None
-
-    def _get_dim_size(self, dim: int) -> ATenOp | None:
-        """Get the size of a dimension from this EndRange's iteration space."""
-        # Look through the IR to find the Range with this dim
-        def find_range(node: ATenOp) -> ATenOp | None:
-            if isinstance(node, Range) and node.dim == dim:
-                return node.args[0]  # Return the size
-            if isinstance(node, EndRange):
-                return None
-            if hasattr(node, 'args'):
-                for arg in node.args:
-                    result = find_range(arg)
-                    if result is not None:
-                        return result
-            return None
-
-        for arg in self.args:
-            result = find_range(arg)
-            if result is not None:
-                return result
-        return None
-
-    def compute_at(self, producer: EndRange, original_producer: EndRange) -> EndRange:
-        """
-        Inline the (transformed) producer into this consumer.
-
-        This eliminates the intermediate buffer and creates a single fused kernel.
-
-        Args:
-            producer: The transformed producer EndRange (with preimage applied)
-            original_producer: The original producer (to identify what to replace)
-
-        Returns:
-            New EndRange with inlined computation
-        """
-        # The producer's Store contains the computation to inline
-        # We need to replace Load(producer_memory) with producer's computation
-
-        producer_memory = original_producer.args[0]  # Memory node
-        producer_computation = producer.args[1].args[1]  # Store's source expression
-
-        def inline_producer(node: ATenOp) -> ATenOp:
-            """Replace loads from producer's memory with producer's computation."""
-            if isinstance(node, Load):
-                if node.args[0] is producer_memory or node.args[0] is original_producer:
-                    # This Load reads from the producer - inline the computation
-                    return producer_computation
-
-            if isinstance(node, EndRange):
-                # Don't recurse into other EndRanges (except if it's the producer)
-                if node is original_producer:
-                    # Skip the producer - it's being inlined
-                    return node
-                return node
-
-            # Recursively process children
-            if hasattr(node, 'args') and node.args:
-                new_args = tuple(inline_producer(arg) for arg in node.args)
-                if new_args != node.args:
-                    return replace(node, args=new_args)
+                # Simple case: expr = c * gid{new_dim} + const
+                if len(expr.coeff) == 1:
+                    var, coeff = next(iter(expr.coeff.items()))
+                    if var.startswith("gid"):
+                        try:
+                            new_dim = int(var[3:])
+                            for rng in self.ranges:
+                                if isinstance(rng, Range) and rng.dim == new_dim:
+                                    new_incf = Mul((incf, _const(coeff))) if coeff != 1 else incf
+                                    new_off = Add((offset, _const(expr.const))) if expr.const != 0 else offset
+                                    return Aff((stride, rng, new_off, new_incf))
+                        except ValueError:
+                            pass
             return node
 
-        # Transform the consumer's store
-        new_store = inline_producer(self.args[1])
+        if isinstance(node, Load):
+            new_args = (node.args[0],) + tuple(self._preimage(a, subst) for a in node.args[1:])
+            return Load(new_args)
 
-        # Merge read maps (consumer reads what producer reads)
-        merged_read_maps = tuple(list(producer.read_maps) + [
-            m for m in self.read_maps
-            if m not in producer.write_maps  # Exclude reads of intermediate
-        ])
+        if isinstance(node, (EndRange, Memory)):
+            return node
 
-        return EndRange(
-            (self.args[0], new_store),
-            T=self.T,
-            dims=self.dims,
-            reads=self.reads,
-            writes=self.writes,
-            read_maps=merged_read_maps,
-            write_maps=self.write_maps,
-        )
+        if hasattr(node, 'args') and node.args:
+            new_args = tuple(self._preimage(a, subst) for a in node.args)
+            if new_args != node.args:
+                return replace(node, args=new_args)
 
-    def get_dependency_info(self, other: EndRange) -> A.DependencyInfo:
-        """
-        Get detailed dependency information between this and another EndRange.
-
-        Useful for external analysis and scheduling decisions.
-        """
-        self_reads = A.UnionMap.from_maps(list(self.read_maps))
-        self_writes = A.UnionMap.from_maps(list(self.write_maps))
-        other_reads = A.UnionMap.from_maps(list(other.read_maps))
-        other_writes = A.UnionMap.from_maps(list(other.write_maps))
-
-        return A.analyze_dependencies(
-            other_writes, other_reads,
-            self_writes, self_reads,
-        )
+        return node
 
 @dataclass(frozen=True)
 class Store(ATenOp):
+    """
+    Store(dst, src) - Store src value into dst location.
+    dst is typically a Load (with Aff indices), src is the computed value.
+    """
     @staticmethod
-    def new(dst: ATenOp, op: ATenOp):
+    def new(dst: ATenOp, op: ATenOp) -> "Store":
         assert dst.T is not None
         return Store((dst, op), T=ATenOpType(axes=(), dtype=dst.T.dtype))
+
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
-        return cls.T
-# TODO: END or SINK after last STORE
-# - TRANSFER = STORE(Memory(LOCAL), LOAD(Memory(GLOBAL), IDX))
-# - Can have a polyhedron?
-# - Can express loop fusion?
-# 最終的に何がしたい？効率的にUnionAccessRelからFusionがしたい。
-# - IDXにRangeが繋がってくってイメージ？
-# - Fusion = IDXをReshapeすることで共通のRangeを参照すること？
-# - Advanced Symbolic Graph Processing System
-# STORE(AREF(X, IDX(ijk)), AREF(X(IDX(ij))))
-# ↑ Can express reduce, softmax, and so on finally
-# Interop w/ Symbolic+Polyhedral!
-# Real time lowering
-# With the help of Polyhedral Compiler
-# Refactor: Const val is not ATenOp
-# TODO: Update Viz
-# TODO: EndRange --> Runtime
-# TODO: class View
-# [TODO]
-# 1. Fence
-# 2. View
-# - Priority:
-#  - Semanticを強固にする，View/Reduceの取り扱い
-#  - Where is Fuse
-#  - 基本的には，EndRangeがある地点でKernelを分割するイメージ
-#  - EndRangeに対して，Reshape (= Tile) が可能であるかどうかが知りたい
-#  - LexFebce.syncした時点でRaW/WaW/WaRを解析してもいい
-#  - LeafだけをTileして，あとはType Inferenceで自動で再構築したい。
-# e.g.:
-# a = T.Var("A[m n]", float32)
-# P.stmt("...")[a]
+        assert len(args) == 2, "Store takes (dst, src)"
+        assert args[0].T is not None
+        return ATenOpType(axes=(), dtype=args[0].T.dtype)
