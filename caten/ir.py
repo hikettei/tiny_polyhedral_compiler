@@ -350,10 +350,17 @@ class View(ViewOps, ATenOp):
 class Reduce(ATenOp):
     """
     OUT = Reduce(A, B, op=BinaryOps)
+
+    Reduces tensor along specified axes using the binary operation.
+
+    Example:
+        Reduce((A, init), bop=Add, axis=(2,))  # Sum reduction over axis 2
+        Reduce((A, init), bop=Max, axis=(1,))  # Max reduction over axis 1
     """
     bop: type[BinaryOps] = Add
     axis: tuple[int, ...] = ()
     keepdim: bool = False
+
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         tensor = args[0]
@@ -362,7 +369,13 @@ class Reduce(ATenOp):
         new_axes = []
         for dim, i in enumerate(tensor.T.axes):
             if dim in kwargs["axis"]:
-                if kwargs["keepdim"]: new_axes.append(ATenAxis(size=_const(1, index), stride=_const(1, index), offset=_const(0, index), incf=_const(0, index)))
+                if kwargs["keepdim"]:
+                    new_axes.append(ATenAxis(
+                        size=_const(1, index),
+                        stride=_const(1, index),
+                        offset=_const(0, index),
+                        incf=_const(0, index)
+                    ))
             else:
                 new_axes.append(i)
         return ATenOpType(
@@ -370,9 +383,57 @@ class Reduce(ATenOp):
             dtype=tensor.T.dtype,
             offset=tensor.T.offset,
         )
+
     def lower(self) -> ATenOp:
-        x, y = self.args[0].lower(), self.args[1].lower()
-        return EndRange.sync(x, Store.new(x, self.bop((x, y)))) # todo: wait only reduced dims
+        """
+        Lower Reduce to EndRange with proper reduction semantics.
+
+        For sum reduction over axis k:
+            for i in range(M):        # parallel
+                for j in range(N):    # parallel
+                    for k in range(K):# reduction
+                        acc = Add(acc, x[i,j,k])  # expressed via Store(acc, Add(acc, x))
+                    out[i,j] = acc
+
+        The reduction is expressed through the computation graph:
+        - Store(acc, Add(acc, input)) for sum
+        - Store(acc, Max(acc, input)) for max
+        The initialization (acc = 0 or acc = -inf) is implicit in the accumulator memory.
+        """
+        # args[0] is the expanded output view (View.expand(Memory, shape))
+        # args[1] is the input tensor
+        out_view = self.args[0]
+        input_tensor = self.args[1].lower()
+
+        # Get the underlying memory from the output view
+        def find_memory(node: ATenOp) -> Memory:
+            if isinstance(node, Memory):
+                return node
+            if isinstance(node, View):
+                return find_memory(node.args[0])
+            raise ValueError(f"Cannot find Memory in {node}")
+
+        out_memory = find_memory(out_view)
+
+        # Create Load nodes for output (accumulator) and input
+        # The output Load uses the expanded view's type for access pattern
+        out_load = Load.from_tensor(out_memory, T=out_view.T)
+        input_load = Load.from_tensor(input_tensor)
+
+        # The reduction: acc = reduce_op(acc, input)
+        # This is expressed in the computation graph as Store(acc, Add(acc, input))
+        reduction_expr = self.bop((out_load, input_load))
+
+        # Store the result back to output
+        store = Store.new(out_load, reduction_expr)
+
+        # Create EndRange with reduction semantics
+        # reduce_dims indicates which dimensions have loop-carried dependencies
+        return EndRange.sync(
+            out_memory,
+            store,
+            reduce_dims=self.axis,
+        )
 ## == EndRangeOps ============================================================
 ### Array access graph constrainted via only affine functions, sorted by lex order (for symbolic shape)
 @dataclass(frozen=True)
@@ -421,10 +482,29 @@ class Load(ATenOp):
         return ATenOpType(axes=tuple(), dtype=args[0].T.dtype, offset=_const(0, index))
 
     @staticmethod
-    def from_tensor(tensor: ATenOp, T: Optional[ATenOpType] = None) -> Load:
+    def from_tensor(tensor: ATenOp, T: Optional[ATenOpType] = None) -> ATenOp:
+        """
+        Create a Load from a tensor, or return scalar directly if 0-dim.
+
+        Args:
+            tensor: Memory, EndRange, or scalar (Const) to load from
+            T: Optional type override for access pattern
+
+        Returns:
+            Load node for arrays, or the scalar directly for 0-dim
+        """
         dtype = T or tensor.T
         assert dtype is not None
-        if dtype.ndim == 0: return tensor
+
+        # Scalars don't need Load - return directly
+        if dtype.ndim == 0:
+            return tensor
+
+        # For Const scalars being broadcast, we return the const directly
+        # since it will be used element-wise
+        if isinstance(tensor, Const):
+            return tensor
+
         return Load((tensor,) + tuple([axis.aff(dim) for dim, axis in enumerate(dtype.axes)]))
 
     def as_union_map_str(self):
@@ -498,34 +578,67 @@ class Memory(ViewOps, ATenOp):
 @dataclass(frozen=True)
 class EndRange(ViewOps, ATenOp):
     """
+    EndRange marks loop boundaries with explicit parallel/reduction semantics.
+
     ```
-    EndRange(Memory, Store, range1, range2, ...) -> Tensor(Shaped)
+    EndRange(Memory, Store, dims=(0,1,2), reduce_dims=(2,))
     ```
-    Proceeds to the next when range1 == max(range1) and range2 == max(range2) and ...
+
+    Structure:
+    ==========
+    - dims: All iteration dimensions this EndRange closes
+    - reduce_dims: Subset of dims that are reductions (loop-carried dependencies)
+
+    Reduction is expressed through the computation graph:
+    - Initialization: Store(acc, init_val) before the reduction loop
+    - Accumulation: Store(acc, Add(acc, x)) inside the reduction loop
+
+    Example - GEMM with k-reduction:
+    ================================
+    ```
+    for i in range(M):        # parallel (dim 0)
+        for j in range(N):    # parallel (dim 1)
+            Store(acc, 0.0)   # initialization (expressed in graph)
+            for k in range(K):# reduction (dim 2)
+                Store(acc, Add(acc, A[i,k] * B[k,j]))  # accumulation
+            C[i,j] = acc
+    ```
+    Represented as:
+        EndRange(C, Store(acc, Add(acc, mul)), dims=(0,1,2), reduce_dims=(2,))
 
     Fusion Analysis:
     ================
     When two EndRanges are candidates for fusion, we analyze their access patterns:
     - Read/Write access relations are extracted as BasicMaps
     - Dependency analysis computes RAW/WAR/WAW relations
-    - Fusion is legal if dependencies preserve sequential semantics
+    - Reduction dims create loop-carried dependencies that affect fusion legality
     """
     dims: tuple[int, ...] = ()
+    reduce_dims: tuple[int, ...] = ()  # Subset of dims that are reductions
     reads: str = ""
     writes: str = ""
-    # New fields for structured access relations
+    # Structured access relations for fusion analysis
     read_maps: tuple = ()   # tuple[A.BasicMap, ...]
     write_maps: tuple = ()  # tuple[A.BasicMap, ...]
 
     @staticmethod
-    def sync(memory: Memory, store: Store, axis: tuple[int, ...]=()): # rename: sync -> barrier?
+    def sync(
+        memory: Memory,
+        store: Store,
+        reduce_dims: tuple[int, ...] = (),
+    ):
         """
         Synchronize a memory store operation, collecting access patterns for fusion analysis.
 
         This method:
-        1. Explores the IR graph to find all Load operations
+        1. Explores the IR graph to find all Load operations and Range nodes
         2. Extracts their access patterns as BasicMaps
         3. Builds dependency information for fusion decisions
+
+        Args:
+            memory: Output memory buffer
+            store: Store operation containing the computation
+            reduce_dims: Dimensions that are reductions (loop-carried)
         """
         assert memory.T is not None
         seen: dict[int, bool] = {}
@@ -587,6 +700,7 @@ class EndRange(ViewOps, ATenOp):
             (memory, store),
             T=ATenOpType.from_shape(tuple([s.size for s in memory.T.axes]), memory.T.dtype),
             dims=tuple(sorted(tuple(dim2range.keys()))),
+            reduce_dims=reduce_dims,
             reads=reads_union_map,
             writes=writes_union_map,
             read_maps=tuple(read_maps),

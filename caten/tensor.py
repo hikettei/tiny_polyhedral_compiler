@@ -220,6 +220,54 @@ class ATen:
     def sum(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False) -> Tensor:
         return self.reduce(axis=axis, keepdim=keepdim, op=ir.Add)
 
+    def max_reduce(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False) -> Tensor:
+        """Max reduction along axis."""
+        return self.reduce(axis=axis, keepdim=keepdim, op=ir.Max)
+
+    def exp(self) -> Tensor:
+        """Exponential: e^x = 2^(x * log2(e))"""
+        log2_e = math.log2(math.e)
+        return (self * Tensor.const(log2_e, dtype=self.dtype)).exp2()
+
+    def log(self) -> Tensor:
+        """Natural logarithm: ln(x) = log2(x) / log2(e)"""
+        log2_e = math.log2(math.e)
+        return self.log2() / Tensor.const(log2_e, dtype=self.dtype)
+
+    def softmax(self, axis: int = -1) -> Tensor:
+        """
+        Softmax along the specified axis.
+
+        softmax(x, dim) = exp(x - max(x, dim)) / sum(exp(x - max(x, dim)), dim)
+
+        This is numerically stable because we subtract the max before exponentiating.
+
+        The computation is structured as:
+            for i in range(batch):
+                max_val = -inf
+                for j in range(dim):      # reduction
+                    max_val = max(max_val, x[i,j])
+                sum_exp = 0.0
+                for j in range(dim):      # reduction
+                    sum_exp += exp(x[i,j] - max_val)
+                for j in range(dim):      # parallel
+                    out[i,j] = exp(x[i,j] - max_val) / sum_exp
+        """
+        axis = self._resolve_dim(axis)
+
+        # Step 1: Compute max along axis (for numerical stability)
+        max_val = self.max_reduce(axis=axis, keepdim=True)
+
+        # Step 2: Subtract max and compute exp
+        shifted = self - max_val
+        exp_shifted = shifted.exp()
+
+        # Step 3: Sum of exponentials along axis
+        sum_exp = exp_shifted.sum(axis=axis, keepdim=True)
+
+        # Step 4: Normalize
+        return exp_shifted / sum_exp
+
     def matmul(self, other: ATen|TOperand) -> Tensor:
         x: ATen = self
         y: ATen = Tensor(op=ATen.wrap_const(other, x.dtype))
