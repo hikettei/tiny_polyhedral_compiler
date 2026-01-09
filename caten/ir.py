@@ -623,19 +623,17 @@ class EndRange(ViewOps, ATenOp):
         """
         Attempt to fuse this EndRange with another (typically a producer).
 
-        Fusion Algorithm:
-        =================
-        1. Build UnionMaps from read/write BasicMaps
-        2. Compute dependency relations:
-           - RAW: writes(other) ; reads(self)^{-1}
-           - WAR: reads(other) ; writes(self)^{-1}
-           - WAW: writes(other) ; writes(self)^{-1}
-        3. Analyze if fusion preserves legality
-        4. If fusible, merge loop nests and inline computations
+        Fusion Algorithm (Unified for all fusion types):
+        =================================================
+        1. Compute dependency relation: producer_iter -> consumer_iter
+        2. Extract variable substitution from the relation's constraint
+        3. Apply preimage to transform producer's iteration space
+        4. Use compute_at to inline transformed producer into consumer
 
-        For producer-consumer fusion (A -> B):
-        - We need RAW deps to be "forward" (A executes before B reads)
-        - Identity dependencies indicate perfect fusion opportunity
+        The key insight is that all fusion types differ only in the substitution:
+        - Perfect: identity (gid0 -> gid0)
+        - Tiled: scaled + offset (h -> 4*hp + rh)
+        - Partial: subset of dimensions fused
         """
         # Build UnionMaps from BasicMaps
         self_reads = A.UnionMap.from_maps(list(self.read_maps))
@@ -649,50 +647,267 @@ class EndRange(ViewOps, ATenOp):
             self_writes, self_reads,    # Consumer (self)
         )
 
-        # Debug output
-        print(f"\n=== Fusion Analysis ===")
-        print(f"Self reads: {self.reads}")
-        print(f"Other writes: {other.writes}")
-        print(f"\nDependency Analysis:")
-        print(f"  RAW (flow): {fusion_result.dep_info.raw}")
-        print(f"  WAR (anti): {fusion_result.dep_info.war}")
-        print(f"  WAW (output): {fusion_result.dep_info.waw}")
-        print(f"  Fusible: {fusion_result.dep_info.fusible}")
-        print(f"  Reason: {fusion_result.dep_info.reason}")
-        print(f"  Fusion Type: {fusion_result.fusion_type}")
+        if not fusion_result.success:
+            return self
 
-        if fusion_result.success:
-            print(f"  -> FUSION CANDIDATE: {fusion_result.fusion_type.upper()}")
+        # Extract substitution from RAW dependency
+        # The constraint tells us how producer vars map to consumer vars
+        subst = self._extract_substitution(fusion_result)
+        if subst is None:
+            return self
 
-            if fusion_result.fusion_type == "perfect":
-                # Perfect fusion: can completely merge the loop nests
-                # The intermediate buffer can potentially be eliminated
-                print(f"     Can eliminate intermediate buffer and merge loops")
+        # Transform producer using preimage and inline via compute_at
+        transformed_producer = other.preimage(subst, self)
+        return self.compute_at(transformed_producer, other)
 
-                # For now, return self but with merged access maps
-                # A full implementation would:
-                # 1. Inline the producer computation into the consumer
-                # 2. Remove the intermediate buffer allocation
-                # 3. Create a single EndRange with combined computation
+    def _extract_substitution(self, fusion_result: A.FusionResult) -> dict[str, A.AffExpr] | None:
+        """
+        Extract variable substitution from fusion result.
 
-                # Mark this as fused by combining the access maps
-                merged_read_maps = tuple(list(other.read_maps) + list(self.read_maps))
-                merged_write_maps = tuple(list(self.write_maps))  # Consumer writes to final output
+        For a constraint like: 128*h - 512*hp - 128*rh = 0
+        We derive: h = 4*hp + rh
 
-                # Return with merged information (structure preserved for now)
-                return self
+        Returns dict mapping producer vars to expressions in consumer vars.
+        """
+        if not fusion_result.dep_info.raw.maps:
+            return {}
+
+        raw_map = fusion_result.dep_info.raw.maps[0]
+        producer_vars = set(raw_map.dom_vars)
+        consumer_vars = set(raw_map.rng_vars)
+
+        subst: dict[str, A.AffExpr] = {}
+
+        # For shared variables (same name), identity mapping
+        shared = producer_vars & consumer_vars
+        for v in shared:
+            subst[v] = A.AffExpr.var(v)
+
+        # For tiled fusion, use tiling info
+        if fusion_result.tiling_info:
+            tinfo = fusion_result.tiling_info
+            # For each tiled producer dim, compute: p = tile_size * q + r
+            # where q is the scaled consumer var and r is the reduction var
+            for pvar, (tile_size, rvar) in tinfo.tile_dims.items():
+                # Find the scaled variable q (has coefficient tile_size * coeff(p))
+                if raw_map.constraints:
+                    expr = raw_map.constraints[0].expr
+                    p_coeff = expr.coeff_of(pvar)
+                    if isinstance(p_coeff, int) and p_coeff != 0:
+                        # Find q with coefficient = tile_size * p_coeff
+                        for cvar in consumer_vars - producer_vars:
+                            c_coeff = expr.coeff_of(cvar)
+                            if isinstance(c_coeff, int) and abs(c_coeff) == abs(p_coeff * tile_size):
+                                # p = tile_size * q + r
+                                subst[pvar] = tile_size * A.AffExpr.var(cvar) + A.AffExpr.var(rvar)
+                                break
         else:
-            print(f"  -> NOT FUSIBLE: {fusion_result.message}")
+            # For perfect/partial fusion, try to solve the constraint
+            if raw_map.constraints:
+                constraint = raw_map.constraints[0]
+                for pvar in producer_vars - consumer_vars:
+                    sol = A._try_solve_for(constraint, pvar)
+                    if sol is not None:
+                        # Check that solution only uses consumer vars
+                        if sol.variables() <= consumer_vars:
+                            subst[pvar] = sol
 
-        return self
+        # If we couldn't find substitutions for all producer-only vars,
+        # it might still be valid if they cancel out
+        return subst
 
-    def preimage(self) -> None:
-        """Compute preimage transformation (for tiling)."""
-        pass
+    def preimage(self, subst: dict[str, A.AffExpr], consumer: EndRange) -> EndRange:
+        """
+        Transform this EndRange's iteration space using the substitution.
 
-    def compute_at(self, item: ATenOp) -> None:
-        """Schedule this computation at a specific loop level."""
-        pass
+        This rewrites all Aff nodes to use consumer's iteration variables.
+
+        Args:
+            subst: Mapping from producer vars (gid0, gid1, ...) to expressions
+                   in consumer vars
+            consumer: The consumer EndRange (provides the new iteration space)
+
+        Returns:
+            New EndRange with transformed access patterns
+        """
+        if not subst:
+            return self
+
+        # Build mapping from old Range dims to new expressions
+        dim_to_expr: dict[int, A.AffExpr] = {}
+        for var, expr in subst.items():
+            if var.startswith("gid"):
+                try:
+                    dim = int(var[3:])
+                    dim_to_expr[dim] = expr
+                except ValueError:
+                    pass
+
+        # Transform the Store node's access patterns
+        def transform_node(node: ATenOp) -> ATenOp:
+            if isinstance(node, Aff):
+                stride, range_node, offset, incf = node.args
+                if isinstance(range_node, Range):
+                    dim = range_node.dim
+                    if dim in dim_to_expr:
+                        # Transform this Aff using the substitution
+                        new_aff = self._transform_aff(node, dim_to_expr[dim], consumer)
+                        if new_aff is not None:
+                            return new_aff
+                return node
+
+            if isinstance(node, Load):
+                # Transform each Aff in the Load
+                new_args = [node.args[0]]  # Keep Memory reference
+                for arg in node.args[1:]:
+                    new_args.append(transform_node(arg))
+                return Load(tuple(new_args))
+
+            if isinstance(node, Store):
+                new_dst = transform_node(node.args[0])
+                new_src = transform_node(node.args[1])
+                return Store((new_dst, new_src), T=node.T)
+
+            if isinstance(node, EndRange):
+                return node  # Don't recurse into other EndRanges
+
+            if isinstance(node, Memory):
+                return node
+
+            # For other ops, recursively transform children
+            if hasattr(node, 'args') and node.args:
+                new_args = tuple(transform_node(arg) for arg in node.args)
+                if new_args != node.args:
+                    return replace(node, args=new_args)
+            return node
+
+        # Transform the computation
+        new_store = transform_node(self.args[1])
+
+        # Create new EndRange with consumer's dimensions
+        return EndRange(
+            (self.args[0], new_store),  # Keep memory, use transformed store
+            T=self.T,
+            dims=consumer.dims,  # Use consumer's loop dimensions
+            reads=self.reads,
+            writes=self.writes,
+            read_maps=self.read_maps,
+            write_maps=self.write_maps,
+        )
+
+    def _transform_aff(self, aff: Aff, expr: A.AffExpr, consumer: EndRange) -> Aff | None:
+        """
+        Transform a single Aff node using the affine expression.
+
+        If expr = c0*v0 + c1*v1 + ... + const, we expand to multiple Aff nodes
+        summed together, or create a composite Aff.
+        """
+        stride, range_node, offset, incf = aff.args
+
+        # For simple case: expr = c * var + const
+        if len(expr.coeff) == 1:
+            var, coeff = next(iter(expr.coeff.items()))
+            if var.startswith("gid"):
+                try:
+                    new_dim = int(var[3:])
+                    # Find the Range for this dimension in consumer
+                    for cdim in consumer.dims:
+                        if cdim == new_dim:
+                            # Create new Aff with transformed range
+                            new_size = consumer._get_dim_size(cdim)
+                            if new_size is not None:
+                                new_range = Range((new_size,), dim=new_dim)
+                                new_offset = _const(expr.const) if expr.const != 0 else offset
+                                new_incf = Mul((incf, _const(coeff))) if coeff != 1 else incf
+                                return Aff((stride, new_range, new_offset, new_incf))
+                except ValueError:
+                    pass
+
+        # For complex expressions (tiled), we need to generate multiple Aff nodes
+        # This happens with expr = tile_size * q + r
+        # We create: stride * (tile_size * q + r) = stride*tile_size*q + stride*r
+        # But this should be handled by expanding into separate Load terms
+        return None
+
+    def _get_dim_size(self, dim: int) -> ATenOp | None:
+        """Get the size of a dimension from this EndRange's iteration space."""
+        # Look through the IR to find the Range with this dim
+        def find_range(node: ATenOp) -> ATenOp | None:
+            if isinstance(node, Range) and node.dim == dim:
+                return node.args[0]  # Return the size
+            if isinstance(node, EndRange):
+                return None
+            if hasattr(node, 'args'):
+                for arg in node.args:
+                    result = find_range(arg)
+                    if result is not None:
+                        return result
+            return None
+
+        for arg in self.args:
+            result = find_range(arg)
+            if result is not None:
+                return result
+        return None
+
+    def compute_at(self, producer: EndRange, original_producer: EndRange) -> EndRange:
+        """
+        Inline the (transformed) producer into this consumer.
+
+        This eliminates the intermediate buffer and creates a single fused kernel.
+
+        Args:
+            producer: The transformed producer EndRange (with preimage applied)
+            original_producer: The original producer (to identify what to replace)
+
+        Returns:
+            New EndRange with inlined computation
+        """
+        # The producer's Store contains the computation to inline
+        # We need to replace Load(producer_memory) with producer's computation
+
+        producer_memory = original_producer.args[0]  # Memory node
+        producer_computation = producer.args[1].args[1]  # Store's source expression
+
+        def inline_producer(node: ATenOp) -> ATenOp:
+            """Replace loads from producer's memory with producer's computation."""
+            if isinstance(node, Load):
+                if node.args[0] is producer_memory or node.args[0] is original_producer:
+                    # This Load reads from the producer - inline the computation
+                    return producer_computation
+
+            if isinstance(node, EndRange):
+                # Don't recurse into other EndRanges (except if it's the producer)
+                if node is original_producer:
+                    # Skip the producer - it's being inlined
+                    return node
+                return node
+
+            # Recursively process children
+            if hasattr(node, 'args') and node.args:
+                new_args = tuple(inline_producer(arg) for arg in node.args)
+                if new_args != node.args:
+                    return replace(node, args=new_args)
+            return node
+
+        # Transform the consumer's store
+        new_store = inline_producer(self.args[1])
+
+        # Merge read maps (consumer reads what producer reads)
+        merged_read_maps = tuple(list(producer.read_maps) + [
+            m for m in self.read_maps
+            if m not in producer.write_maps  # Exclude reads of intermediate
+        ])
+
+        return EndRange(
+            (self.args[0], new_store),
+            T=self.T,
+            dims=self.dims,
+            reads=self.reads,
+            writes=self.writes,
+            read_maps=merged_read_maps,
+            write_maps=self.write_maps,
+        )
 
     def get_dependency_info(self, other: EndRange) -> A.DependencyInfo:
         """

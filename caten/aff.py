@@ -906,8 +906,15 @@ def detect_strided_relation(raw_map: BasicMap) -> Optional[TiledFusionInfo]:
     - Constraint: h = S*hp + rh, w = S*wp + rw
 
     The constraint `128*h - 512*hp - 128*rh - rw + w - 4*wp = 0` tells us:
-    - Group by coefficients to find matching patterns
-    - Extract tile sizes from coefficient ratios
+    - h (coeff 128) matches rh (coeff -128): same magnitude, offset relation
+    - hp (coeff -512) = -4 * 128: scaling factor S=4
+    - Similarly for w/wp/rw
+
+    Algorithm:
+    1. For each producer var p, find consumer var r with matching coefficient magnitude
+       (indicates same logical dimension, just offset)
+    2. Then find consumer var q where |coeff(q)| = S * |coeff(p)| for some S > 1
+       (indicates scaled/tiled dimension)
 
     Returns TiledFusionInfo if strided pattern detected, None otherwise.
     """
@@ -930,49 +937,59 @@ def detect_strided_relation(raw_map: BasicMap) -> Optional[TiledFusionInfo]:
     if not producer_only or not consumer_only:
         return None  # No striding if no dimension difference
 
-    # Try to find strided patterns:
-    # For each producer var p with coeff c_p, find consumer vars q with coeffs
-    # such that: c_p * p = c_q * q + c_r * r (q is scaled, r is reduction)
+    # Strategy: Match by coefficient magnitude first
+    # For p = S*q + r:
+    # - coeff(p) and coeff(r) have same magnitude (just opposite sign)
+    # - coeff(q) = S * coeff(p) (scaled by tile size)
 
     tile_dims: Dict[str, Tuple[int, str]] = {}
     used_consumer_vars: Set[str] = set()
 
-    for pvar in producer_only:
+    # Sort producer vars by coefficient magnitude (largest first) for determinism
+    # and to ensure we match "major" dimensions first
+    producer_list = sorted(
+        [pv for pv in producer_only if isinstance(expr.coeff_of(pv), int) and expr.coeff_of(pv) != 0],
+        key=lambda v: abs(expr.coeff_of(v)),
+        reverse=True
+    )
+
+    for pvar in producer_list:
         p_coeff = expr.coeff_of(pvar)
-        if not isinstance(p_coeff, int) or p_coeff == 0:
+        p_mag = abs(p_coeff)
+
+        # Step 1: Find reduction var r with matching magnitude
+        best_rvar = None
+        for rvar in consumer_only - used_consumer_vars:
+            r_coeff = expr.coeff_of(rvar)
+            if not isinstance(r_coeff, int):
+                continue
+            if abs(r_coeff) == p_mag:
+                best_rvar = rvar
+                break
+
+        if best_rvar is None:
             continue
 
-        # Look for consumer vars that could form: p = S*q + r
-        # This means: p_coeff*p - S*p_coeff*q - p_coeff*r = 0
-        # Or more generally, find q,r where coefficients satisfy the ratio
-
-        for qvar in consumer_only - used_consumer_vars:
+        # Step 2: Find scaled var q where |coeff(q)| = S * p_mag for some S > 1
+        best_qvar = None
+        best_tile_size = 0
+        for qvar in consumer_only - used_consumer_vars - {best_rvar}:
             q_coeff = expr.coeff_of(qvar)
             if not isinstance(q_coeff, int) or q_coeff == 0:
                 continue
 
-            # q_coeff should be -S * p_coeff for some integer S
-            # So S = -q_coeff / p_coeff
-            if q_coeff % p_coeff != 0:
-                continue
+            q_mag = abs(q_coeff)
+            if q_mag > p_mag and q_mag % p_mag == 0:
+                tile_size = q_mag // p_mag
+                if tile_size > best_tile_size:
+                    best_qvar = qvar
+                    best_tile_size = tile_size
 
-            tile_size = abs(q_coeff // p_coeff)
-            if tile_size <= 1:
-                continue  # Not a meaningful tile
-
-            # Now find the reduction variable r with coeff matching p_coeff
-            for rvar in consumer_only - used_consumer_vars - {qvar}:
-                r_coeff = expr.coeff_of(rvar)
-                if not isinstance(r_coeff, int):
-                    continue
-
-                # r_coeff should equal -p_coeff (since p - S*q - r = 0)
-                if r_coeff == -p_coeff or r_coeff == p_coeff:
-                    # Found a strided pattern!
-                    tile_dims[pvar] = (tile_size, rvar)
-                    used_consumer_vars.add(qvar)
-                    used_consumer_vars.add(rvar)
-                    break
+        if best_qvar is not None and best_tile_size > 1:
+            # Found a valid strided pattern
+            tile_dims[pvar] = (best_tile_size, best_rvar)
+            used_consumer_vars.add(best_qvar)
+            used_consumer_vars.add(best_rvar)
 
     if tile_dims:
         return TiledFusionInfo(

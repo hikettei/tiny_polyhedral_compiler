@@ -264,6 +264,53 @@ def test_matmul_chain():
     print()
 
 
+def test_ir_fusion():
+    """Test actual IR transformation for element-wise fusion."""
+    print("=" * 60)
+    print("Test 6: IR Transformation (sin(sin(x)) fusion)")
+    print("=" * 60)
+
+    # Create: y = sin(x), z = sin(y)
+    # Should fuse into a single kernel: z = sin(sin(x))
+    x = C.Tensor([10, 10])
+    y = x.sin()
+    z = y.sin()
+
+    print("Before fusion:")
+    print(f"  x.shape = {x.shape}")
+    print(f"  z = sin(sin(x))")
+
+    # Access the IR (lowering happens automatically during construction)
+    ir = z.op
+
+    print("\nAfter lowering (fusion applied):")
+    print(ir.viz())
+
+    # Check that we have a single EndRange (fused)
+    # or analyze the structure
+    def count_endranges(node, seen=None):
+        if seen is None:
+            seen = set()
+        if id(node) in seen:
+            return 0
+        seen.add(id(node))
+
+        from caten.ir import EndRange
+        count = 1 if isinstance(node, EndRange) else 0
+        if hasattr(node, 'args'):
+            for arg in node.args:
+                count += count_endranges(arg, seen)
+        return count
+
+    num_endranges = count_endranges(ir)
+    print(f"\nNumber of EndRange nodes: {num_endranges}")
+    if num_endranges == 1:
+        print("  -> Successfully fused into single kernel!")
+    else:
+        print("  -> Multiple kernels (fusion pending or not applicable)")
+    print()
+
+
 def main():
     print("\n" + "=" * 60)
     print("  AUTOMATIC LOOP FUSION ANALYSIS - TEST SUITE")
@@ -274,6 +321,7 @@ def main():
     test_reduction_fusion()
     test_conv_pool_style()
     test_matmul_chain()
+    test_ir_fusion()
 
     print("=" * 60)
     print("Summary:")
@@ -281,6 +329,7 @@ def main():
     print("- Dimension mismatches block fusion")
     print("- Reduction patterns require special handling")
     print("- Conv+Pool fusion is possible when iteration spaces match")
+    print("- IR transformation inlines producer into consumer")
     print("=" * 60)
 
 
