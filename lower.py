@@ -7,8 +7,9 @@ Tests for the unified fusion framework:
 3. Basic AccessMap functionality
 """
 import caten as C
+import caten.ir as ir
 
-graph = C.Tensor([10, 10]).reshape(5, 2, 5, 2).sin().reshape(5, 2, 5, 3).sin()
+graph = C.Tensor([10, 10]).reshape(5, 2, 5, 2).sin().reshape(10, 10).sin()
 
 print("Reshape+Reshape")
 print(graph.op.viz())
