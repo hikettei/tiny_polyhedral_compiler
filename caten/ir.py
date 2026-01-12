@@ -28,7 +28,7 @@ class ATenOpMetaclass(type):
         if isinstance(x, dict):
             return tuple(sorted((k, ATenOpMetaclass._freeze(v)) for k, v in x.items()))
         return x
-    def __call__(cls, args: tuple[ATenOp, ...] | list[ATenOp], T: "ATenOpType | None" = None, **kwargs: Any) -> ATenOp:
+    def __call__(cls, args: tuple[ATenOp, ...] | list[ATenOp], T: "tuple[ATenOpType|None, ...]" = (None), **kwargs: Any) -> ATenOp:
         T = cls.verify(tuple(args), T, **kwargs) # type: ignore
         wret = ATenOpMetaclass.cache.get(key:=(cls, tuple(args), ATenOpMetaclass._freeze(T), ATenOpMetaclass._freeze(kwargs)), None)
         if wret is not None and (ret:=wret()) is not None: return ret.simplify()
@@ -175,7 +175,7 @@ class TensorOps():
         
         Note: In Unary/Binary/TernaryOps, A, B, C produce the equivalent band space, because shapes are equal.
         """
-        if all([x.ndim == 0 for x in self.args]) is True:
+        if all([x.T[0].ndim == 0 for x in self.args]) is True:
             return (self,) # the graph is lowered, returning myself
         else:
             # we can use: all x.ndim, shape, are equal here.
@@ -186,7 +186,7 @@ class TensorOps():
                 assert len(lowered) == 1, "Tensor graph should not produce multiple outputs!"
                 args.append(Load.from_tensor(lowered[0], band))
             # Note: out is keep viewed? or contiguous?
-            r0 = replace(self, args=tuple(new_args)) # note: __call__ will update the output
+            r0 = replace(self, args=tuple(args)) # note: __call__ will update the output
             assert r0.T[0] is not None and r0.T[0].ndim == 0
             out = Memory.defglobal([arg.size for arg in self.T[0].axes], self.T[0].dtype, tmp=True)
             # Run r0 over band.all_dimensions(), with access relations defined by Load.from_tensor
@@ -366,7 +366,7 @@ class View(ViewOps, ATenOp):
     @staticmethod
     def reshape(tensor: ATenOp, shape: tuple[ATenOp, ...]) -> View:
         assert tensor.T[0] is not None
-        return View((tensor,), T=(ATenOpType.from_shape(shape, tensor.T[0].dtype,)))
+        return View((tensor,), T=(ATenOpType.from_shape(shape, tensor.T[0].dtype,),))
 
     @staticmethod
     def permute(tensor: ATenOp, order: tuple[int, ...]) -> View:
@@ -447,7 +447,7 @@ class Reduce(MetaOps, ATenOp):
                     ))
             else:
                 new_axes.append(i)
-        return (ATenOpType(axes=tuple(new_axes), dtype=tensor.T.dtype, offset=tensor.T.offset,),)
+        return (ATenOpType(axes=tuple(new_axes), dtype=tensor.T[0].dtype, offset=tensor.T[0].offset,),)
 
     def lower(self) -> tuple[ATenOp, ...]:
         assert len(self.args) == 2
@@ -458,147 +458,10 @@ class Reduce(MetaOps, ATenOp):
         # initially reduce is not fused.
         reduced = self.bop((a, b)) if self.bop is not None else b
         instance = Exec.schedule(band.all_dimensions(), (a, ), Store.new(a, reduced))
-        return (MemoryOf((instance,), nth=0, T=(out.T[0],)),)
+        return (MemoryOf((instance,), nth=0, T=(instance.T[0],)),)
 
 @dataclass(frozen=True)
 class Einsum(MetaOps, ATenOp): pass
-
-# TODO: Conv2D as MetaOps is not elegant. Remove the implementation to tensor.py!
-@dataclass(frozen=True)
-class Conv2D(MetaOps, ATenOp):
-    """
-    Conv2D(X, W) - 2D Convolution operation.
-
-    X: [N, Cin, H, W] - Input tensor
-    W: [Cout, Cin, KH, KW] - Weight tensor
-
-    Y[n, cout, oh, ow] = sum_{cin,kh,kw} X[n, cin, oh*sh+kh, ow*sw+kw] * W[cout, cin, kh, kw]
-    """
-    kernel_size: tuple[int, int] = (3, 3)
-    stride: tuple[int, int] = (1, 1)
-    @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
-        assert len(args) == 2, "Conv2D takes (input, weight)"
-        assert args[0].T is not None and args[1].T is not None
-        return T if T is not None else ATenOpType(axes=(), dtype=args[0].T.dtype)
-
-    def lower(self) -> ATenOp:
-        """
-        Lower Conv2D to nested Sync with unified Band.
-        
-        Band structure: [N, Cout, H_out, W_out, Cin, KH, KW]
-        - dims 0-3: output (parallel)
-        - dims 4-6: reduction
-        
-        All Loads use Aff nodes referencing this unified Band.
-        """
-        input_tensor = self.args[0].lower()
-        weight_tensor = self.args[1].lower()
-
-        input_T = input_tensor.T
-        weight_T = weight_tensor.T
-        assert input_T is not None and weight_T is not None
-        assert self.T is not None
-
-        # Extract dimensions
-        N = input_T.axes[0].size
-        C_in = input_T.axes[1].size
-        H = input_T.axes[2].size
-        W = input_T.axes[3].size
-        C_out = weight_T.axes[0].size
-        KH, KW = self.kernel_size
-        sh, sw = self.stride
-
-        H_out = self.T.axes[2].size
-        W_out = self.T.axes[3].size
-
-        # Create output memory and accumulator
-        out_memory = Memory.defglobal([N, C_out, H_out, W_out], self.T.dtype, tmp=True)
-        acc = Memory.deflocal((), self.T.dtype)
-
-        # Build unified Band: [N, Cout, H_out, W_out, Cin, KH, KW]
-        all_ranges = [
-            Range((N,)),           # dim 0: N
-            Range((C_out,)),       # dim 1: Cout
-            Range((H_out,)),       # dim 2: H_out (oh)
-            Range((W_out,)),       # dim 3: W_out (ow)
-            Range((_const(C_in),)), # dim 4: Cin
-            Range((_const(KH),)),  # dim 5: KH (kh)
-            Range((_const(KW),)),  # dim 6: KW (kw)
-        ]
-
-        # Band Definition
-        domain = Band(tuple(all_ranges))
-
-        # Create Dim references for all dimensions
-        dims = tuple(Dim((domain,), dim=i) for i in range(7))
-        dim_n, dim_cout, dim_oh, dim_ow, dim_cin, dim_kh, dim_kw = dims
-
-        # Output dims (parallel): 0-3
-        out_dims = dims[:4]
-        # Reduction dims: 4-6
-        reduce_dims = dims[4:]
-
-        # Input strides: [Cin*H*W, H*W, W, 1]
-        stride_n = Mul((_const(C_in), Mul((_const(H), _const(W)))))
-        stride_cin = Mul((_const(H), _const(W)))
-        stride_h = _const(W)
-        stride_w = _const(1)
-
-        # Input Load: X[n, cin, oh*sh+kh, ow*sw+kw]
-        # Using Aff nodes: addr = sum of (stride * dim) contributions
-        input_affs = [
-            Aff((stride_n, dim_n, _const(0), _const(1))),           # n contribution
-            Aff((stride_cin, dim_cin, _const(0), _const(1))),       # cin contribution
-            Aff((Mul((stride_h, _const(sh))), dim_oh, _const(0), _const(1))),  # oh*sh contribution
-            Aff((stride_h, dim_kh, _const(0), _const(1))),          # kh contribution
-            Aff((_const(sw), dim_ow, _const(0), _const(1))),        # ow*sw contribution
-            Aff((stride_w, dim_kw, _const(0), _const(1))),          # kw contribution
-        ]
-        input_load = Load((input_tensor,) + tuple(input_affs), T=ATenOpType(axes=(), dtype=input_T.dtype))
-
-        # Weight strides: [Cin*KH*KW, KH*KW, KW, 1]
-        weight_stride_cout = Mul((_const(C_in), Mul((_const(KH), _const(KW)))))
-        weight_stride_cin = Mul((_const(KH), _const(KW)))
-        weight_stride_kh = _const(KW)
-        weight_stride_kw = _const(1)
-
-        # Weight Load: W[cout, cin, kh, kw]
-        weight_affs = [
-            Aff((weight_stride_cout, dim_cout, _const(0), _const(1))),  # cout contribution
-            Aff((weight_stride_cin, dim_cin, _const(0), _const(1))),    # cin contribution
-            Aff((weight_stride_kh, dim_kh, _const(0), _const(1))),      # kh contribution
-            Aff((weight_stride_kw, dim_kw, _const(0), _const(1))),      # kw contribution
-        ]
-        weight_load = Load((weight_tensor,) + tuple(weight_affs), T=ATenOpType(axes=(), dtype=weight_T.dtype))
-
-        # Inner reduction: acc += input * weight
-        acc_load = Load.from_tensor(acc)
-        inner_store = Store.new(acc_load, Add((acc_load, Mul((input_load, weight_load)))))
-
-        # Inner Sync for reduction loop (dims 4-6)
-        inner_sync = Sync(
-            reduce_dims + (acc, inner_store),
-            T=ATenOpType(axes=(), dtype=self.T.dtype),
-            n_dims=3,
-        )
-
-        # Output Load using Aff nodes with unified domain
-        out_stride_n = Mul((_const(C_out), Mul((H_out, W_out))))
-        out_stride_cout = Mul((H_out, W_out))
-        out_stride_oh = W_out
-        out_stride_ow = _const(1)
-        out_affs = [
-            Aff((out_stride_n, dim_n, _const(0), _const(1))),
-            Aff((out_stride_cout, dim_cout, _const(0), _const(1))),
-            Aff((out_stride_oh, dim_oh, _const(0), _const(1))),
-            Aff((out_stride_ow, dim_ow, _const(0), _const(1))),
-        ]
-        out_load = Load((out_memory,) + tuple(out_affs), T=ATenOpType(axes=(), dtype=self.T.dtype))
-        outer_store = Store.new(out_load, inner_sync)
-
-        # Outer Sync (dims 0-3)
-        return Sync(out_dims + (out_memory, outer_store), T=self.T, n_dims=4)
 
 ## == ScheduleOps = ============================================================
 class ScheduleOps():
@@ -648,7 +511,7 @@ class Band(ScheduleOps, ATenOp):
     @property
     def ranges(self) -> tuple[Range, ...]: return tuple(r for r in self.args)
     def all_dimensions(self) -> tuple[ATenOp, ...]:
-        return tuple([Dim((r,), dim=i) for i,r in enumerate(self.ranges)])
+        return tuple([Dim((self,), dim=i) for i in range(self.ndim)])
     @property
     def shape(self) -> tuple[ATenOp, ...]: return tuple(r.size for r in self.ranges)
     # TODO:
@@ -733,8 +596,7 @@ class AccessMap(ScheduleOps, ATenOp):
               Aff(N, Dim(d, dim=0), 1)
               Aff(1, Dim(d, dim=1), 1)))
     """
-    n_ranges: int = 0
-
+    n_ranges: int=0
     @property
     def ranges(self) -> tuple[ATenOp, ...]: return self.args[:self.n_ranges]
     @property
@@ -754,8 +616,8 @@ class AccessMap(ScheduleOps, ATenOp):
         
         # Verify first n_ranges are Range nodes
         for i in range(n_ranges):
-            assert isinstance(args[i], Range), \
-                f"AccessMap: arg[{i}] should be Range, got {type(args[i]).__name__}"
+            assert isinstance(args[i], Dim), \
+                f"AccessMap: arg[{i}] should be Dim, got {type(args[i]).__name__}"
         
         # Verify remaining are scalar index expressions (Aff or arithmetic)
         for i in range(n_ranges, len(args)):
@@ -767,7 +629,7 @@ class AccessMap(ScheduleOps, ATenOp):
     @staticmethod
     def from_tensor_type(band: Band, T: ATenOpType) -> "AccessMap":
         if T.ndim == 0: return AccessMap((), T=(ATenOpType(axes=(), dtype=T.dtype),), n_ranges=0)
-        affs: list[Aff] = [axis.aff(domain, dim) for dim, axis in enumerate(T.axes)]
+        affs: list[Aff] = [axis.aff(band, dim) for dim, axis in enumerate(T.axes)]
         return AccessMap(
             band.all_dimensions() + tuple(affs),
             T=(ATenOpType(axes=(), dtype=T.dtype),),
@@ -856,8 +718,8 @@ class Load(ScheduleOps, ATenOp):
         if dtype.ndim == 0: return tensor
         if isinstance(tensor, Const): return tensor
         # Create Affs with Dim references
-        AccessMap.from_tensor(band, tensor)
-        return Load((tensor,) + tuple([axis.aff(band, dim) for dim in range(dtype.ndim)]))
+        am = AccessMap.from_tensor_type(band, dtype)
+        return Load((tensor, am))
 
     def get_access_map(self) -> "AccessMap":
         """
@@ -881,12 +743,12 @@ class Load(ScheduleOps, ATenOp):
         
         if domain is None:
             # Fallback: no proper Aff nodes found
-            return AccessMap((), T=ATenOpType(axes=(), dtype=self.args[0].T.dtype if self.args[0].T else index), n_ranges=0)
+            return AccessMap((), T=(ATenOpType(axes=(), dtype=self.args[0].T.dtype if self.args[0].T else index),), n_ranges=0)
         
         ranges = list(domain.ranges)
         return AccessMap(
             tuple(ranges) + tuple(affs),
-            T=ATenOpType(axes=(), dtype=self.args[0].T.dtype if self.args[0].T else index),
+            T=(ATenOpType(axes=(), dtype=self.args[0].T.dtype if self.args[0].T else index),),
             n_ranges=len(ranges)
         )
 
@@ -898,14 +760,14 @@ class Store(ScheduleOps, ATenOp):
     """
     @staticmethod
     def new(dst: ATenOp, op: ATenOp) -> "Store":
-        assert dst.T is not None
-        return Store((dst, op), T=ATenOpType(axes=(), dtype=dst.T.dtype))
+        assert dst.T[0] is not None
+        return Store((dst, op), T=(ATenOpType(axes=(), dtype=dst.T[0].dtype),))
 
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 2, "Store takes (dst, src)"
         assert args[0].T[0] is not None and args[1].T[0] is not None
-        assert args[0].ndim == 0 and args[1].ndim == 0, f"Store can only take scalar values!"
+        assert args[0].T[0].ndim == 0 and args[1].T[0].ndim == 0, f"Store can only take scalar values!"
         return (ATenOpType(axes=(), dtype=args[0].T[0].dtype), )
 ## ==========================================================================
 ## Memory Allocation Model
@@ -934,8 +796,8 @@ class MemoryOf(ScheduleOps, ViewOps, ATenOp):
         assert isinstance(args[0], Exec), f"MemoryOf arg must be Exec, got {type(args[0]).__name__}"
         assert "nth" in kwargs, "MemoryOf requires nth argument."
         nth = kwargs.get("nth")
-        assert 0 <= dim < 1 + len(args[0].T_rest), f"MemoryOf(Exec, nth={nth}) out of range for Exec with {1+len(args[0].T_rest)} outputs"
-        return (((args[0].T,) + args[0].T_rest)[nth],)
+        assert 0 <= nth < len(args[0].T), f"MemoryOf(Exec, nth={nth}) out of range for Exec with {1+len(args[0].T_rest)} outputs"
+        return (args[0].T[nth],)
 ## Execute Instance
 @dataclass(frozen=True)
 class Exec(ScheduleOps, ViewOps, ATenOp):
@@ -998,8 +860,6 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
     """
     n_dims: int = 0
     n_out: int = 0
-    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
-        pass
     
     @property
     def dim_nodes(self) -> tuple[Dim, ...]:
@@ -1045,7 +905,7 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
         ranges = tuple(r for r in self.ranges if isinstance(r, Range))
         return AccessMap(
             ranges,
-            T=ATenOpType(axes=(), dtype=index),
+            T=(ATenOpType(axes=(), dtype=index),),
             n_ranges=len(ranges)
         )
 
@@ -1112,8 +972,9 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
 
     @staticmethod
     def schedule(dims: tuple[Dim, ...], outs: tuple[ATenOp, ...], op: ATenOp) -> Exec:
-        instance = Exec(dims + outs + tuple(op), n_dims=len(dims), n_outs=len(outs))
+        instance = Exec(dims + outs + tuple([op]), n_dims=len(dims), n_out=len(outs), T=tuple([o.T[0] for o in outs]))
         # TODO: FUsion
+        return instance
     
     @staticmethod
     def sync(

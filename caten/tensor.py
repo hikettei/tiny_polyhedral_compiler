@@ -26,7 +26,7 @@ class ATenSpec:
 class ATen:
     op: ir.ATenOp # ATen is just a wrapper for ATenOp
     def __init__(self, *args: Any, op: Union[None, ir.ATenOp]=None, dtype:DType=default_float):
-        self.op = (op or ir.Memory.defglobal(tuple(args[0]), dtype)).lower()
+        self.op = (op or ir.Memory.defglobal(tuple(args[0]), dtype)).lower()[0]
     @staticmethod
     def register(device_id: str, cls: Any) -> None:
         DEVICE_TO_TENSOR[device_id] = cls
@@ -215,8 +215,8 @@ class ATen:
                 out_shape.append(self.op.T[0].axes[i].size)
         out = ir.Memory.defglobal(reduce_axes, dtype=self.op.T[0].dtype, tmp=True)
         out = ir.View.expand(out, tuple([arg.size for arg in self.op.T[0].axes]))
-        out = ir.Reduce((out, ir._const(initial_value, self.dtype)), keepdims=False, axes=tuple(), bop=None) # out = initial_value
-        return self.forward(ir.Reduce, (out, self.op, ir._const(initial_value, dtype=self.dtype)), bop=op, axis=axes, keepdim=keepdim)
+        out = ir.Reduce((out, ir._const(initial_value, self.dtype)), keepdim=False, axis=tuple(), bop=None) # out = initial_value
+        return self.forward(ir.Reduce, (out, self.op), bop=op, axis=axes, keepdim=keepdim)
 
     def sum(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False) -> Tensor:
         return self._reduce(axis=axis, keepdim=keepdim, op=ir.Add, initial_value=0.0)
@@ -365,6 +365,7 @@ class ATen:
             # For non-contiguous, would need explicit gather
             
             # Simplified: unfold via reshape when KH=KW=1
+            
             if KH == 1 and KW == 1:
                 # 1x1 conv is just pointwise: [N, Cin, H, W] x [Cout, Cin, 1, 1]
                 # -> [N, 1, Cin, H, W] x [1, Cout, Cin, 1, 1] -> sum over Cin
@@ -374,12 +375,7 @@ class ATen:
             else:
                 # General conv2d: build IR directly with polyhedral access pattern
                 # Y[n, cout, oh, ow] = sum_{cin,kh,kw} X[n, cin, oh+kh, ow+kw] * W[cout, cin, kh, kw]
-                return Tensor(op=ir.Conv2D(
-                    (self.op, weight.op),
-                    kernel_size=(KH, KW),
-                    stride=(sh, sw),
-                    T=(ir.ATenOpType.from_shape((N, C_out, H_out, W_out), self.dtype),)
-                ))
+                raise NotImplementedError(f"")
         else:
             raise NotImplementedError(f"Strided conv (stride={stride}) not implemented yet")
 
