@@ -387,9 +387,11 @@ class View(ViewOps, ATenOp):
         tmp = Memory.defglobal([arg.size for arg in self.T.axes], self.T.dtype, tmp=True)
         return Sync.sync(tmp, Store.new(Load.from_tensor(tmp), Load.from_tensor(self.args[0], T=self.T)))
 
-# TODO: IntroduceMeta
+# MetaOps: Something like a macro in CatenIR
+class MetaOps(): pass
+
 @dataclass(frozen=True)
-class Reduce(ATenOp): # TODO: MetaOps
+class Reduce(MetaOps, ATenOp):
     """
     OUT = Reduce(A, B, op=BinaryOps)
 
@@ -427,32 +429,6 @@ class Reduce(ATenOp): # TODO: MetaOps
         )
 
     def lower(self) -> ATenOp:
-        """
-        Lower Reduce to nested Sync with proper reduction semantics.
-
-        For sum reduction over axis k:
-        ```c
-        for (int i = 0; i < M; i++) {
-            for (int j = 0; j < N; j++) {
-                float acc = 0.0f;
-                for (int k = 0; k < K; k++) {
-                    acc += x[i,j,k];
-                }
-                out[i,j] = acc;
-            }
-        }
-        ```
-
-        Represented as:
-            Sync(
-                Range(M, dim=0), Range(N, dim=1),
-                out,
-                Store(Load(out, ...),
-                    Sync(
-                        Range(K, dim=2),
-                        acc,  # Memory(0.0)
-                        Store(Load(acc), Add(Load(acc), x[i,j,k])))))
-        """
         # args[1] is the input tensor
         input_tensor = self.args[1].lower()
         input_T = input_tensor.T
@@ -463,7 +439,7 @@ class Reduce(ATenOp): # TODO: MetaOps
         out_shape = [axis.size for axis in self.T.axes]
         out_memory = Memory.defglobal(out_shape, dtype=self.T.dtype, tmp=True)
 
-        # Determine initial value based on operation
+        # TODO: This should be given as a tensor as args. do not hardcode
         if self.bop == Add:
             init_val = 0.0
         elif self.bop == Max:
@@ -510,9 +486,14 @@ class Reduce(ATenOp): # TODO: MetaOps
         # Build outer Sync for parallel dimensions
         return Sync.sync(out_memory, outer_store)
 
-# TODO: this should have been implemenented in tensor.py
 @dataclass(frozen=True)
-class Conv2D(ATenOp):
+class Einsum(MetaOps, ATenOp):
+    # TODO
+    pass
+
+# TODO: Conv2D as MetaOps is not elegant. Remove the implementation to tensor.py!
+@dataclass(frozen=True)
+class Conv2D(MetaOps, ATenOp):
     """
     Conv2D(X, W) - 2D Convolution operation.
 
@@ -523,7 +504,6 @@ class Conv2D(ATenOp):
     """
     kernel_size: tuple[int, int] = (3, 3)
     stride: tuple[int, int] = (1, 1)
-
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) == 2, "Conv2D takes (input, weight)"
