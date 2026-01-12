@@ -17,12 +17,12 @@ class CPUTensor(C.TensorImpl):
     @staticmethod
     def render(op: Any) -> str:
         """
-        Render IR to C code. Clean implementation using new EndRange structure.
+        Render IR to C code. Clean implementation using new Sync structure.
 
-        EndRange structure: args = (ranges..., output, body)
+        Sync structure: args = (ranges..., output, body)
         - .ranges: Range nodes defining iteration space
         - .output: Memory node for output array
-        - .body: Store node with computation (or nested EndRange for reduction)
+        - .body: Store node with computation (or nested Sync for reduction)
         """
         decls: list[str] = []
         lines: list[str] = []
@@ -150,12 +150,12 @@ class CPUTensor(C.TensorImpl):
                     lines.append(f"{ind()}float {v} = sqrtf({a});")
                     return v
 
-                case ir.EndRange():
+                case ir.Sync():
                     if nid in rendered:
                         return var_map.get(nid, "/* err */")
                     rendered.add(nid)
 
-                    # Render data source EndRanges as separate kernels first
+                    # Render data source Syncs as separate kernels first
                     for src in node.load_sources():
                         emit(src)
 
@@ -177,7 +177,7 @@ class CPUTensor(C.TensorImpl):
                             lines.append(f"{ind()}for (int i{rng.dim} = 0; i{rng.dim} < {size}; i{rng.dim}++) {{")
                             indent += 1
 
-                    # Emit body (inline EndRanges like reductions are rendered here)
+                    # Emit body (inline Syncs like reductions are rendered here)
                     emit(node.body)
 
                     # Close loops
