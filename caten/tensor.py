@@ -49,7 +49,7 @@ class ATen:
             assert obj.dtype == dtype # todo: decent error msg
             return obj.op
         elif isinstance(obj, ir.ATenOp):
-            assert obj.T is not None and obj.T.dtype == dtype # todo: decent error msg
+            assert obj.T[0] is not None and obj.T[0].dtype == dtype # todo: decent error msg
             return obj
         else:
             return ATen.const(obj, dtype=dtype)
@@ -68,16 +68,16 @@ class ATen:
     
     @property
     def shape(self) -> tuple[ir.ATenOp, ...]:
-        assert self.op.T is not None
-        return tuple([x.size for x in self.op.T.axes])
+        assert self.op.T[0] is not None
+        return tuple([x.size for x in self.op.T[0].axes])
     @property
     def strides(self) -> tuple[ir.ATenOp, ...]:
-        assert self.op.T is not None
-        return tuple([x.stride for x in self.op.T.axes])
+        assert self.op.T[0] is not None
+        return tuple([x.stride for x in self.op.T[0].axes])
     @property
     def dtype(self) -> DType:
-        assert self.op.T is not None
-        return self.op.T.dtype
+        assert self.op.T[0] is not None
+        return self.op.T[0].dtype
     @property
     def ndim(self) -> int: return len(self.shape)
     def _resolve_dim(self, dim: int, *, extra: bool = False) -> int:
@@ -203,7 +203,7 @@ class ATen:
 
     def reduce(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False, op: Callable = ir.Add) -> Tensor:
         # TODO: initial elements
-        assert self.op.T is not None
+        assert self.op.T[0] is not None
         axes = tuple(range(self.ndim)) if axis is None else (tuple(axis) if isinstance(axis, (tuple, list)) else (axis,))
         axes = tuple(self._resolve_dim(x) for x in axes)
         reduce_axes, out_shape = [], []
@@ -211,10 +211,10 @@ class ATen:
             if i in axes:
                 reduce_axes.append(1)
             else:
-                reduce_axes.append(self.op.T.axes[i].size)
-                out_shape.append(self.op.T.axes[i].size)
-        out = ir.Memory.defglobal(reduce_axes, dtype=self.op.T.dtype, tmp=True)
-        out = ir.View.expand(out, tuple([arg.size for arg in self.op.T.axes]))
+                reduce_axes.append(self.op.T[0].axes[i].size)
+                out_shape.append(self.op.T[0].axes[i].size)
+        out = ir.Memory.defglobal(reduce_axes, dtype=self.op.T[0].dtype, tmp=True)
+        out = ir.View.expand(out, tuple([arg.size for arg in self.op.T[0].axes]))
         return self.forward(ir.Reduce, (out, self.op), bop=op, axis=axes, keepdim=keepdim)
         
     def sum(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False) -> Tensor:
@@ -377,7 +377,7 @@ class ATen:
                     (self.op, weight.op),
                     kernel_size=(KH, KW),
                     stride=(sh, sw),
-                    T=ir.ATenOpType.from_shape((N, C_out, H_out, W_out), self.dtype)
+                    T=tuple(ir.ATenOpType.from_shape((N, C_out, H_out, W_out), self.dtype))
                 ))
         else:
             raise NotImplementedError(f"Strided conv (stride={stride}) not implemented yet")

@@ -41,14 +41,14 @@ class ATenAxis():
     stride: ATenOp
     offset: ATenOp
     incf: ATenOp
-    
-    def range(self) -> "Range":
-        """Create a Range for this axis's size."""
-        return Range((self.size,))
-    
-    def aff(self, domain: "Band", dim: int) -> "Aff":
-        """Create an Aff for this axis within the given Band."""
-        return Aff((self.stride, Dim((domain,), dim=dim), self.offset, self.incf))
+    def range(self) -> "Range": return Range((self.size,))
+    def aff(self, band: "Band", dim: int) -> "Aff":
+        assert 0 <= dim < len(band.args), f"Band"
+        return Aff((self.stride, Dim((band,), dim=dim), self.offset, self.incf))
+    def index(self, band: "Band", dim: int) -> ATenOp:
+        assert 0 <= dim < len(band.args), f"Band"
+        # TODO: Add(Mul(...))
+        raise NotImplementedError("Not ready index")
 
 def _const(val: Any, dtype: DType=index) -> ATenOp:
     if isinstance(val, Const): return val
@@ -59,19 +59,20 @@ class ATenOpType():
     axes: tuple[ATenAxis, ...]
     dtype: DType
     offset: Union[ATenOp, None] = None
-    def index(self, indices: tuple[ATenOp, ...]) -> Any:
-        assert self.ndim == len(indices)
-        total = itertools.accumulate([b.index(a) for (a, b) in zip(indices, self.axes, strict=True)], lambda a, b: Add((a, b)), initial=Const.new(0, index)) # type: ignore
+    def band(self) -> "Band": return Band(tuple([x.range() for x in self.axes]))
+    def index(self, band: Band) -> Any:
+        assert self.ndim == len(band.args)
+        total = itertools.accumulate([b.index(band, a) for (a, b) in zip(range(0, self.ndim), self.axes, strict=True)], lambda a, b: Add((a, b)), initial=Const.new(0, index)) # type: ignore
         if self.offset: total = Add((total, self.offset)) # type: ignore
         return total
     @property
     def ndim(self) -> int: return len(self.axes)
     @staticmethod
     def from_shape(shape: tuple[Any, ...], dtype: DType) -> ATenOpType:
-        if len(shape) == 0:
-            return ATenOpType(axes=(), dtype=dtype)
+        if len(shape) == 0: return ATenOpType(axes=(), dtype=dtype)
         def _mul(a: Any, b: Any) -> Any: return Mul((_const(a), _const(b)))
         strides = tuple(itertools.accumulate(reversed(shape[1:]), _mul, initial=_const(1)))[::-1]
+        # TODO: This design is OK?
         # Size-1 dimensions get stride=0 for broadcast semantics
         axes = []
         for size, stride in zip(shape, strides, strict=True):
@@ -87,21 +88,22 @@ class ATenOpType():
 @dataclass(frozen=True)
 class ATenOp(metaclass=ATenOpMetaclass):
     args: tuple[ATenOp, ...]
-    T: Union[ATenOpType, None] = None # this should be provided via T=... option, or inferred via verify method.
-    T_rest: tuple[Union[ATenOpType, None], ...] = () # rest of outputs
+    T: tuple[Union[ATenOpType, None], ...] = () # this should be provided via T=... option, or inferred via verify method.
     # TODO:
     # expected_users
     @property
     def predecessors(self) -> tuple[ATenOp, ...]:
-        return tuple(self.args) + (tuple(*[tuple((axis.size, axis.stride, axis.offset, axis.incf)) for axis in self.T.axes]) + () if self.T is not None else ()) + ((self.T.offset,) if self.T and self.T.offset is not None else ())
+        outputs = tuple(self.args)
+        for t in self.T:
+            outputs += (tuple(*[tuple((axis.size, axis.stride, axis.offset, axis.incf)) for axis in t.axes]) + () if t is not None else ()) + ((t.offset,) if t and t.offset is not None else ())
+        return outputs
     
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         raise NotImplementedError(f"verify is not implemented for {cls.__name__}")
 
-    def render_isl(self) -> str:
+    def render(self) -> str:
         from caten.runtime.cpu import CPUTensor
-        # TODO: ISLRenderer
         return CPUTensor.render(self)
 
     def simplify(self) -> ATenOp:
@@ -135,7 +137,7 @@ class ATenOp(metaclass=ATenOpMetaclass):
         Compare two scalars (Python numbers or ATenOp scalars) for equality.
         """
         if isinstance(a, (int, float)) and isinstance(b, (int, float)): return (a == b)
-        dtype = a.T.dtype if isinstance(a, ATenOp) else b.T.dtype # type: ignore
+        dtype = a.T[0].dtype if isinstance(a, ATenOp) else b.T[0].dtype # type: ignore
         a, b = _const(a, dtype=dtype), _const(b, dtype=dtype)
         # Note(hikettei): this comparison highly depends on whether they are constant folded.
         # plus, cannot verify the equivalence of A*B and B*A
@@ -150,49 +152,78 @@ class ATenOp(metaclass=ATenOpMetaclass):
             if not ATenOp.eql(ai, bi): return False
         return True
     
-    def lower(self) -> ATenOp: return self
+    def lower(self) -> tuple[ATenOp, ...]: return (self,)
 ## == Tensor Graph ============================================================
 class TensorOps():
-    def lower(self) -> ATenOp:
-        new_args, is_domain = [], False
-        for arg in self.args:
-            if arg.T.ndim > 0:
-                is_domain = True
-                new_args.append(Load.from_tensor(arg.lower()))
-            else:
-                new_args.append(arg)
-        out = replace(self, args=tuple(new_args))
-        if is_domain is False: return out
-        assert out.T is not None
-        tmp = Memory.defglobal([arg.size for arg in self.T.axes], self.T.dtype, tmp=True)
-        return Exec.sync(tmp, Store.new(Load.from_tensor(tmp), out))
+    def lower(self) -> tuple[ATenOp, ...]:
+        """
+        If TensorGraph (access relations are constrainted by View) is detected,
+        rewrite them into ScheduleGraph (access relations are constrainted by Band/AccessMap)
+        For example:
+          Add(A[0:10, 0:10], B[0:10, 0:10])
+        will be transformed into:
+        band = A.band()
+        out  = Memory() 
+        MemoryOf(
+          Exec(Dim(band, dim=0), Dim(band, dim=1),
+               out,
+               Store(out, Add(Load(A, AccessMap(band. ,,,)), Load(B, AccessMap(band, ...))))),
+          nth=0
+        )
+        
+        Note: In Unary/Binary/TernaryOps, A, B, C produce the equivalent band space, because shapes are equal.
+        """
+        if all([x.ndim == 0 for x in self.args]) is True:
+            return (self,) # the graph is lowered, returning myself
+        else:
+            # we can use: all x.ndim, shape, are equal here.
+            band = self.args[0].T[0].band()
+            args = []
+            for arg in self.args:
+                lowered = arg.lower()
+                assert len(lowered) == 1, "Tensor graph should not produce multiple outputs!"
+                args.append(Load.from_tensor(band, lowered[0]))
+            # Note: out is keep viewed? or contiguous?
+            r0 = replace(self, args=tuple(new_args)) # note: __call__ will update the output
+            assert r0.T[0] is not None and r0.T[0].ndim == 0
+            out = Memory.defglobal([arg.size for arg in self.T[0].axes], self.T[0].dtype, tmp=True)
+            # Run r0 over band.all_dimensions(), with access relations defined by Load.from_tensor
+            # returning out
+            instance = Exec.schedule(band.all_dimensions(), (out,), r0)
+            return MemoryOf((instance,) nth=0)
+# TODO:
+# ShapeTracker: Check sizes
+# def schedule
+# Load.from_tensor -> use band
+
 # UnaryOps verifier: check dtypes/shapes of arguments
 class UnaryOps(TensorOps):
     # ops whose first argument is returned dtype
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
-        assert len(args) == 1, f"UnaryOp {cls.__name__} takes one argument, getting {args}"
-        assert args[0].T is not None
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+        assert len(args) == 1 and len(T) == 1, f"UnaryOp {cls.__name__} takes one argument, getting {args}"
+        assert args[0].T[0] is not None
         return args[0].T
 class BinaryOps(TensorOps):
     # ops whose first argument is returned dtype
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
-        assert len(args) == 2, f"BinaryOp {cls.__name__} takes two argument, getting {args}"
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+        assert len(args) == 2 and len(T) == 2, f"BinaryOp {cls.__name__} takes two argument, getting {args}"
         assert args[0].T is not None
         return args[0].T
 class TernaryOps(TensorOps):
     # ops whose first argument is returned dtype
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
-        assert len(args) == 3, f"TernaryOp {cls.__name__} takes three argument, getting {args}"
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+        assert len(args) == 3 and len(T) == 3,f"TernaryOp {cls.__name__} takes three argument, getting {args}"
         assert args[0].T is not None
         return args[0].T
 class ViewOps():
     # ops whose return dtypes are explicitly provided via T option
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
-        assert T is not None, f"Cannot create {cls.__name__} without providing T"
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+        assert len(T) == 1
+        assert T[0] is not None, f"Cannot create {cls.__name__} without providing T"
         return T
 ### UnaryOps
 @dataclass(frozen=True)
@@ -301,9 +332,9 @@ class Lt(BinaryOps, ATenOp):
 class Where(TernaryOps, ATenOp):
     python_op = lambda a, b, c: b if a else c
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
-        assert len(args) == 3, f"TernaryOp {cls.__name__} takes three argument, getting {args}"
-        assert args[1].T is not None
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+        assert len(args) == 3 and len(T) == 3, f"TernaryOp {cls.__name__} takes three argument, getting {args}"
+        assert args[1].T[0] is not None
         return args[1].T
 
 @dataclass(frozen=True)
@@ -315,7 +346,7 @@ class Const(ViewOps, ATenOp):
         if isinstance(value, ATenOp):
             return value
         else:
-            return Const(args=(), value=value, T=ATenOpType(axes=(), dtype=dtype))
+            return Const(args=(), value=value, T=tuple(ATenOpType(axes=(), dtype=dtype)))
 
 @dataclass(frozen=True)
 class View(ViewOps, ATenOp):
@@ -348,43 +379,45 @@ class View(ViewOps, ATenOp):
     """
     @staticmethod
     def reshape(tensor: ATenOp, shape: tuple[ATenOp, ...]) -> View:
-        assert tensor.T is not None
-        return View((tensor,), T=ATenOpType.from_shape(shape, tensor.T.dtype))
+        assert tensor.T[0] is not None
+        return View((tensor,), T=tuple(ATenOpType.from_shape(shape, tensor.T[0].dtype)))
 
     @staticmethod
     def permute(tensor: ATenOp, order: tuple[int, ...]) -> View:
-        assert tensor.T is not None
-        return View((tensor,), T=ATenOpType(
-            axes=tuple([tensor.T.axes[i] for i in order]),
-            dtype=tensor.T.dtype,
-            offset=tensor.T.offset,
-        ))
+        assert tensor.T[0] is not None
+        return View((tensor,), T=tuple(ATenOpType(
+            axes=tuple([tensor.T[0].axes[i] for i in order]),
+            dtype=tensor.T[0].dtype,
+            offset=tensor.T[0].offset,
+        )))
 
     @staticmethod
     def expand(tensor: ATenOp, shape: tuple[Union[int, ATenOp], ...]) -> View:
-        assert tensor.T is not None
+        assert tensor.T[0] is not None
         def _expand(old_axis: ATenAxis, new_size: int | float | ATenOp) -> ATenAxis:
             if ATenOp.eql(old_axis.size, new_size): return old_axis
             else:
                 assert ATenOp.eql(old_axis.size, 1), f"The axis to expand should be evaluated to 1, getting {old_axis.size}"
                 return ATenAxis(size=_const(new_size), stride=Const.new(0, index), offset=Const.new(0, index), incf=Const.new(1, index))
-        return View((tensor,), T=ATenOpType(
-            axes=tuple([_expand(old_axis, new_size) for (old_axis, new_size) in zip(tensor.T.axes, shape, strict=True)]),
-            dtype=tensor.T.dtype,
-            offset=tensor.T.offset,
-        ))
+        return View((tensor,), T=tuple(ATenOpType(
+            axes=tuple([_expand(old_axis, new_size) for (old_axis, new_size) in zip(tensor.T[0].axes, shape, strict=True)]),
+            dtype=tensor.T[0].dtype,
+            offset=tensor.T[0].offset,
+        )))
 
+    # todo: check it
     def get_source_access_map(self) -> "AccessMap":
         """Get the AccessMap for reading from the source tensor."""
-        assert self.args[0].T is not None
-        return AccessMap.from_tensor_type(self.args[0].T)
-
+        assert self.args[0].T[0] is not None
+        # ???
+        return AccessMap.from_tensor_type(self.args[0].T[0])
+    # todo: check it
     def get_output_access_map(self) -> "AccessMap":
         """Get the AccessMap for writing to the output (contiguous)."""
-        assert self.T is not None
-        return AccessMap.from_tensor_type(self.T)
+        assert self.T[0] is not None
+        return AccessMap.from_tensor_type(self.T[0])
     
-    def lower(self) -> ATenOp:
+    def lower(self) -> tuple[ATenOp, ...]:
         """Lower View to Sync that copies to contiguous buffer."""
         assert self.T is not None
         tmp = Memory.defglobal([arg.size for arg in self.T.axes], self.T.dtype, tmp=True)
@@ -1035,6 +1068,7 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
     - Assuming OP produces Tensor1, Tensor2 as a result.
     - Returns (Tensor1, Tensor2, ...) as output
       - This can be only retrived by MemoryOf(Exec, nth=int)
+    - MemoryOf is the only user of ExecNode.
 
     For example, elementwise reduction is represented as:
         band = Band(Range(10), Range(10))
@@ -1052,7 +1086,30 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
                   acc,
                   Store(acc, Add(Load(acc), Mul(...))))))
         MemoryOf(res, nth=0) # Final Output!
+
+    Run(Dim1, Dim2, ..., Tensor1, Tensor2, ..., OP) is rendered as:
+    ```
+    {stack_heap}
+    declare tensor1;
+    declare tensor2;
+    loop for dim1.range, dim2.range:
+      op // Graph follows recursively ...
+    ```
+    When the graph is HOGE, Loop is separated
+    ```
+    (3.) create new loop in stack_heap <----
+    declare tensor1;                       |
+    declare tensor2;                       |
+    loop for dim1.range, dim2.range:       |
+      // (1.) Trying to render Run(...)    |
+      // (2.) But no room to insert here ---
+    ```
+
     ## Scheduling
+    The loop is separated when:
+    - 
+    Overapするまで分割しちゃダメだよね。
+    - わかりやすい条件式で言い表すと？
     TODO: class Domain/EndDomainを実装する？Execでやる？
     Kernel is separated when:
     Loop Fusion is doable when:
@@ -1061,6 +1118,9 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
     n_dims: int = 0
     n_out: int = 0
 
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        pass
+    
     @property
     def dim_nodes(self) -> tuple[Dim, ...]:
         """Get all Dim nodes (iteration space references)."""
@@ -1070,16 +1130,14 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
     def domain(self) -> Union[Band, None]:
         """Get the shared Band (all Dims should reference the same Band)."""
         dims = self.dim_nodes
-        if not dims:
-            return None
+        if not dims: return
         return dims[0].domain
 
     @property
     def ranges(self) -> tuple[Range, ...]:
         """Get all Range nodes from the Band."""
         domain = self.domain
-        if domain is None:
-            return ()
+        if domain is None: return ()
         return domain.ranges
 
     @property
@@ -1096,6 +1154,7 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
     def dims(self) -> tuple[int, ...]:
         """Get dimension indices from Dim nodes."""
         return tuple(d.dim for d in self.dim_nodes)
+    
     def get_iteration_domain(self) -> "AccessMap":
         """
         Get the iteration domain as an AccessMap (ranges only, no access pattern).
@@ -1171,6 +1230,10 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
         _find(self.body)
         return sources
 
+    @staticmethod
+    def schedule():
+        pass
+    
     @staticmethod
     def sync(
         output: "Memory",

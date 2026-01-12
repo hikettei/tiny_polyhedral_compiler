@@ -136,26 +136,26 @@ def _assign_ids(root: ATenOp, *, include_predecessors: bool) -> Dict[int, int]:
 
 # ===== Node label ============================================================
 def _dtype_str(n: ATenOp) -> str:
-    if n.T is None:
+    if n.T[0] is None:
         return "<?>"
-    return n.T.dtype.name
+    return n.T[0].dtype.name
 
 
 def _shape_str(n: ATenOp) -> str:
-    if n.T is None:
+    if n.T[0] is None:
         return "<?>"
-    if n.T.ndim == 0:
+    if n.T[0].ndim == 0:
         return "[]"
-    dims = [expr_to_str(ax.size) for ax in n.T.axes]
+    dims = [expr_to_str(ax.size) for ax in n.T[0].axes]
     return "[" + ",".join(dims) + "]"
 
 
 def _strides_str(n: ATenOp) -> str:
-    if n.T is None:
+    if n.T[0] is None:
         return "<?>"
-    if n.T.ndim == 0:
+    if n.T[0].ndim == 0:
         return "[]"
-    st = [expr_to_str(ax.stride) for ax in n.T.axes]
+    st = [expr_to_str(ax.stride) for ax in n.T[0].axes]
     return "[" + ",".join(st) + "]"
 
 
@@ -204,14 +204,14 @@ def _node_line(
     shape = _shape_str(n) if show_shape else ""
     strides = _strides_str(n) if (show_shape and show_strides) else ""
     offs = ""
-    if show_shape and show_offset and n.T is not None and n.T.offset is not None:
-        offs = expr_to_str(n.T.offset)
+    if show_shape and show_offset and n.T[0] is not None and n.T[0].offset is not None:
+        offs = expr_to_str(n.T[0].offset)
 
     head = f"({nid:03d}) {op_name}"
     head = _style(head, fg=_node_kind_color(n), bold=True, color=color)
 
     meta_bits: List[str] = []
-    if n.T is not None:
+    if n.T[0] is not None:
         meta_bits.append(_style(dtype, fg=_Ansi.FG_RED, color=color))
         if show_shape:
             meta_bits.append(_style(shape, fg=_Ansi.FG_GRAY, color=color))
@@ -375,7 +375,7 @@ def to_dot(root: ATenOp, *, include_predecessors: bool = False, show_shape: bool
         seen.add(k)
         nid = ids[k]
         label = type(n).__name__
-        if show_shape and n.T is not None:
+        if show_shape and n.T[0] is not None:
             label += f"\\n{_dtype_str(n)} {_shape_str(n)}"
         if isinstance(n, ir.Const):
             label += f"\\nval={expr_to_str(n)}"
