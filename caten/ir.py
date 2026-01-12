@@ -489,23 +489,29 @@ class Reduce(ATenOp):
             if dim < len(input_T.axes):
                 reduce_ranges.append(input_T.axes[dim].range())
 
+        # Create Domain and Dims for reduction
+        if reduce_ranges:
+            reduce_domain = Domain(tuple(reduce_ranges))
+            reduce_dims = tuple(Dim((reduce_domain,), dim=i) for i in range(len(reduce_ranges)))
+        else:
+            reduce_dims = ()
+
         # Inner body: acc = reduce_op(acc, input[...])
         input_load = Load.from_tensor(input_tensor)
         acc_load = Load.from_tensor(acc)
         reduction_expr = self.bop((acc_load, input_load))
         inner_store = Store.new(acc_load, reduction_expr)
 
-        # Build inner Sync for reduction loop
-        inner_args = tuple(reduce_ranges) + (acc, inner_store)
+        # Build inner Sync for reduction loop (now using Dim nodes)
+        inner_args = reduce_dims + (acc, inner_store)
         inner_endrange = Sync(
             inner_args,
             T=ATenOpType(axes=(), dtype=input_T.dtype),
-            n_ranges=len(reduce_ranges),
+            n_dims=len(reduce_dims),
         )
         # Try to fuse inner Sync with its load sources (e.g., Mul)
         for src in inner_endrange.load_sources():
             inner_endrange = inner_endrange._fuse(src)
-
         # Outer body: out[i,j] = inner_endrange (which produces the reduced acc)
         out_load = Load.from_tensor(out_memory)
         outer_store = Store.new(out_load, inner_endrange)
@@ -891,16 +897,22 @@ class Memory(ViewOps, ATenOp):
 @dataclass(frozen=True)
 class Sync(ViewOps, ATenOp):
     """
-    Sync represents a loop nest with ranges, output, and body.
+    Sync represents a loop nest with iteration domain, output, and body.
 
     Structure:
     ==========
-    args = (range1, range2, ..., output, body)
+    args = (dim1, dim2, ..., output, body)
 
     Where:
-    - args[0:n_ranges]: Range nodes - iteration space
-    - args[n_ranges]: Memory node - the output array
+    - args[0:n_dims]: Dim nodes - references to shared Domain
+    - args[n_dims]: Memory node - the output array
     - args[-1]: Body (Store or nested Sync)
+
+    The Dim nodes all reference the same Domain, which contains the Ranges.
+    This design cleanly separates:
+    - Domain: the iteration space (list of Ranges)
+    - Dim: a reference to a specific dimension in the Domain
+    - Sync: synchronization over Dims
 
     Example - Element-wise sin:
     ===========================
@@ -913,7 +925,8 @@ class Sync(ViewOps, ATenOp):
     }
     ```
     Represented as:
-        Sync(Range(10, dim=0), Range(10, dim=1), out_mem, Store(...))
+        domain = Domain(Range(10), Range(10))
+        Sync(Dim(domain, 0), Dim(domain, 1), out_mem, Store(...))
 
     Example - GEMM with k-reduction (nested Sync):
     ==================================================
@@ -930,26 +943,44 @@ class Sync(ViewOps, ATenOp):
     }
     ```
     Represented as:
+        outer_domain = Domain(Range(M), Range(N))
+        inner_domain = Domain(Range(K))
         Sync(
-            Range(M, dim=0), Range(N, dim=1),
+            Dim(outer_domain, 0), Dim(outer_domain, 1),
             C,
             Store(Load(C, ...),
                 Sync(
-                    Range(K, dim=2),
-                    acc,  # Memory(0.0)
+                    Dim(inner_domain, 0),
+                    acc,
                     Store(acc, Add(Load(acc), Mul(A[i,k], B[k,j]))))))
     """
-    n_ranges: int = 0
+    n_dims: int = 0
 
     @property
-    def ranges(self) -> tuple[ATenOp, ...]:
-        """Get all Range nodes (iteration space)."""
-        return self.args[:self.n_ranges]
+    def dim_nodes(self) -> tuple[Dim, ...]:
+        """Get all Dim nodes (iteration space references)."""
+        return tuple(d for d in self.args[:self.n_dims] if isinstance(d, Dim))
+
+    @property
+    def domain(self) -> Union[Domain, None]:
+        """Get the shared Domain (all Dims should reference the same Domain)."""
+        dims = self.dim_nodes
+        if not dims:
+            return None
+        return dims[0].domain
+
+    @property
+    def ranges(self) -> tuple[Range, ...]:
+        """Get all Range nodes from the Domain."""
+        domain = self.domain
+        if domain is None:
+            return ()
+        return domain.ranges
 
     @property
     def output(self) -> ATenOp:
         """Get the output memory."""
-        return self.args[self.n_ranges]
+        return self.args[self.n_dims]
 
     @property
     def body(self) -> ATenOp:
@@ -958,13 +989,8 @@ class Sync(ViewOps, ATenOp):
 
     @property
     def dims(self) -> tuple[int, ...]:
-        """Get dimension indices (0, 1, 2, ... based on position).
-        
-        Note: Range no longer has dim attribute (removed in this refactor).
-        Dimensions are now implicit by position in the ranges tuple.
-        """
-        return tuple(range(self.n_ranges))
-
+        """Get dimension indices from Dim nodes."""
+        return tuple(d.dim for d in self.dim_nodes)
     def get_iteration_domain(self) -> "AccessMap":
         """
         Get the iteration domain as an AccessMap (ranges only, no access pattern).
@@ -1046,20 +1072,21 @@ class Sync(ViewOps, ATenOp):
         body: "Store",
     ) -> "Sync":
         """
-        Create an Sync by synchronizing output with a computation body.
+        Create a Sync by synchronizing output with a computation body.
 
         Extracts the Domain from Dim nodes in the body, then builds:
-        args = (ranges..., output, body)
+        args = (dim1, dim2, ..., output, body)
+
+        Each Dim references the shared Domain.
 
         Complexity: O(n) for traversal
         """
         # Find Domain from Dim nodes in the body
         seen: set[int] = set()
         found_domain: Union[Domain, None] = None
-        found_ranges: list[Range] = []
 
         def _collect_domain(node: ATenOp) -> None:
-            nonlocal found_domain, found_ranges
+            nonlocal found_domain
             if id(node) in seen:
                 return
             seen.add(id(node))
@@ -1067,7 +1094,6 @@ class Sync(ViewOps, ATenOp):
             if isinstance(node, Dim):
                 if found_domain is None:
                     found_domain = node.domain
-                    found_ranges = list(found_domain.ranges)
                 return  # Don't need to go deeper
             
             if isinstance(node, Sync):
@@ -1079,11 +1105,14 @@ class Sync(ViewOps, ATenOp):
 
         _collect_domain(body)
 
-        # Use found ranges, or empty if none found
-        ranges = tuple(found_ranges) if found_ranges else ()
+        # Create Dim nodes for each dimension of the Domain
+        if found_domain is not None:
+            dims = tuple(Dim((found_domain,), dim=i) for i in range(found_domain.ndim))
+        else:
+            dims = ()
 
-        # Build args: (ranges..., output, body)
-        args = ranges + (output, body)
+        # Build args: (dims..., output, body)
+        args = dims + (output, body)
 
         assert output.T is not None
         T = ATenOpType.from_shape(
@@ -1091,18 +1120,18 @@ class Sync(ViewOps, ATenOp):
             output.T.dtype
         )
 
-        endrange = Sync(
+        sync_node = Sync(
             args,
             T=T,
-            n_ranges=len(ranges),
+            n_dims=len(dims),
         )
 
         # Try to fuse with parent Syncs
-        parents = endrange._find_parent_endranges()
+        parents = sync_node._find_parent_endranges()
         for p in parents:
-            endrange = endrange._fuse(p)
+            sync_node = sync_node._fuse(p)
 
-        return endrange
+        return sync_node
 
     def _find_parent_endranges(self) -> "list[Sync]":
         """Find all Sync nodes that this computation depends on. O(n)"""
@@ -1424,28 +1453,28 @@ class Sync(ViewOps, ATenOp):
         new_body = inline(self.body)
 
         return Sync(
-            self.ranges + (self.output, new_body),
+            self.dim_nodes + (self.output, new_body),
             T=self.T,
-            n_ranges=self.n_ranges,
+            n_dims=self.n_dims,
         )
 
     def _preimage(self, node: ATenOp, subst: "dict[int, ATenOp]") -> ATenOp:
         """
-        Apply preimage transform: replace Range/Aff nodes using substitution.
+        Apply preimage transform: replace Dim/Aff nodes using substitution.
 
-        For Range(dim=d), if d in subst, replace with subst[d].
-        For Aff with Range(dim=d), if d in subst, expand to scalar expression.
-        subst maps producer dims to IR expressions over consumer's Range nodes.
+        For Dim(Domain, dim=d), if d in subst, replace with subst[d].
+        For Aff with Dim(Domain, dim=d), if d in subst, expand to scalar expression.
+        subst maps producer dim positions to IR expressions over consumer's Dim nodes.
         """
-        # Direct Range replacement (for already-transformed expressions)
-        if isinstance(node, Range) and node.dim in subst:
+        # Direct Dim replacement
+        if isinstance(node, Dim) and node.dim in subst:
             return subst[node.dim]
 
         if isinstance(node, Aff):
-            stride, range_node, offset, incf = node.args
-            if isinstance(range_node, Range) and range_node.dim in subst:
-                ir_expr = subst[range_node.dim]
-                # Aff computes: stride * (incf * range + offset)
+            stride, dim_node, offset, incf = node.args
+            if isinstance(dim_node, Dim) and dim_node.dim in subst:
+                ir_expr = subst[dim_node.dim]
+                # Aff computes: stride * (incf * dim + offset)
                 # With substitution: stride * (incf * ir_expr + offset)
                 scaled = Mul((incf, ir_expr)) if not ATenOp.eql(incf, _const(1)) else ir_expr
                 shifted = Add((scaled, offset)) if not ATenOp.eql(offset, _const(0)) else scaled

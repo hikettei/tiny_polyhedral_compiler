@@ -10,9 +10,7 @@ from caten.aff import (
     AffExpr,
     BasicMap,
     UnionMap,
-    analyze_dependencies,
     attempt_fusion,
-    get_fusion_type,
 )
 
 
@@ -216,7 +214,7 @@ def test_conv_pool_style():
         print(f"  Shared dimensions: {result.tiling_info.shared_dims}")
         for dim, (tile_size, red_dim) in result.tiling_info.tile_dims.items():
             print(f"  Tile {dim} by {tile_size}, reduction over {red_dim}")
-        print(f"\nExplanation:")
+        print("\nExplanation:")
         print(f"  For each pool output (hp,wp), compute conv tile [{S_POOL}x{S_POOL}] on-the-fly")
         print(f"  Conv dims (h,w) map to (hp*{S_POOL}+rh, wp*{S_POOL}+rw)")
     elif result.fusion_type != "none":
@@ -224,8 +222,8 @@ def test_conv_pool_style():
         print(f"To fuse Conv+Pool with S_POOL={S_POOL}:")
         print(f"1. Tile Conv output dims (h,w) by [{S_POOL},{S_POOL}]")
         print(f"2. Scale down tiled dims by [{S_POOL},{S_POOL}]")
-        print(f"3. This aligns conv tiles with pool's strided reads")
-        print(f"4. For each pool output (hp,wp), compute conv tile on-the-fly")
+        print("3. This aligns conv tiles with pool's strided reads")
+        print("4. For each pool output (hp,wp), compute conv tile on-the-fly")
     print()
 
 
@@ -278,7 +276,7 @@ def test_ir_fusion():
 
     print("Before fusion:")
     print(f"  x.shape = {x.shape}")
-    print(f"  z = sin(sin(x))")
+    print("  z = sin(sin(x))")
 
     # Access the IR (lowering happens automatically during construction)
     ir = z.op
@@ -286,7 +284,7 @@ def test_ir_fusion():
     print("\nAfter lowering (fusion applied):")
     print(ir.viz())
 
-    # Check that we have a single EndRange (fused)
+    # Check that we have a single Sync (fused)
     # or analyze the structure
     def count_endranges(node, seen=None):
         if seen is None:
@@ -295,15 +293,15 @@ def test_ir_fusion():
             return 0
         seen.add(id(node))
 
-        from caten.ir import EndRange
-        count = 1 if isinstance(node, EndRange) else 0
-        if hasattr(node, 'args'):
+        from caten.ir import Sync
+        count = 1 if isinstance(node, Sync) else 0
+        if hasattr(node, "args"):
             for arg in node.args:
                 count += count_endranges(arg, seen)
         return count
 
     num_endranges = count_endranges(ir)
-    print(f"\nNumber of EndRange nodes: {num_endranges}")
+    print(f"\nNumber of Sync nodes: {num_endranges}")
     if num_endranges == 1:
         print("  -> Successfully fused into single kernel!")
     else:
