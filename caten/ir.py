@@ -193,18 +193,6 @@ class TensorOps():
             # returning out
             instance = Exec.schedule(band.all_dimensions(), (out,), Store.new(Load.from_tensor(out, band), r0))
             return (MemoryOf((instance,), nth=0, T=(out.T[0],)),) # the output become contiguous array!
-
-# [TODO] tensor.pyに戻って, semantic修正，initial value = -infとかをどうやって実装するか？
-# - Tensor.py: def fill
-# - LOADを実装する
-# then fuse
-# TODO: (NOTE: REMOVE COMMENTS)
-# UnaryOp, IDENTITYを導入する (does nothing)
-# View(View), ...これを綺麗にLoweringするために，どうしようかなな。。。
-# View <--- I
-# ShapeTracker: Check sizes
-# def schedule
-# Load.from_tensor -> use band
 # UnaryOps verifier: check dtypes/shapes of arguments
 class UnaryOps(TensorOps):
     # ops whose first argument is returned dtype
