@@ -387,9 +387,9 @@ class View(ViewOps, ATenOp):
         tmp = Memory.defglobal([arg.size for arg in self.T.axes], self.T.dtype, tmp=True)
         return Sync.sync(tmp, Store.new(Load.from_tensor(tmp), Load.from_tensor(self.args[0], T=self.T)))
 
-
+# TODO: IntroduceMeta
 @dataclass(frozen=True)
-class Reduce(ATenOp):
+class Reduce(ATenOp): # TODO: MetaOps
     """
     OUT = Reduce(A, B, op=BinaryOps)
 
@@ -531,7 +531,15 @@ class Conv2D(ATenOp):
         return T if T is not None else ATenOpType(axes=(), dtype=args[0].T.dtype)
 
     def lower(self) -> ATenOp:
-        """Lower Conv2D to nested Sync with reduction over Cin, KH, KW."""
+        """
+        Lower Conv2D to nested Sync with unified Domain.
+        
+        Domain structure: [N, Cout, H_out, W_out, Cin, KH, KW]
+        - dims 0-3: output (parallel)
+        - dims 4-6: reduction
+        
+        All Loads use Aff nodes referencing this unified Domain.
+        """
         input_tensor = self.args[0].lower()
         weight_tensor = self.args[1].lower()
 
@@ -552,52 +560,90 @@ class Conv2D(ATenOp):
         H_out = self.T.axes[2].size
         W_out = self.T.axes[3].size
 
-        # Create output memory
+        # Create output memory and accumulator
         out_memory = Memory.defglobal([N, C_out, H_out, W_out], self.T.dtype, tmp=True)
         acc = Memory.deflocal((), self.T.dtype)
 
-        # Build output iteration domain [N, Cout, H_out, W_out]
-        out_ranges = [Range((N,)), Range((C_out,)), Range((H_out,)), Range((W_out,))]
-        out_domain = Domain(tuple(out_ranges))
-        out_dims = tuple(Dim((out_domain,), dim=i) for i in range(4))
-        dim_n, dim_cout, dim_oh, dim_ow = out_dims
+        # Build unified Domain: [N, Cout, H_out, W_out, Cin, KH, KW]
+        all_ranges = [
+            Range((N,)),           # dim 0: N
+            Range((C_out,)),       # dim 1: Cout
+            Range((H_out,)),       # dim 2: H_out (oh)
+            Range((W_out,)),       # dim 3: W_out (ow)
+            Range((_const(C_in),)), # dim 4: Cin
+            Range((_const(KH),)),  # dim 5: KH (kh)
+            Range((_const(KW),)),  # dim 6: KW (kw)
+        ]
+        domain = Domain(tuple(all_ranges))
 
-        # Build reduction domain [Cin, KH, KW]
-        reduce_ranges = [Range((_const(C_in),)), Range((_const(KH),)), Range((_const(KW),))]
-        reduce_domain = Domain(tuple(reduce_ranges))
-        reduce_dims = tuple(Dim((reduce_domain,), dim=i) for i in range(3))
-        dim_cin, dim_kh, dim_kw = reduce_dims
+        # Create Dim references for all dimensions
+        dims = tuple(Dim((domain,), dim=i) for i in range(7))
+        dim_n, dim_cout, dim_oh, dim_ow, dim_cin, dim_kh, dim_kw = dims
 
-        # Input access: X[n, cin, oh*sh + kh, ow*sw + kw]
-        h_idx = Add((dim_oh, dim_kh)) if sh == 1 else Add((Mul((dim_oh, _const(sh))), dim_kh))
-        w_idx = Add((dim_ow, dim_kw)) if sw == 1 else Add((Mul((dim_ow, _const(sw))), dim_kw))
+        # Output dims (parallel): 0-3
+        out_dims = dims[:4]
+        # Reduction dims: 4-6
+        reduce_dims = dims[4:]
 
-        # Build address expression (row-major: n*C*H*W + cin*H*W + h*W + w)
-        input_addr = Add((Mul((dim_n, Mul((_const(C_in), Mul((_const(H), _const(W))))))),
-            Add((Mul((dim_cin, Mul((_const(H), _const(W))))),
-                Add((Mul((h_idx, _const(W))), w_idx))))))
-        input_load = Load((input_tensor, input_addr), T=ATenOpType(axes=(), dtype=input_T.dtype))
+        # Input strides: [Cin*H*W, H*W, W, 1]
+        stride_n = Mul((_const(C_in), Mul((_const(H), _const(W)))))
+        stride_cin = Mul((_const(H), _const(W)))
+        stride_h = _const(W)
+        stride_w = _const(1)
 
-        # Weight access: W[cout, cin, kh, kw]
-        weight_addr = Add((Mul((dim_cout, Mul((_const(C_in), Mul((_const(KH), _const(KW))))))),
-            Add((Mul((dim_cin, Mul((_const(KH), _const(KW))))),
-                Add((Mul((dim_kh, _const(KW))), dim_kw))))))
-        weight_load = Load((weight_tensor, weight_addr), T=ATenOpType(axes=(), dtype=weight_T.dtype))
+        # Input Load: X[n, cin, oh*sh+kh, ow*sw+kw]
+        # Using Aff nodes: addr = sum of (stride * dim) contributions
+        input_affs = [
+            Aff((stride_n, dim_n, _const(0), _const(1))),           # n contribution
+            Aff((stride_cin, dim_cin, _const(0), _const(1))),       # cin contribution
+            Aff((Mul((stride_h, _const(sh))), dim_oh, _const(0), _const(1))),  # oh*sh contribution
+            Aff((stride_h, dim_kh, _const(0), _const(1))),          # kh contribution
+            Aff((_const(sw), dim_ow, _const(0), _const(1))),        # ow*sw contribution
+            Aff((stride_w, dim_kw, _const(0), _const(1))),          # kw contribution
+        ]
+        input_load = Load((input_tensor,) + tuple(input_affs), T=ATenOpType(axes=(), dtype=input_T.dtype))
+
+        # Weight strides: [Cin*KH*KW, KH*KW, KW, 1]
+        weight_stride_cout = Mul((_const(C_in), Mul((_const(KH), _const(KW)))))
+        weight_stride_cin = Mul((_const(KH), _const(KW)))
+        weight_stride_kh = _const(KW)
+        weight_stride_kw = _const(1)
+
+        # Weight Load: W[cout, cin, kh, kw]
+        weight_affs = [
+            Aff((weight_stride_cout, dim_cout, _const(0), _const(1))),  # cout contribution
+            Aff((weight_stride_cin, dim_cin, _const(0), _const(1))),    # cin contribution
+            Aff((weight_stride_kh, dim_kh, _const(0), _const(1))),      # kh contribution
+            Aff((weight_stride_kw, dim_kw, _const(0), _const(1))),      # kw contribution
+        ]
+        weight_load = Load((weight_tensor,) + tuple(weight_affs), T=ATenOpType(axes=(), dtype=weight_T.dtype))
 
         # Inner reduction: acc += input * weight
         acc_load = Load.from_tensor(acc)
         inner_store = Store.new(acc_load, Add((acc_load, Mul((input_load, weight_load)))))
 
+        # Inner Sync for reduction loop (dims 4-6)
         inner_sync = Sync(
             reduce_dims + (acc, inner_store),
             T=ATenOpType(axes=(), dtype=self.T.dtype),
             n_dims=3,
         )
 
-        # Outer: write to output
-        out_load = Load.from_tensor(out_memory)
+        # Output Load using Aff nodes with unified domain
+        out_stride_n = Mul((_const(C_out), Mul((H_out, W_out))))
+        out_stride_cout = Mul((H_out, W_out))
+        out_stride_oh = W_out
+        out_stride_ow = _const(1)
+        out_affs = [
+            Aff((out_stride_n, dim_n, _const(0), _const(1))),
+            Aff((out_stride_cout, dim_cout, _const(0), _const(1))),
+            Aff((out_stride_oh, dim_oh, _const(0), _const(1))),
+            Aff((out_stride_ow, dim_ow, _const(0), _const(1))),
+        ]
+        out_load = Load((out_memory,) + tuple(out_affs), T=ATenOpType(axes=(), dtype=self.T.dtype))
         outer_store = Store.new(out_load, inner_sync)
 
+        # Outer Sync (dims 0-3)
         return Sync(out_dims + (out_memory, outer_store), T=self.T, n_dims=4)
 
 
@@ -917,7 +963,11 @@ class Load(ATenOp):
 
     @staticmethod
     def from_tensor(tensor: ATenOp, T: "ATenOpType | None" = None) -> ATenOp:
-        """Create a Load from a tensor using Domain/Dim structure."""
+        """Create a Load from a tensor using Domain/Dim structure.
+        
+        When tensor is a Sync, reuses its Domain to ensure fused kernels
+        share the same Domain structure.
+        """
         dtype = T or tensor.T
         assert dtype is not None
         if dtype.ndim == 0:
@@ -925,7 +975,15 @@ class Load(ATenOp):
         if isinstance(tensor, Const):
             return tensor
         
-        # Create Ranges and Domain
+        # When tensor is a Sync, reuse its Domain for unified structure
+        if isinstance(tensor, Sync):
+            sync_domain = tensor.domain
+            if sync_domain is not None and sync_domain.ndim >= dtype.ndim:
+                # Reuse Sync's domain - Affs reference the same Domain
+                affs = [axis.aff(sync_domain, dim) for dim, axis in enumerate(dtype.axes)]
+                return Load((tensor,) + tuple(affs))
+        
+        # Default: create new Ranges and Domain
         ranges = [axis.range() for axis in dtype.axes]
         domain = Domain(tuple(ranges))
         
@@ -1164,9 +1222,10 @@ class Sync(ViewOps, ATenOp):
 
         Complexity: O(n) for traversal
         """
-        # Find Domain from Dim nodes in the body
+        # Find Domain and used dims from Dim nodes in the body
         seen: set[int] = set()
         found_domain: Union[Domain, None] = None
+        used_dims: set[int] = set()  # Track which dim indices are actually used
 
         def _collect_domain(node: ATenOp) -> None:
             nonlocal found_domain
@@ -1177,6 +1236,7 @@ class Sync(ViewOps, ATenOp):
             if isinstance(node, Dim):
                 if found_domain is None:
                     found_domain = node.domain
+                used_dims.add(node.dim)  # Track this dim as used
                 return  # Don't need to go deeper
             
             if isinstance(node, Sync):
@@ -1188,9 +1248,10 @@ class Sync(ViewOps, ATenOp):
 
         _collect_domain(body)
 
-        # Create Dim nodes for each dimension of the Domain
-        if found_domain is not None:
-            dims = tuple(Dim((found_domain,), dim=i) for i in range(found_domain.ndim))
+        # Create Dim nodes only for USED dimensions (sorted to maintain order)
+        if found_domain is not None and used_dims:
+            sorted_dims = sorted(used_dims)
+            dims = tuple(Dim((found_domain,), dim=d) for d in sorted_dims)
         else:
             dims = ()
 
