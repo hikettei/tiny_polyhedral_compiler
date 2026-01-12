@@ -268,7 +268,126 @@ class ATen:
         # Step 4: Normalize
         return exp_shifted / sum_exp
 
+    def pool2d(self, kernel_size: int | tuple[int, int], stride: int | tuple[int, int] | None = None, op: str = 'max') -> Tensor:
+        """
+        2D pooling operation.
+        
+        Args:
+            kernel_size: Size of pooling window (k or (kh, kw))
+            stride: Stride of pooling (default: kernel_size)
+            op: 'max' or 'avg'
+        
+        Input shape: [N, C, H, W]
+        Output shape: [N, C, H//stride_h, W//stride_w]
+        
+        Implementation:
+            1. Reshape [N, C, H, W] -> [N, C, H//kh, kh, W//kw, kw]
+            2. Reduce over (kh, kw) dimensions with max or avg
+        """
+        if self.ndim != 4:
+            raise ValueError(f"pool2d expects 4D input [N,C,H,W], got {self.ndim}D")
+        
+        kh, kw = (kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
+        sh, sw = (stride, stride) if isinstance(stride, int) else (stride if stride else (kh, kw))
+        
+        N, C, H, W = [s.item for s in self.shape]
+        
+        if H % sh != 0 or W % sw != 0:
+            raise ValueError(f"Input size ({H}, {W}) not divisible by stride ({sh}, {sw})")
+        
+        # For simplicity, require stride == kernel_size (non-overlapping)
+        if sh != kh or sw != kw:
+            raise NotImplementedError("Currently only stride == kernel_size is supported")
+        
+        H_out, W_out = H // kh, W // kw
+        
+        # Reshape: [N, C, H, W] -> [N, C, H_out, kh, W_out, kw]
+        x = self.reshape((N, C, H_out, kh, W_out, kw))
+        # Permute: -> [N, C, H_out, W_out, kh, kw]
+        x = x.permute((0, 1, 2, 4, 3, 5))
+        
+        # Reduce over last two dimensions (kh, kw)
+        if op == 'max':
+            return x.max_reduce(axis=(-2, -1))
+        elif op == 'avg':
+            return x.sum(axis=(-2, -1)) / Tensor.const(float(kh * kw), dtype=self.dtype)
+        else:
+            raise ValueError(f"Unknown pooling op: {op}")
+
+    def conv2d(self, weight: ATen, stride: int | tuple[int, int] = 1, padding: int | tuple[int, int] = 0) -> Tensor:
+        """
+        2D convolution (simple implementation, no groups/dilation).
+        
+        Args:
+            weight: Convolution kernel [C_out, C_in, KH, KW]
+            stride: Convolution stride
+            padding: Zero padding (not implemented yet)
+        
+        Input shape: [N, C_in, H, W]
+        Output shape: [N, C_out, H_out, W_out]
+        
+        Implementation uses im2col-style transformation:
+            1. Extract overlapping patches from input
+            2. Reshape patches and weight for batched matmul
+            3. Sum over (C_in, KH, KW) dimensions
+        
+        For input X[n, cin, h, w] and weight W[cout, cin, kh, kw]:
+            Y[n, cout, oh, ow] = sum_{cin,kh,kw} X[n, cin, oh*s+kh, ow*s+kw] * W[cout, cin, kh, kw]
+        """
+        if self.ndim != 4:
+            raise ValueError(f"conv2d expects 4D input [N,C,H,W], got {self.ndim}D")
+        if weight.ndim != 4:
+            raise ValueError(f"conv2d expects 4D weight [Cout,Cin,KH,KW], got {weight.ndim}D")
+        if padding != 0:
+            raise NotImplementedError("Padding not implemented yet")
+        
+        sh, sw = (stride, stride) if isinstance(stride, int) else stride
+        N, C_in, H, W = [s.item for s in self.shape]
+        C_out, C_in_w, KH, KW = [s.item for s in weight.shape]
+        
+        if C_in != C_in_w:
+            raise ValueError(f"Channel mismatch: input has {C_in}, weight expects {C_in_w}")
+        
+        H_out = (H - KH) // sh + 1
+        W_out = (W - KW) // sw + 1
+        
+        if sh == 1 and sw == 1:
+            # Stride-1 case: use reshape-based im2col
+            # This creates explicit patches - simpler but uses more memory
+            
+            # For stride=1: extract all overlapping patches
+            # X[N, Cin, H, W] -> patches[N, Cin, H_out, W_out, KH, KW]
+            # Then: patches[N, 1, Cin, H_out, W_out, KH, KW] * W[1, Cout, Cin, 1, 1, KH, KW]
+            # Sum over Cin, KH, KW -> [N, Cout, H_out, W_out]
+            
+            # Build patches via sliding window (reshape trick for contiguous case)
+            # For non-contiguous, would need explicit gather
+            
+            # Simplified: unfold via reshape when KH=KW=1
+            if KH == 1 and KW == 1:
+                # 1x1 conv is just pointwise: [N, Cin, H, W] x [Cout, Cin, 1, 1]
+                # -> [N, 1, Cin, H, W] x [1, Cout, Cin, 1, 1] -> sum over Cin
+                x = self.reshape((N, 1, C_in, H, W))                    # [N, 1, Cin, H, W]
+                w = weight.reshape((1, C_out, C_in, 1, 1))              # [1, Cout, Cin, 1, 1]
+                return x.mul(w).sum(axis=2)                             # [N, Cout, H, W]
+            else:
+                # General case: use explicit loop via matmul-like expansion
+                # X: [N, Cin, H, W] -> [N, Cin*KH*KW, H_out*W_out] (im2col)
+                # W: [Cout, Cin, KH, KW] -> [Cout, Cin*KH*KW]
+                # Y = W @ X_col -> [N, Cout, H_out*W_out] -> [N, Cout, H_out, W_out]
+                raise NotImplementedError(
+                    f"General conv2d with KH={KH}, KW={KW} requires im2col, not yet implemented. "
+                    "Use 1x1 conv or pooling for now."
+                )
+        else:
+            raise NotImplementedError(f"Strided conv (stride={stride}) not implemented yet")
+
     def matmul(self, other: ATen|TOperand) -> Tensor:
+        """
+        Matrix multiplication.
+        
+        For A[..., M, K] @ B[..., K, N] -> C[..., M, N]
+        """
         x: ATen = self
         y: ATen = Tensor(op=ATen.wrap_const(other, x.dtype))
         if x.ndim < 1 or y.ndim < 1: raise ValueError("matmul requires at least 1D tensors")
@@ -277,6 +396,7 @@ class ATen:
         y_permuted = y.permute(tuple(range(y.ndim-2)) + (y.ndim-1, y.ndim-2))
         y_expanded = y_permuted.reshape(y_permuted.shape[:-2] + (1,) + y_permuted.shape[-2:])
         return x_expanded.mul(y_expanded).sum(axis=-1)
+
 
 class TensorImpl(ATen, metaclass=ABCMeta):
     @abstractmethod

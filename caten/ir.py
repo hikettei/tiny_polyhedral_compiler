@@ -421,21 +421,15 @@ class Reduce(ATenOp):
                         acc,  # Memory(0.0)
                         Store(Load(acc), Add(Load(acc), x[i,j,k])))))
         """
-        # args[0] is the expanded output view, args[1] is the input tensor
-        out_view = self.args[0]
+        # args[1] is the input tensor
         input_tensor = self.args[1].lower()
-
-        # Get underlying memory from output view
-        def find_memory(node: ATenOp) -> Memory:
-            if isinstance(node, Memory):
-                return node
-            if isinstance(node, View):
-                return find_memory(node.args[0])
-            raise ValueError(f"Cannot find Memory in {node}")
-
-        out_memory = find_memory(out_view)
         input_T = input_tensor.T
         assert input_T is not None
+        assert self.T is not None
+
+        # Create output memory using self.T (which has the correctly squeezed shape)
+        out_shape = [axis.size for axis in self.T.axes]
+        out_memory = Memory.defglobal(out_shape, dtype=self.T.dtype, tmp=True)
 
         # Determine initial value based on operation
         if self.bop == Add:
@@ -447,7 +441,6 @@ class Reduce(ATenOp):
 
         # Create scalar accumulator for reduction
         acc = Memory.deflocal((), input_T.dtype)
-        acc_init = Const.new(init_val, input_T.dtype)
 
         # Build ranges for reduction dimensions
         reduce_ranges: list[Range] = []
@@ -473,7 +466,7 @@ class Reduce(ATenOp):
             inner_endrange = inner_endrange._fuse(src)
 
         # Outer body: out[i,j] = inner_endrange (which produces the reduced acc)
-        out_load = Load.from_tensor(out_memory, T=out_view.T)
+        out_load = Load.from_tensor(out_memory)
         outer_store = Store.new(out_load, inner_endrange)
 
         # Build outer EndRange for parallel dimensions
