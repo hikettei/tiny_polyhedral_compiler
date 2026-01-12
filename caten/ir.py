@@ -46,8 +46,8 @@ class ATenAxis():
         """Create a Range for this axis's size."""
         return Range((self.size,))
     
-    def aff(self, domain: "Domain", dim: int) -> "Aff":
-        """Create an Aff for this axis within the given Domain."""
+    def aff(self, domain: "Band", dim: int) -> "Aff":
+        """Create an Aff for this axis within the given Band."""
         return Aff((self.stride, Dim((domain,), dim=dim), self.offset, self.incf))
 
 def _const(val: Any, dtype: DType=index) -> ATenOp:
@@ -88,6 +88,9 @@ class ATenOpType():
 class ATenOp(metaclass=ATenOpMetaclass):
     args: tuple[ATenOp, ...]
     T: Union[ATenOpType, None] = None # this should be provided via T=... option, or inferred via verify method.
+    T_rest: tuple[Union[ATenOpType, None], ...] = () # rest of outputs
+    # TODO:
+    # expected_users
     @property
     def predecessors(self) -> tuple[ATenOp, ...]:
         return tuple(self.args) + (tuple(*[tuple((axis.size, axis.stride, axis.offset, axis.incf)) for axis in self.T.axes]) + () if self.T is not None else ()) + ((self.T.offset,) if self.T and self.T.offset is not None else ())
@@ -162,7 +165,7 @@ class TensorOps():
         if is_domain is False: return out
         assert out.T is not None
         tmp = Memory.defglobal([arg.size for arg in self.T.axes], self.T.dtype, tmp=True)
-        return Sync.sync(tmp, Store.new(Load.from_tensor(tmp), out))
+        return Exec.sync(tmp, Store.new(Load.from_tensor(tmp), out))
 # UnaryOps verifier: check dtypes/shapes of arguments
 class UnaryOps(TensorOps):
     # ops whose first argument is returned dtype
@@ -385,7 +388,7 @@ class View(ViewOps, ATenOp):
         """Lower View to Sync that copies to contiguous buffer."""
         assert self.T is not None
         tmp = Memory.defglobal([arg.size for arg in self.T.axes], self.T.dtype, tmp=True)
-        return Sync.sync(tmp, Store.new(Load.from_tensor(tmp), Load.from_tensor(self.args[0], T=self.T)))
+        return Exec.sync(tmp, Store.new(Load.from_tensor(tmp), Load.from_tensor(self.args[0], T=self.T)))
 
 # MetaOps: Something like a macro in CatenIR
 class MetaOps(): pass
@@ -456,9 +459,9 @@ class Reduce(MetaOps, ATenOp):
             if dim < len(input_T.axes):
                 reduce_ranges.append(input_T.axes[dim].range())
 
-        # Create Domain and Dims for reduction
+        # Create Band and Dims for reduction
         if reduce_ranges:
-            reduce_domain = Domain(tuple(reduce_ranges))
+            reduce_domain = Band(tuple(reduce_ranges))
             reduce_dims = tuple(Dim((reduce_domain,), dim=i) for i in range(len(reduce_ranges)))
         else:
             reduce_dims = ()
@@ -471,7 +474,7 @@ class Reduce(MetaOps, ATenOp):
 
         # Build inner Sync for reduction loop (now using Dim nodes)
         inner_args = reduce_dims + (acc, inner_store)
-        inner_endrange = Sync(
+        inner_endrange = Exec(
             inner_args,
             T=ATenOpType(axes=(), dtype=input_T.dtype),
             n_dims=len(reduce_dims),
@@ -484,7 +487,7 @@ class Reduce(MetaOps, ATenOp):
         outer_store = Store.new(out_load, inner_endrange)
 
         # Build outer Sync for parallel dimensions
-        return Sync.sync(out_memory, outer_store)
+        return Exec.sync(out_memory, outer_store)
 
 @dataclass(frozen=True)
 class Einsum(MetaOps, ATenOp):
@@ -512,13 +515,13 @@ class Conv2D(MetaOps, ATenOp):
 
     def lower(self) -> ATenOp:
         """
-        Lower Conv2D to nested Sync with unified Domain.
+        Lower Conv2D to nested Sync with unified Band.
         
-        Domain structure: [N, Cout, H_out, W_out, Cin, KH, KW]
+        Band structure: [N, Cout, H_out, W_out, Cin, KH, KW]
         - dims 0-3: output (parallel)
         - dims 4-6: reduction
         
-        All Loads use Aff nodes referencing this unified Domain.
+        All Loads use Aff nodes referencing this unified Band.
         """
         input_tensor = self.args[0].lower()
         weight_tensor = self.args[1].lower()
@@ -544,7 +547,7 @@ class Conv2D(MetaOps, ATenOp):
         out_memory = Memory.defglobal([N, C_out, H_out, W_out], self.T.dtype, tmp=True)
         acc = Memory.deflocal((), self.T.dtype)
 
-        # Build unified Domain: [N, Cout, H_out, W_out, Cin, KH, KW]
+        # Build unified Band: [N, Cout, H_out, W_out, Cin, KH, KW]
         all_ranges = [
             Range((N,)),           # dim 0: N
             Range((C_out,)),       # dim 1: Cout
@@ -555,8 +558,8 @@ class Conv2D(MetaOps, ATenOp):
             Range((_const(KW),)),  # dim 6: KW (kw)
         ]
 
-        # Domain Definition
-        domain = Domain(tuple(all_ranges))
+        # Band Definition
+        domain = Band(tuple(all_ranges))
 
         # Create Dim references for all dimensions
         dims = tuple(Dim((domain,), dim=i) for i in range(7))
@@ -641,7 +644,7 @@ class Range(ScheduleOps, ATenOp):
     """
     Range(SIZE) represents the half-open interval [0, SIZE).
     - SIZE should be a scalar typed tensor.
-    - Domain is the only user for the Range.
+    - Band is the only user for the Range.
     """
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
@@ -656,24 +659,24 @@ class Range(ScheduleOps, ATenOp):
         return self.args[0]
 
 @dataclass(frozen=True)
-class Domain(ScheduleOps, ATenOp):
+class Band(ScheduleOps, ATenOp):
     """
-    Domain(Range1, Range2, ...) binds multiple ranges as an iteration space.
+    Band(Range1, Range2, ...) binds multiple ranges as an iteration space.
     
-    A Domain is an ordered list of Ranges that defines the loop nest:
-    - Domain(Range(M), Range(N)) represents: for i in [0,M): for j in [0,N):
+    A Band is an ordered list of Ranges that defines the loop nest:
+    - Band(Range(M), Range(N)) represents: for i in [0,M): for j in [0,N):
     
     Use Dim(domain, dim=k) to extract the k-th Range.
 
     Example:
-        domain = Domain(Range(10), Range(20))
+        domain = Band(Range(10), Range(20))
         # Represents: for i0 in [0,10): for i1 in [0,20):
     """
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
-        assert len(args) > 0, "Domain requires at least one Range"
+        assert len(args) > 0, "Band requires at least one Range"
         for i, arg in enumerate(args):
-            assert isinstance(arg, Range), f"Domain arg[{i}] must be Range, got {type(arg).__name__}"
+            assert isinstance(arg, Range), f"Band arg[{i}] must be Range, got {type(arg).__name__}"
         return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
 
     @property
@@ -690,26 +693,26 @@ class Domain(ScheduleOps, ATenOp):
 @dataclass(frozen=True)
 class Dim(ScheduleOps, ATenOp):
     """
-    Dim(Domain, dim=k) extracts the k-th Range from a Domain.
+    Dim(Band, dim=k) extracts the k-th Range from a Band.
     This is how you reference a specific loop variable within an iteration space.
     
     Example:
-        domain = Domain(Range(10), Range(20))
+        domain = Band(Range(10), Range(20))
         i = Dim(domain, dim=0)  # References the i-loop [0,10)
         j = Dim(domain, dim=1)  # References the j-loop [0,20)
     """
     dim: int = 0
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
-        assert len(args) == 1, "Dim requires exactly one Domain argument"
-        assert isinstance(args[0], Domain), f"Dim arg must be Domain, got {type(args[0]).__name__}"
+        assert len(args) == 1, "Dim requires exactly one Band argument"
+        assert isinstance(args[0], Band), f"Dim arg must be Band, got {type(args[0]).__name__}"
         dim = kwargs.get("dim", 0)
-        assert 0 <= dim < args[0].ndim, f"Dim {dim} out of range for Domain with {args[0].ndim} dims"
+        assert 0 <= dim < args[0].ndim, f"Dim {dim} out of range for Band with {args[0].ndim} dims"
         return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
 
     @property
-    def domain(self) -> Domain:
-        """Get the Domain this Dim references."""
+    def domain(self) -> Band:
+        """Get the Band this Dim references."""
         return self.args[0]  # type: ignore
 
     @property
@@ -732,12 +735,12 @@ class Aff(ScheduleOps, ATenOp):
     
     Args:
         Stride: Coefficient for this dimension's contribution to address
-        Dim: The loop variable (Dim node referencing a Domain)
+        Dim: The loop variable (Dim node referencing a Band)
         Offset: Constant offset added before scaling
         Incf: Increment factor (usually 1)
     
     Example:
-        domain = Domain(Range(10), Range(20))
+        domain = Band(Range(10), Range(20))
         # Access pattern for A[i*20 + j]:
         Aff(20, Dim(domain, dim=0), 0, 1)  # 20 * i
         Aff(1, Dim(domain, dim=1), 0, 1)   # 1 * j
@@ -759,18 +762,18 @@ class Aff(ScheduleOps, ATenOp):
 @dataclass(frozen=True)
 class AccessMap(ScheduleOps, ATenOp):
     """
-    AccessMap(Domain, Aff1, Aff2, ...) represents an affine access pattern.
-    equivalent to this BasicMap
-    { Domain -> [Aff1+Aff2+...] }
-
+    AccessMap(Band, Aff1, Aff2, ...) represents an affine access pattern.
+    equivalent to the following BasicMap.
+    { Band -> [Aff1+Aff2+...] }
     Example - Row-major 2D access:
     ==============================
-    For out[i,j] = f(in[i,j]) where shapes are [M, N]:
-        d = Domain(Range(M, dim=0), Range(N, dim=1))
-        AccessMap(
-            d,
-            Aff(N, Dim(d, dim=0), 1)
-            Aff(1, Dim(d, dim=1), 1))
+    For out[i,j] where shapes are [M, N]:
+        d = Band(Range(M, dim=0), Range(N, dim=1))
+        Load(out,
+          AccessMap(
+              d,
+              Aff(N, Dim(d, dim=0), 1)
+              Aff(1, Dim(d, dim=1), 1)))
     """
     n_ranges: int = 0
 
@@ -826,10 +829,10 @@ class AccessMap(ScheduleOps, ATenOp):
         # First create all Ranges
         ranges: list[Range] = [axis.range() for axis in T.axes]
         
-        # Build Domain from Ranges
-        domain = Domain(tuple(ranges))
+        # Build Band from Ranges
+        domain = Band(tuple(ranges))
         
-        # Create Affs using Dim references to Domain
+        # Create Affs using Dim references to Band
         affs: list[Aff] = [axis.aff(domain, dim) for dim, axis in enumerate(T.axes)]
         
         return AccessMap(
@@ -897,7 +900,7 @@ class AccessMap(ScheduleOps, ATenOp):
                 addr_expr = addr_expr + A.AffExpr({gid_var: coeff}, const)
         
         return A.BasicMap.from_access(dom_vars, addr_expr, dom_name="S")
-
+## == Read/Write access in the polyhedral model ==========================================
 @dataclass(frozen=True)
 class Load(ScheduleOps, ATenOp):
     """
@@ -906,19 +909,18 @@ class Load(ScheduleOps, ATenOp):
     """
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
-        assert len(args) >= 2, "Load: the number of argument should be larger than two"
-        assert isinstance(args[0], Memory) or isinstance(args[0], MemoryOf), "Load: Can only load element from Memory or MemoryOf"
+        assert len(args) == 2, f"Load definition is Load(Memory | MemoryOf, AccessMap), getting args={len(args)}"
+        assert isinstance(args[0], Memory) or isinstance(args[0], MemoryOf), f"Load definition is Load(Memory | MemoryOf, AccessMap), getting first argument = {type(args[0])}"
         assert args[0].T is not None and args[0].T.ndim > 0, f"Load: the first argument should be array, getting scalar {args[0].__class__}"
-        assert all([arg.T is not None and arg.T.ndim == 0 for arg in args[1:]]), "Load: indices should be scalar expressions."
+        # Create scalar from array
         return ATenOpType(axes=tuple(), dtype=args[0].T.dtype, offset=_const(0, index))
-
-    # [TODO] Update
+    
     @staticmethod
     def from_tensor(tensor: ATenOp, T: "ATenOpType | None" = None) -> ATenOp:
-        """Create a Load from a tensor using Domain/Dim structure.
+        """Create a Load from a tensor using Band/Dim structure.
         
-        When tensor is a Sync, reuses its Domain to ensure fused kernels
-        share the same Domain structure.
+        When tensor is a Exec, reuses its Band to ensure fused kernels
+        share the same Band structure.
         """
         dtype = T or tensor.T
         assert dtype is not None
@@ -927,17 +929,17 @@ class Load(ScheduleOps, ATenOp):
         if isinstance(tensor, Const):
             return tensor
         
-        # When tensor is a Sync, reuse its Domain for unified structure
-        if isinstance(tensor, Sync):
+        # When tensor is a Exec, reuse its Band for unified structure
+        if isinstance(tensor, Exec):
             sync_domain = tensor.domain
             if sync_domain is not None and sync_domain.ndim >= dtype.ndim:
-                # Reuse Sync's domain - Affs reference the same Domain
+                # Reuse Exec's domain - Affs reference the same Band
                 affs = [axis.aff(sync_domain, dim) for dim, axis in enumerate(dtype.axes)]
                 return Load((tensor,) + tuple(affs))
         
-        # Default: create new Ranges and Domain
+        # Default: create new Ranges and Band
         ranges = [axis.range() for axis in dtype.axes]
-        domain = Domain(tuple(ranges))
+        domain = Band(tuple(ranges))
         
         # Create Affs with Dim references
         affs = [axis.aff(domain, dim) for dim, axis in enumerate(dtype.axes)]
@@ -947,15 +949,15 @@ class Load(ScheduleOps, ATenOp):
         """
         Extract AccessMap from this Load's indices.
         
-        Collects Dim nodes from Aff indices to extract the Domain,
+        Collects Dim nodes from Aff indices to extract the Band,
         and uses the Aff nodes as the access pattern.
         """
         affs: list[ATenOp] = []
-        domain: Union[Domain, None] = None
+        domain: Union[Band, None] = None
         
         for idx in self.args[1:]:
             if isinstance(idx, Aff):
-                # Extract Domain from Dim node
+                # Extract Band from Dim node
                 dim_node = idx.args[1]
                 if isinstance(dim_node, Dim) and domain is None:
                     domain = dim_node.domain
@@ -973,12 +975,31 @@ class Load(ScheduleOps, ATenOp):
             T=ATenOpType(axes=(), dtype=self.args[0].T.dtype if self.args[0].T else index),
             n_ranges=len(ranges)
         )
-### Scheduling Graph
+
+@dataclass(frozen=True)
+class Store(ScheduleOps, ATenOp):
+    """
+    Store(dst, src) - Store src value into dst location.
+    dst is typically a Load (with Aff indices), src is the computed value.
+    """
+    @staticmethod
+    def new(dst: ATenOp, op: ATenOp) -> "Store":
+        assert dst.T is not None
+        return Store((dst, op), T=ATenOpType(axes=(), dtype=dst.T.dtype))
+
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        assert len(args) == 2, "Store takes (dst, src)"
+        assert args[0].T is not None and args[1].T is not None
+        assert args[0].ndim == 0 and args[1].ndim == 0, f"Store can only take scalar values!"
+        return ATenOpType(axes=(), dtype=args[0].T.dtype)
+## ==========================================================================
+## Memory Allocation Model
 @dataclass(frozen=True)
 class Memory(ScheduleOps, ViewOps, ATenOp):
-    """Memory(ATenOp). Tensor Allocation."""
-    level: str = "global"
-    tmp: bool = False
+    """Memory(ATenOp). A root of memory allocation."""
+    level: str = "global" # mark as local for prefetch/accumlator
+    tmp: bool = False     # set to True if this Memory allocation can be removed by fusion.
     @staticmethod
     def defglobal(shape: tuple[Any, ...], dtype: DType, tmp: bool=False) -> Memory:
         return Memory((), T=ATenOpType.from_shape(shape, dtype), level="global", tmp=tmp)
@@ -990,40 +1011,55 @@ class Memory(ScheduleOps, ViewOps, ATenOp):
 @dataclass(frozen=True)
 class MemoryOf(ScheduleOps, ViewOps, ATenOp):
     """
-    MemoryOf(Sync, nth=int) retrives the result of nth Synchronized tensor.
+    MemoryOf(Exec, nth=int) retries the result of `Exec` node tensor. (artifact of Exec)
     """
     nth: int = 0
-    # TODO
-
-# TODO: Rename Sync -> Exec
-# TODO: Domain -> Band
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        assert len(args) == 1, "MemoryOf requires exactly one Exec argument"
+        assert isinstance(args[0], Exec), f"MemoryOf arg must be Exec, got {type(args[0]).__name__}"
+        assert "nth" in kwargs, "MemoryOf requires nth argument."
+        nth = kwargs.get("nth")
+        assert 0 <= dim < 1 + len(args[0].T_rest), f"MemoryOf(Exec, nth={nth}) out of range for Exec with {1+len(args[0].T_rest)} outputs"
+        return ((args[0].T,) + args[0].T_rest)[nth]
+## Execute Instance
 @dataclass(frozen=True)
-class Sync(ScheduleOps, ViewOps, ATenOp):
+class Exec(ScheduleOps, ViewOps, ATenOp):
     """
-    Sync(Dim1, Dim2, ..., Tensor1, Tensor2, ..., OP)
-    SyncはOPを実行し，OPが持つDomainに含まれるDimの全てが終端I.e.: SIZEに到達するまで実行する。
-    OPの成果物はTensor1, Tensor2であり，Listとして返される。MemoryOfで取得可能
+    ```
+    Exec(Dim1, Dim2, ..., Tensor1, Tensor2, ..., OP)
+           n_dims             n_out
+    len(args) = n_dims + n_out + 1
+    ```
+    Exec iterates op over area constrainted by Dim1, Dim2, ... until they reaches end.
+    - Assuming OP produces Tensor1, Tensor2 as a result.
+    - Returns (Tensor1, Tensor2, ...) as output
+      - This can be only retrived by MemoryOf(Exec, nth=int)
 
     For example, elementwise reduction is represented as:
-        domain = Domain(Range(10), Range(10))
-        Sync(Dim(domain, 0), Dim(domain, 1), out_mem, Store(...))
+        band = Band(Range(10), Range(10))
+        Exec(Dim(band, 0), Dim(band, 1), out_mem, Store(...))
 
     For example, gemm with k-reduction is represented as:
-        outer_domain = Domain(Range(M), Range(N))
-        inner_domain = Domain(Range(K))
+        outer_domain = Band(Range(M), Range(N))
+        inner_domain = Band(Range(K))
         res = Run(
           Dim(outer_domain, 0), Dim(outer_domain, 1), # schedule
           C,                                          # output
-          Store(Load(C, AccessMap(Domain, Aff(...), Aff(...)))
+          Store(Load(C, AccessMap(Band, Aff(...), Aff(...)))
                 Run(
                   Dim(inner_domain, 0),
                   acc,
                   Store(acc, Add(Load(acc), Mul(...))))))
         MemoryOf(res, nth=0) # Final Output!
-    Fusion / Kernel Schedule Semantic
+    ## Scheduling
+    TODO: class Domain/EndDomainを実装する？Execでやる？
+    Kernel is separated when:
+    Loop Fusion is doable when:
     TODO
     """
     n_dims: int = 0
+    n_out: int = 0
 
     @property
     def dim_nodes(self) -> tuple[Dim, ...]:
@@ -1031,8 +1067,8 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
         return tuple(d for d in self.args[:self.n_dims] if isinstance(d, Dim))
 
     @property
-    def domain(self) -> Union[Domain, None]:
-        """Get the shared Domain (all Dims should reference the same Domain)."""
+    def domain(self) -> Union[Band, None]:
+        """Get the shared Band (all Dims should reference the same Band)."""
         dims = self.dim_nodes
         if not dims:
             return None
@@ -1040,7 +1076,7 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
 
     @property
     def ranges(self) -> tuple[Range, ...]:
-        """Get all Range nodes from the Domain."""
+        """Get all Range nodes from the Band."""
         domain = self.domain
         if domain is None:
             return ()
@@ -1065,7 +1101,7 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
         Get the iteration domain as an AccessMap (ranges only, no access pattern).
         
         This represents the loop bounds without specifying how memory is accessed.
-        Useful for checking if two Syncs can be fused (same iteration domain).
+        Useful for checking if two Execs can be fused (same iteration domain).
         """
         ranges = tuple(r for r in self.ranges if isinstance(r, Range))
         return AccessMap(
@@ -1088,11 +1124,11 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
             if id(node) in seen:
                 return
             seen.add(id(node))
-            if isinstance(node, Load) and not isinstance(node.args[0], Sync):
-                # Skip loads from Sync (those are kernel boundaries)
+            if isinstance(node, Load) and not isinstance(node.args[0], Exec):
+                # Skip loads from Exec (those are kernel boundaries)
                 result.append((node, node.get_access_map()))
-            if isinstance(node, Sync):
-                return  # Don't recurse into nested Syncs
+            if isinstance(node, Exec):
+                return  # Don't recurse into nested Execs
             if hasattr(node, "args"):
                 for arg in node.args:
                     _collect(arg)
@@ -1100,33 +1136,33 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
         _collect(self.body)
         return result
 
-    def can_fuse_with(self, other: "Sync") -> bool:
+    def can_fuse_with(self, other: "Exec") -> bool:
         """
-        Check if this Sync can be fused with another.
+        Check if this Exec can be fused with another.
         
         Fusion requires identical iteration domains (same Ranges).
         """
         return self.get_iteration_domain().domain_equals(other.get_iteration_domain())
 
-    def load_sources(self) -> "list[Sync]":
+    def load_sources(self) -> "list[Exec]":
         """
-        Get Syncs that are Load sources (require separate kernels).
+        Get Execs that are Load sources (require separate kernels).
 
         Loop separation condition:
-        - Load(Sync, ...) means the Sync is a data source
+        - Load(Exec, ...) means the Exec is a data source
         - These must be computed as separate kernels before this one
-        - Syncs appearing directly in computation (like reduction) are inline
+        - Execs appearing directly in computation (like reduction) are inline
 
         Used by renderers (CPU, CUDA, etc.) to determine kernel boundaries.
         """
         seen: set[int] = set()
-        sources: list[Sync] = []
+        sources: list[Exec] = []
 
         def _find(node: ATenOp) -> None:
             if id(node) in seen:
                 return
             seen.add(id(node))
-            if isinstance(node, Load) and isinstance(node.args[0], Sync):
+            if isinstance(node, Load) and isinstance(node.args[0], Exec):
                 sources.append(node.args[0])
             if hasattr(node, "args"):
                 for arg in node.args:
@@ -1139,20 +1175,20 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
     def sync(
         output: "Memory",
         body: "Store",
-    ) -> "Sync":
+    ) -> "Exec":
         """
-        Create a Sync by synchronizing output with a computation body.
+        Create a Exec by synchronizing output with a computation body.
 
-        Extracts the Domain from Dim nodes in the body, then builds:
+        Extracts the Band from Dim nodes in the body, then builds:
         args = (dim1, dim2, ..., output, body)
 
-        Each Dim references the shared Domain.
+        Each Dim references the shared Band.
 
         Complexity: O(n) for traversal
         """
-        # Find Domain and used dims from Dim nodes in the body
+        # Find Band and used dims from Dim nodes in the body
         seen: set[int] = set()
-        found_domain: Union[Domain, None] = None
+        found_domain: Union[Band, None] = None
         used_dims: set[int] = set()  # Track which dim indices are actually used
 
         def _collect_domain(node: ATenOp) -> None:
@@ -1167,8 +1203,8 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
                 used_dims.add(node.dim)  # Track this dim as used
                 return  # Don't need to go deeper
             
-            if isinstance(node, Sync):
-                return  # Don't collect from nested Syncs
+            if isinstance(node, Exec):
+                return  # Don't collect from nested Execs
             
             if hasattr(node, "args"):
                 for arg in node.args:
@@ -1192,29 +1228,29 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
             output.T.dtype
         )
 
-        sync_node = Sync(
+        sync_node = Exec(
             args,
             T=T,
             n_dims=len(dims),
         )
 
-        # Try to fuse with parent Syncs
+        # Try to fuse with parent Execs
         parents = sync_node._find_parent_endranges()
         for p in parents:
             sync_node = sync_node._fuse(p)
 
         return sync_node
 
-    def _find_parent_endranges(self) -> "list[Sync]":
-        """Find all Sync nodes that this computation depends on. O(n)"""
+    def _find_parent_endranges(self) -> "list[Exec]":
+        """Find all Exec nodes that this computation depends on. O(n)"""
         seen: set[int] = set()
-        parents: list[Sync] = []
+        parents: list[Exec] = []
 
         def _explore(node: ATenOp) -> None:
             if id(node) in seen:
                 return
             seen.add(id(node))
-            if isinstance(node, Sync) and node is not self:
+            if isinstance(node, Exec) and node is not self:
                 parents.append(node)
                 return
             if hasattr(node, "args"):
@@ -1269,7 +1305,7 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
                     (writes if is_write else reads).append(m)
                 except Exception:
                     pass
-            if isinstance(node, Sync):
+            if isinstance(node, Exec):
                 return
             if hasattr(node, "args"):
                 for arg in node.args:
@@ -1280,7 +1316,7 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
             collect(self.body.args[1], is_write=False)
         return reads, writes
 
-    def _fuse(self, producer: "Sync") -> "Sync":
+    def _fuse(self, producer: "Exec") -> "Exec":
         """
         Unified fusion via polyhedral analysis (aff.py).
 
@@ -1298,7 +1334,7 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
             return self
         return self._apply_fusion(producer, subst)
 
-    def _find_subst_polyhedral(self, producer: "Sync") -> "dict[int, ATenOp] | None":
+    def _find_subst_polyhedral(self, producer: "Exec") -> "dict[int, ATenOp] | None":
         """
         Find morphism using polyhedral analysis from aff.py.
 
@@ -1341,9 +1377,9 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
 
     def _morphism_from_tiling(
         self,
-        producer: "Sync",
+        producer: "Exec",
         tiling_info: "A.TiledFusionInfo",
-        cons_domain: "Domain"
+        cons_domain: "Band"
     ) -> "dict[int, ATenOp] | None":
         """Build morphism from TiledFusionInfo for Conv+Pool style fusion."""
         morphism: dict[int, ATenOp] = {}
@@ -1392,7 +1428,7 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
                     morphism[pdim] = Dim((cons_domain,), dim=dim_idx)
 
         return morphism if morphism else None
-    def _find_subst(self, producer: "Sync") -> "dict[int, ATenOp] | None":
+    def _find_subst(self, producer: "Exec") -> "dict[int, ATenOp] | None":
         """
         Find iteration space morphism: producer_dims → consumer_dims.
 
@@ -1526,7 +1562,7 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
     def _extract_substitution(
         self,
         result: "A.FusionResult",
-        producer: "Sync"
+        producer: "Exec"
     ) -> "dict[int, A.AffExpr] | None":
         """
         Extract dim -> expr substitution from fusion result.
@@ -1596,13 +1632,13 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
 
     def _apply_fusion(
         self,
-        producer: "Sync",
+        producer: "Exec",
         subst: "dict[int, ATenOp]"
-    ) -> "Sync":
+    ) -> "Exec":
         """
         Apply fusion by transforming producer and inlining.
 
-        In DAG, Sync itself is the output reference.
+        In DAG, Exec itself is the output reference.
         Replace Load(producer) with transformed computation.
         """
         producer_comp = producer.body.args[1] if isinstance(producer.body, Store) else producer.body
@@ -1615,7 +1651,7 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
             if isinstance(node, Load):
                 if node.args[0] is producer:
                     return transformed
-            if isinstance(node, Sync):
+            if isinstance(node, Exec):
                 return node
             if hasattr(node, "args") and node.args:
                 new_args = tuple(inline(arg) for arg in node.args)
@@ -1625,7 +1661,7 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
 
         new_body = inline(self.body)
 
-        return Sync(
+        return Exec(
             self.dim_nodes + (self.output, new_body),
             T=self.T,
             n_dims=self.n_dims,
@@ -1635,8 +1671,8 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
         """
         Apply preimage transform: replace Dim/Aff nodes using substitution.
 
-        For Dim(Domain, dim=d), if d in subst, replace with subst[d].
-        For Aff with Dim(Domain, dim=d), if d in subst, expand to scalar expression.
+        For Dim(Band, dim=d), if d in subst, replace with subst[d].
+        For Aff with Dim(Band, dim=d), if d in subst, expand to scalar expression.
         subst maps producer dim positions to IR expressions over consumer's Dim nodes.
         """
         # Direct Dim replacement
@@ -1669,7 +1705,7 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
                 return Load((node.args[0],) + tuple(new_indices))
             return node
 
-        if isinstance(node, (Sync, Memory)):
+        if isinstance(node, (Exec, Memory)):
             return node
 
         if hasattr(node, "args") and node.args:
@@ -1678,20 +1714,3 @@ class Sync(ScheduleOps, ViewOps, ATenOp):
                 return replace(node, args=new_args)
 
         return node
-
-@dataclass(frozen=True)
-class Store(ScheduleOps, ATenOp):
-    """
-    Store(dst, src) - Store src value into dst location.
-    dst is typically a Load (with Aff indices), src is the computed value.
-    """
-    @staticmethod
-    def new(dst: ATenOp, op: ATenOp) -> "Store":
-        assert dst.T is not None
-        return Store((dst, op), T=ATenOpType(axes=(), dtype=dst.T.dtype))
-
-    @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
-        assert len(args) == 2, "Store takes (dst, src)"
-        assert args[0].T is not None
-        return ATenOpType(axes=(), dtype=args[0].T.dtype)
