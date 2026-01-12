@@ -110,8 +110,62 @@ class ATen:
         ret = Tensor(op=ir.View.reshape(self.op, tuple([ATen.wrap_const(s, dtype=index) for s in new_shape])))
         return self if ir.ATenOp.equals(ret.shape, self.shape) else ret
     
-    def shrink(self, arg: tuple[tuple[int, int] | None, ...]) -> Tensor:
-        raise NotImplementedError("shrink todo")
+    def shrink(self, arg: tuple[tuple[int, int] | None, ...]) -> ATen:
+        """
+        Select a sub-region of the tensor.
+        
+        arg: tuple of (start, end) pairs or None for each dimension.
+             None means keep the full dimension.
+             (start, end) selects elements from start to end (exclusive).
+        
+        Example:
+            x.shrink(((0, 5), None, (2, 4)))  # Select [0:5, :, 2:4]
+        """
+        if len(arg) != self.ndim:
+            raise ValueError(f"shrink arg length {len(arg)} != ndim {self.ndim}")
+        # Normalize: None -> (0, size)
+        bounds: list[tuple[int, int] | None] = []
+        for b, s in zip(arg, self.shape, strict=True):
+            if b is None:
+                size = s.item if hasattr(s, 'item') else s
+                bounds.append((0, size))
+            else:
+                bounds.append(b)
+        return Tensor(op=ir.View.shrink(self.op, tuple(bounds)))
+    
+    def repeat(self, repeats: tuple[int, ...], *args: Any) -> ATen:
+        """
+        Repeat tensor along each dimension.
+        
+        repeats: number of repetitions for each dimension.
+        
+        Example:
+            x.repeat((2, 3))  # [A, B] -> [A*2, B*3]
+        
+        Implementation: reshape to interleave 1s, expand, reshape back.
+        """
+        repeats_arg = argfix(repeats, *args)
+        if len(repeats_arg) != self.ndim:
+            raise ValueError(f"repeat arg length {len(repeats_arg)} != ndim {self.ndim}")
+        
+        # Insert 1s: [A, B, C] -> [A, 1, B, 1, C, 1]
+        interleaved_shape: list[Any] = []
+        for s in self.shape:
+            interleaved_shape.extend([s, 1])
+        x = self.reshape(tuple(interleaved_shape))
+        
+        # Expand the 1s: [A, 1, B, 1, C, 1] -> [A, r0, B, r1, C, r2]
+        expand_shape: list[Any] = []
+        for s, r in zip(self.shape, repeats_arg, strict=True):
+            expand_shape.extend([s, r])
+        x = x.expand(tuple(expand_shape))
+        
+        # Merge: [A, r0, B, r1, C, r2] -> [A*r0, B*r1, C*r2]
+        final_shape = tuple(
+            ir.Mul((s, ATen.wrap_const(r, index))) if r != 1 else s
+            for s, r in zip(self.shape, repeats_arg, strict=True)
+        )
+        return x.reshape(final_shape)
 
     def permute(self, order: tuple[int, ...], *args: Any) -> ATen:
         order_arg = tuple(self._resolve_dim(x) for x in argfix(order, *args))
@@ -315,25 +369,108 @@ class ATen:
         else:
             raise ValueError(f"Unknown pooling op: {op}")
 
-    def conv2d(self, weight: ATen, stride: int | tuple[int, int] = 1, padding: int | tuple[int, int] = 0) -> Tensor:
+    def unfold(self, kernel_size: tuple[int, ...], stride: tuple[int, ...] | int = 1, dilation: tuple[int, ...] | int = 1) -> ATen:
         """
-        2D convolution (simple implementation, no groups/dilation).
+        Extract sliding local blocks from the last len(kernel_size) dimensions.
+        
+        Input: [..., *spatial_dims]
+        Output: [..., *output_spatial_dims, *kernel_size]
+        
+        For 2D with input [N, C, H, W] and kernel_size [KH, KW]:
+        Output: [N, C, H_out, W_out, KH, KW]
+        
+        This is the im2col operation used for convolution.
+        Based on tinygrad's _pool implementation.
+        """
+        k_ = kernel_size
+        ndim_k = len(k_)
+        
+        # Normalize stride and dilation to tuples
+        s_ = (stride,) * ndim_k if isinstance(stride, int) else stride
+        d_ = (dilation,) * ndim_k if isinstance(dilation, int) else dilation
+        
+        assert len(s_) == len(d_) == ndim_k
+        
+        # noop_ indices (batch dims), i_ (spatial input sizes)
+        noop_len = self.ndim - ndim_k
+        i_ = [s.item for s in self.shape[-ndim_k:]]  # spatial sizes
+        noop1_ = [s for s in self.shape[:noop_len]]  # batch shape
+        
+        # Output spatial sizes: o = ceil((i - d*(k-1)) / s)
+        o_ = [math.ceil((i - d * (k - 1)) / s) for i, d, k, s in zip(i_, d_, k_, s_)]
+        
+        # Step 1: repeat spatial dims
+        # repeat factors: [1]*noop_len + [ceil(k*(i+d)/i) for k,i,d in zip(k_,i_,d_)]
+        repeat_factors = [1] * noop_len + [math.ceil(k * (i + d) / i) for k, i, d in zip(k_, i_, d_)]
+        xup = self.repeat(tuple(repeat_factors))
+        
+        # Step 2: shrink to [(0, k*(i+d)) for k,i,d in zip(k_,i_,d_)]
+        shrink_bounds: list[tuple[int, int] | None] = [None] * noop_len + [(0, k * (i + d)) for k, i, d in zip(k_, i_, d_)]
+        xup = xup.shrink(tuple(shrink_bounds))
+        
+        # Step 3: reshape to noop1_ + flatten((k, i+d) for k,i,d in zip(k_,i_,d_))
+        reshape1: list[Any] = list(noop1_)
+        for k, i, d in zip(k_, i_, d_):
+            reshape1.extend([k, i + d])
+        xup = xup.reshape(tuple(reshape1))
+        
+        # Step 4: shrink to noop_ + flatten(((0,k), (0,o*s)) for k,o,s in zip(k_,o_,s_))
+        shrink2: list[tuple[int, int] | None] = [None] * noop_len
+        for k, o, s in zip(k_, o_, s_):
+            shrink2.extend([(0, k), (0, o * s)])
+        xup = xup.shrink(tuple(shrink2))
+        
+        # Step 5: reshape to noop1_ + flatten((k,o,s) for k,o,s in zip(k_,o_,s_))
+        reshape2: list[Any] = list(noop1_)
+        for k, o, s in zip(k_, o_, s_):
+            reshape2.extend([k, o, s])
+        xup = xup.reshape(tuple(reshape2))
+        
+        # Step 6: shrink to noop_ + flatten(((0,k), (0,o), (0,1)) for k,o in zip(k_,o_))
+        shrink3: list[tuple[int, int] | None] = [None] * noop_len
+        for k, o in zip(k_, o_):
+            shrink3.extend([(0, k), (0, o), (0, 1)])
+        xup = xup.shrink(tuple(shrink3))
+        
+        # Step 7: reshape to noop1_ + flatten((k,o) for k,o in zip(k_,o_))
+        reshape3: list[Any] = list(noop1_)
+        for k, o in zip(k_, o_):
+            reshape3.extend([k, o])
+        xup = xup.reshape(tuple(reshape3))
+        
+        # Step 8: permute to [..., *o_, *k_]
+        # Current: [..., k0, o0, k1, o1, ...]
+        # Target:  [..., o0, o1, ..., k0, k1, ...]
+        perm = list(range(noop_len))
+        # Add o indices (odd positions after noop_len)
+        for idx in range(ndim_k):
+            perm.append(noop_len + idx * 2 + 1)
+        # Add k indices (even positions after noop_len)
+        for idx in range(ndim_k):
+            perm.append(noop_len + idx * 2)
+        
+        return xup.permute(tuple(perm))
+
+    def conv2d(self, weight: ATen, stride: int | tuple[int, int] = 1, padding: int | tuple[int, int] = 0, groups: int = 1, dilation: int | tuple[int, int] = 1) -> Tensor:
+        """
+        2D convolution using im2col + matmul approach.
         
         Args:
-            weight: Convolution kernel [C_out, C_in, KH, KW]
+            weight: Convolution kernel [C_out, C_in/groups, KH, KW]
             stride: Convolution stride
             padding: Zero padding (not implemented yet)
+            groups: Number of groups for grouped convolution
+            dilation: Dilation factor
         
         Input shape: [N, C_in, H, W]
         Output shape: [N, C_out, H_out, W_out]
         
-        Implementation uses im2col-style transformation:
-            1. Extract overlapping patches from input
-            2. Reshape patches and weight for batched matmul
-            3. Sum over (C_in, KH, KW) dimensions
-        
-        For input X[n, cin, h, w] and weight W[cout, cin, kh, kw]:
-            Y[n, cout, oh, ow] = sum_{cin,kh,kw} X[n, cin, oh*s+kh, ow*s+kw] * W[cout, cin, kh, kw]
+        Implementation:
+            1. unfold -> [N, C_in, H_out, W_out, KH, KW]
+            2. reshape -> [N, H_out*W_out, C_in*KH*KW]  
+            3. weight reshape -> [C_out, C_in*KH*KW]
+            4. matmul -> [N, H_out*W_out, C_out]
+            5. permute + reshape -> [N, C_out, H_out, W_out]
         """
         if self.ndim != 4:
             raise ValueError(f"conv2d expects 4D input [N,C,H,W], got {self.ndim}D")
@@ -341,43 +478,45 @@ class ATen:
             raise ValueError(f"conv2d expects 4D weight [Cout,Cin,KH,KW], got {weight.ndim}D")
         if padding != 0:
             raise NotImplementedError("Padding not implemented yet")
+        if groups != 1:
+            raise NotImplementedError("Grouped convolution not implemented yet")
         
         sh, sw = (stride, stride) if isinstance(stride, int) else stride
+        dh, dw = (dilation, dilation) if isinstance(dilation, int) else dilation
+        
         N, C_in, H, W = [s.item for s in self.shape]
         C_out, C_in_w, KH, KW = [s.item for s in weight.shape]
         
         if C_in != C_in_w:
             raise ValueError(f"Channel mismatch: input has {C_in}, weight expects {C_in_w}")
         
-        H_out = (H - KH) // sh + 1
-        W_out = (W - KW) // sw + 1
+        # Output spatial dimensions
+        H_out = (H - dh * (KH - 1) - 1) // sh + 1
+        W_out = (W - dw * (KW - 1) - 1) // sw + 1
         
-        if sh == 1 and sw == 1:
-            # Stride-1 case: use reshape-based im2col
-            # This creates explicit patches - simpler but uses more memory
-            
-            # For stride=1: extract all overlapping patches
-            # X[N, Cin, H, W] -> patches[N, Cin, H_out, W_out, KH, KW]
-            # Then: patches[N, 1, Cin, H_out, W_out, KH, KW] * W[1, Cout, Cin, 1, 1, KH, KW]
-            # Sum over Cin, KH, KW -> [N, Cout, H_out, W_out]
-            
-            # Build patches via sliding window (reshape trick for contiguous case)
-            # For non-contiguous, would need explicit gather
-            
-            # Simplified: unfold via reshape when KH=KW=1
-            
-            if KH == 1 and KW == 1:
-                # 1x1 conv is just pointwise: [N, Cin, H, W] x [Cout, Cin, 1, 1]
-                # -> [N, 1, Cin, H, W] x [1, Cout, Cin, 1, 1] -> sum over Cin
-                x = self.reshape((N, 1, C_in, H, W))                    # [N, 1, Cin, H, W]
-                w = weight.reshape((1, C_out, C_in, 1, 1))              # [1, Cout, Cin, 1, 1]
-                return x.mul(w).sum(axis=2)                             # [N, Cout, H, W]
-            else:
-                # General conv2d: build IR directly with polyhedral access pattern
-                # Y[n, cout, oh, ow] = sum_{cin,kh,kw} X[n, cin, oh+kh, ow+kw] * W[cout, cin, kh, kw]
-                raise NotImplementedError(f"")
-        else:
-            raise NotImplementedError(f"Strided conv (stride={stride}) not implemented yet")
+        # Step 1: unfold input -> [N, C_in, H_out, W_out, KH, KW]
+        x = self.unfold((KH, KW), stride=(sh, sw), dilation=(dh, dw))
+        
+        # Step 2: permute to [N, H_out, W_out, C_in, KH, KW]
+        x = x.permute((0, 2, 3, 1, 4, 5))
+        
+        # Step 3: reshape to [N, H_out*W_out, C_in*KH*KW]
+        x = x.reshape((N, H_out * W_out, C_in * KH * KW))
+        
+        # Step 4: reshape weight to [C_out, C_in*KH*KW] then transpose for matmul
+        w = weight.reshape((C_out, C_in * KH * KW))
+        # w.T -> [C_in*KH*KW, C_out]
+        w = w.permute((1, 0))
+        
+        # Step 5: matmul [N, H_out*W_out, C_in*KH*KW] @ [C_in*KH*KW, C_out]
+        # -> [N, H_out*W_out, C_out]
+        y = x.matmul(w)
+        
+        # Step 6: reshape to [N, H_out, W_out, C_out]
+        y = y.reshape((N, H_out, W_out, C_out))
+        
+        # Step 7: permute to [N, C_out, H_out, W_out]
+        return y.permute((0, 3, 1, 2))
 
     def matmul(self, other: ATen|TOperand) -> Tensor:
         """

@@ -391,6 +391,55 @@ class View(ViewOps, ATenOp):
             offset=tensor.T[0].offset,
         ),))
 
+    @staticmethod
+    def shrink(tensor: ATenOp, bounds: tuple[tuple[int | ATenOp, int | ATenOp] | None, ...]) -> View:
+        """
+        Shrink tensor by selecting a sub-region along each axis.
+        
+        bounds: tuple of (start, end) pairs or None for each dimension.
+                None means keep the full dimension.
+                (start, end) selects elements from start to end (exclusive).
+        
+        The result is a strided view with adjusted offset.
+        """
+        assert tensor.T[0] is not None
+        assert len(bounds) == len(tensor.T[0].axes), f"bounds length {len(bounds)} != ndim {len(tensor.T[0].axes)}"
+        
+        new_axes = []
+        # Compute additional offset from shrinking
+        offset_contrib: ATenOp = _const(0)
+        
+        for axis, bound in zip(tensor.T[0].axes, bounds, strict=True):
+            if bound is None:
+                # Keep full dimension
+                new_axes.append(axis)
+            else:
+                start, end = bound
+                start_const = _const(start) if isinstance(start, int) else start
+                end_const = _const(end) if isinstance(end, int) else end
+                new_size = Add((end_const, Neg((start_const,))))
+                # Offset contribution: start * stride
+                offset_contrib = Add((offset_contrib, Mul((start_const, axis.stride))))
+                new_axes.append(ATenAxis(
+                    size=new_size,
+                    stride=axis.stride,
+                    offset=axis.offset,
+                    incf=axis.incf,
+                ))
+        
+        # Combine with existing offset
+        total_offset = tensor.T[0].offset
+        if total_offset is not None:
+            total_offset = Add((total_offset, offset_contrib))
+        else:
+            total_offset = offset_contrib
+        
+        return View((tensor,), T=(ATenOpType(
+            axes=tuple(new_axes),
+            dtype=tensor.T[0].dtype,
+            offset=total_offset,
+        ),))
+
     # todo: check it
     def get_source_access_map(self) -> "AccessMap":
         """Get the AccessMap for reading from the source tensor."""
@@ -458,7 +507,8 @@ class Reduce(MetaOps, ATenOp):
         # initially reduce is not fused.
         reduced = self.bop((a, b)) if self.bop is not None else b
         instance = Exec.schedule(band.all_dimensions(), (a, ), Store.new(a, reduced))
-        return (MemoryOf((instance,), nth=0, T=(instance.T[0],)),)
+        # Use self.T (reduce output type) instead of instance.T (buffer type)
+        return (MemoryOf((instance,), nth=0, T=self.T),)
 
 @dataclass(frozen=True)
 class Einsum(MetaOps, ATenOp): pass
@@ -791,12 +841,17 @@ class MemoryOf(ScheduleOps, ViewOps, ATenOp):
     """
     nth: int = 0
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...] | None, **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 1, "MemoryOf requires exactly one Exec argument"
         assert isinstance(args[0], Exec), f"MemoryOf arg must be Exec, got {type(args[0]).__name__}"
         assert "nth" in kwargs, "MemoryOf requires nth argument."
         nth = kwargs.get("nth")
         assert 0 <= nth < len(args[0].T), f"MemoryOf(Exec, nth={nth}) out of range for Exec with {1+len(args[0].T_rest)} outputs"
+        # If T is explicitly provided (e.g., from Reduce.lower()), use it
+        # Otherwise fall back to Exec's output type
+        if T is not None and T[0] is not None:
+            return T
+        return (args[0].T[nth],)
         return (args[0].T[nth],)
 ## Execute Instance
 @dataclass(frozen=True)

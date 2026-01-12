@@ -22,7 +22,7 @@ result = gemm.sin()
 print("matmul+elwise")
 print(result.op.viz())
 
-N, C_in, C_out, H, W = 2, 3, 8, 16, 16
+N, C_in, C_out, H, W = 2, 3, 8, 19, 19
 KH, KW = 4, 4
 
 x = C.Tensor([N, C_in, H, W])
