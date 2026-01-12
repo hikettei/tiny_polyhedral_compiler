@@ -162,15 +162,6 @@ class TensorOps():
         if is_domain is False: return out
         assert out.T is not None
         tmp = Memory.defglobal([arg.size for arg in self.T.axes], self.T.dtype, tmp=True)
-        # This is where "Loop Fusion" occurs?
-        # - The Goal here is to create Compute Bound Graph.
-        # - Fusion is doable?
-        # - How to rewrite graph to fuse them?
-        # 1. Use pattern matcher to label all LexFence
-        # 1. Construct dependency graph
-        # 2. analyse access dependencies
-        # 3. tile if needed
-        # 4. fuse if possible
         return Sync.sync(tmp, Store.new(Load.from_tensor(tmp), out))
 # UnaryOps verifier: check dtypes/shapes of arguments
 class UnaryOps(TensorOps):
@@ -1160,11 +1151,15 @@ class Sync(ViewOps, ATenOp):
         for aff_node in load.args[1:]:
             if not isinstance(aff_node, Aff):
                 continue
-            stride, range_node, offset, incf = aff_node.args
-            if not isinstance(range_node, Range):
+            stride, dim_node, offset, incf = aff_node.args
+            
+            # Get dimension index from Dim node (new IR structure)
+            if isinstance(dim_node, Dim):
+                dim_idx = dim_node.dim
+            else:
                 continue
 
-            gid_var = f"gid{range_node.dim}"
+            gid_var = f"gid{dim_idx}"
             s = stride.item if hasattr(stride, "item") else stride
             o = offset.item if hasattr(offset, "item") else offset
             i = incf.item if hasattr(incf, "item") else incf
@@ -1206,19 +1201,116 @@ class Sync(ViewOps, ATenOp):
 
     def _fuse(self, producer: "Sync") -> "Sync":
         """
-        Unified fusion via iteration space morphism.
+        Unified fusion via polyhedral analysis (aff.py).
 
-        All fusion cases reduce to: find a mapping from producer dims to consumer dims
-        such that the linear address spaces align. This handles:
-        - Element-wise: identity mapping
-        - Reduce inner: producer dims ⊃ consumer dims, extras reference outer scope
-        - Reshape: same total elements, decompose via div/mod
-        - Permute/broadcast: size-based matching
+        Uses attempt_fusion() from aff.py to analyze RAW dependencies
+        via BasicMap composition. Falls back to shape-based analysis.
         """
-        subst = self._find_subst(producer)
+        # Try polyhedral analysis first (handles tiled fusion like Conv+Pool)
+        subst = self._find_subst_polyhedral(producer)
+
+        # Fall back to shape-based analysis
+        if subst is None:
+            subst = self._find_subst(producer)
+
         if subst is None:
             return self
         return self._apply_fusion(producer, subst)
+
+    def _find_subst_polyhedral(self, producer: "Sync") -> "dict[int, ATenOp] | None":
+        """
+        Find morphism using polyhedral analysis from aff.py.
+
+        Calls A.attempt_fusion() which computes RAW dependencies:
+        RAW = producer_write.apply_range(consumer_read.reverse())
+        """
+        prod_reads, prod_writes = producer._collect_access_maps()
+        cons_reads, cons_writes = self._collect_access_maps()
+
+        if not prod_writes:
+            return None
+
+        result = A.attempt_fusion(
+            A.UnionMap.from_maps(prod_writes),
+            A.UnionMap.from_maps(prod_reads),
+            A.UnionMap.from_maps(cons_writes),
+            A.UnionMap.from_maps(cons_reads),
+        )
+
+        if not result.success:
+            return None
+
+        cons_domain = self.domain
+        if cons_domain is None:
+            return None
+
+        # Tiled fusion (Conv+Pool): build morphism from tiling_info
+        if result.fusion_type == "tiled" and result.tiling_info is not None:
+            return self._morphism_from_tiling(producer, result.tiling_info, cons_domain)
+
+        # Perfect fusion: identity morphism
+        if result.fusion_type == "perfect":
+            morphism: dict[int, ATenOp] = {}
+            for d in producer.dims:
+                if d < cons_domain.ndim:
+                    morphism[d] = Dim((cons_domain,), dim=d)
+            return morphism if morphism else None
+
+        return None
+
+    def _morphism_from_tiling(
+        self,
+        producer: "Sync",
+        tiling_info: "A.TiledFusionInfo",
+        cons_domain: "Domain"
+    ) -> "dict[int, ATenOp] | None":
+        """Build morphism from TiledFusionInfo for Conv+Pool style fusion."""
+        morphism: dict[int, ATenOp] = {}
+
+        # Map gid variable names to consumer dimension indices
+        cons_name_to_dim: dict[str, int] = {f"gid{i}": i for i in range(cons_domain.ndim)}
+
+        for pvar, (tile_size, rvar) in tiling_info.tile_dims.items():
+            if not pvar.startswith("gid") or not pvar[3:].isdigit():
+                continue
+            pdim = int(pvar[3:])
+
+            if tiling_info.constraint is None:
+                continue
+
+            # Find scaled consumer variable from constraint
+            p_coeff = tiling_info.constraint.expr.coeff_of(pvar)
+            if not isinstance(p_coeff, int) or p_coeff == 0:
+                continue
+
+            scaled_var = None
+            for var in tiling_info.constraint.expr.variables():
+                if var in (pvar, rvar):
+                    continue
+                c = tiling_info.constraint.expr.coeff_of(var)
+                if isinstance(c, int) and abs(c) == abs(p_coeff * tile_size):
+                    scaled_var = var
+                    break
+
+            if scaled_var is None or scaled_var not in cons_name_to_dim or rvar not in cons_name_to_dim:
+                continue
+
+            # morphism[pdim] = tile_size * Dim(scaled) + Dim(red)
+            scaled_dim = cons_name_to_dim[scaled_var]
+            red_dim = cons_name_to_dim[rvar]
+            scaled_ref = Dim((cons_domain,), dim=scaled_dim)
+            red_ref = Dim((cons_domain,), dim=red_dim)
+            morphism[pdim] = Add((Mul((_const(tile_size), scaled_ref)), red_ref))
+
+        # Identity for shared dims
+        for svar in tiling_info.shared_dims:
+            if svar in cons_name_to_dim and svar.startswith("gid") and svar[3:].isdigit():
+                dim_idx = cons_name_to_dim[svar]
+                pdim = int(svar[3:])
+                if pdim not in morphism:
+                    morphism[pdim] = Dim((cons_domain,), dim=dim_idx)
+
+        return morphism if morphism else None
     def _find_subst(self, producer: "Sync") -> "dict[int, ATenOp] | None":
         """
         Find iteration space morphism: producer_dims → consumer_dims.
@@ -1522,210 +1614,3 @@ class Store(ATenOp):
         assert len(args) == 2, "Store takes (dst, src)"
         assert args[0].T is not None
         return ATenOpType(axes=(), dtype=args[0].T.dtype)
-        return ATenOpType(axes=(), dtype=args[0].T.dtype)
-
-
-# =============================================================================
-# FusionEngine - Unified Loop Fusion via AccessMap
-# =============================================================================
-
-@dataclass
-class FusionResult:
-    """Result of fusion analysis between producer and consumer."""
-    fusible: bool
-    morphism: Union[Dict[int, ATenOp], None] = None  # producer_dim -> consumer_expr
-    fusion_type: str = "none"  # "perfect", "reshape", "reduce", "broadcast"
-    reason: str = ""
-
-
-class FusionEngine:
-    """
-    Unified loop fusion engine using AccessMap for iteration domain analysis.
-    
-    Fusion Philosophy:
-    ==================
-    Two kernels (Syncs) can be fused if we can find an iteration space
-    morphism σ : producer_domain -> consumer_domain such that:
-    
-        producer.write ∘ σ⁻¹ = consumer.read
-    
-    In other words, for each point in consumer's iteration space, we can
-    compute the corresponding point in producer's space and inline the
-    computation.
-    
-    Fusion Types:
-    =============
-    1. Perfect Fusion (identity morphism)
-       - Domains are identical: σ = identity
-       - Example: sin(cos(x)) where both iterate [0, N)
-    
-    2. Reshape Fusion (linear morphism via div/mod)
-       - Same total elements, different shapes
-       - σ : [i,j,k,l] -> [linear // stride_p, linear % stride_p, ...]
-       - Example: reshape([10,10]) -> reshape([2,5,2,5])
-    
-    3. Reduce Fusion (projection morphism)
-       - Producer has extra dimensions (reduction axes)
-       - σ : [i,j] -> [i,j,k] where k is reduction dim
-       - Example: sum(x, axis=2).sin()
-    
-    4. Broadcast Fusion (embedding morphism)
-       - Producer has size-1 dims expanded in consumer
-       - σ : [i,j,k] -> [i,0,k] when producer has j=1
-       - Example: (x + bias) where bias has shape [1, N]
-    
-    Usage:
-    ======
-    ```python
-    engine = FusionEngine()
-    result = engine.analyze(consumer_endrange, producer_endrange)
-    if result.fusible:
-        fused = engine.apply(consumer_endrange, producer_endrange, result)
-    ```
-    """
-
-    @staticmethod
-    def analyze(consumer: Sync, producer: Sync) -> FusionResult:
-        """
-        Analyze if consumer can fuse with producer.
-        
-        Returns FusionResult with morphism if fusible.
-        """
-        cons_domain = consumer.get_iteration_domain()
-        prod_domain = producer.get_iteration_domain()
-        
-        # Get integer sizes for analysis
-        cons_sizes = FusionEngine._get_int_sizes(cons_domain)
-        prod_sizes = FusionEngine._get_int_sizes(prod_domain)
-        
-        if cons_sizes is None or prod_sizes is None:
-            return FusionResult(False, reason="Symbolic sizes not supported yet")
-        
-        # Build position -> Range mapping for consumer (position-based indexing)
-        cons_pos_to_range: Dict[int, Range] = {}
-        for i, rng in enumerate(consumer.ranges):
-            if isinstance(rng, Range):
-                cons_pos_to_range[i] = rng
-        
-        # Case 1: Perfect fusion - identical domains
-        if cons_domain.domain_equals(prod_domain):
-            morphism = {d: cons_pos_to_range[d] for d in cons_sizes.keys()}
-            return FusionResult(True, morphism, "perfect", "Identical domains")
-        
-        # Case 2: Broadcast fusion - producer has size-1 dims
-        prod_dims = set(prod_sizes.keys())
-        cons_dims = set(cons_sizes.keys())
-        
-        if prod_dims == cons_dims:
-            # Same dims but different sizes - check for broadcast
-            broadcast_dims = []
-            for d in prod_dims:
-                if prod_sizes[d] == 1 and cons_sizes[d] != 1:
-                    broadcast_dims.append(d)
-                elif prod_sizes[d] != cons_sizes[d]:
-                    return FusionResult(False, reason=f"Size mismatch on dim {d}")
-            
-            if broadcast_dims or prod_dims == cons_dims:
-                morphism: Dict[int, ATenOp] = {}
-                for d in prod_dims:
-                    if d in broadcast_dims:
-                        morphism[d] = _const(0)  # Broadcast: always index 0
-                    else:
-                        morphism[d] = cons_pos_to_range[d]
-                return FusionResult(True, morphism, "broadcast", f"Broadcast dims: {broadcast_dims}")
-        
-        # Case 3: Reduce fusion - producer has more dims
-        if cons_dims < prod_dims:
-            shared_dims = prod_dims & cons_dims
-            if all(prod_sizes[d] == cons_sizes[d] for d in shared_dims):
-                morphism = {d: cons_pos_to_range[d] for d in prod_dims if d in cons_pos_to_range}
-                return FusionResult(True, morphism, "reduce", "Consumer matches producer output")
-                return FusionResult(True, morphism, "reduce", "Consumer matches producer output")
-        
-        # Case 4: Reshape fusion - same total elements
-        prod_total = 1
-        for v in prod_sizes.values():
-            prod_total *= v
-        cons_total = 1
-        for v in cons_sizes.values():
-            cons_total *= v
-        
-        if prod_total == cons_total:
-            morphism = FusionEngine._build_reshape_morphism(
-                prod_sizes, cons_sizes, cons_pos_to_range
-            )
-            if morphism:
-                return FusionResult(True, morphism, "reshape", "Same total elements")
-        
-        return FusionResult(False, reason="No fusion strategy found")
-
-    @staticmethod
-    def apply(consumer: Sync, producer: Sync, result: FusionResult) -> Sync:
-        """Apply fusion using the computed morphism."""
-        if not result.fusible or result.morphism is None:
-            return consumer
-        return consumer._apply_fusion(producer, result.morphism)
-
-    @staticmethod
-    def _get_int_sizes(domain: AccessMap) -> Union[Dict[int, int], None]:
-        """Extract integer sizes from AccessMap domain using position-based indexing."""
-        result: Dict[int, int] = {}
-        for i, rng in enumerate(domain.ranges):
-            if isinstance(rng, Range):
-                size = rng.size
-                if isinstance(size, Const) and isinstance(size.value, int):
-                    result[i] = size.value
-                else:
-                    return None
-        return result
-
-    @staticmethod
-    def _build_reshape_morphism(
-        prod_sizes: Dict[int, int],
-        cons_sizes: Dict[int, int],
-        cons_pos_to_range: Dict[int, Range]
-    ) -> Union[Dict[int, ATenOp], None]:
-        """
-        Build morphism for reshape fusion via linear decomposition.
-        
-        Maps producer positions to consumer positions via:
-        - Build linear index from consumer: linear = Σ cons_stride[d] * Range(d)
-        - Decompose into producer positions: prod_pos = linear // prod_stride % prod_size
-        """
-        # Build linear expression from consumer ranges (row-major order)
-        sorted_cons = sorted(cons_sizes.keys())
-        cons_strides: list[int] = []
-        stride = 1
-        for d in reversed(sorted_cons):
-            cons_strides.insert(0, stride)
-            stride *= cons_sizes[d]
-        
-        # linear = Σ cons_stride[d] * Range(d)
-        linear: ATenOp = _const(0)
-        for d, s in zip(sorted_cons, cons_strides):
-            rng = cons_pos_to_range.get(d)
-            if rng is None:
-                return None
-            if s == 1:
-                linear = Add((linear, rng))
-            else:
-                linear = Add((linear, Mul((rng, _const(s)))))
-        
-        # Decompose linear into producer dims (row-major order)
-        sorted_prod = sorted(prod_sizes.keys())
-        prod_strides: list[int] = []
-        stride = 1
-        for d in reversed(sorted_prod):
-            prod_strides.insert(0, stride)
-            stride *= prod_sizes[d]
-        
-        morphism: Dict[int, ATenOp] = {}
-        remaining = linear
-        for d, s in zip(sorted_prod, prod_strides):
-            if s == 1:
-                morphism[d] = remaining
-            else:
-                morphism[d] = IDiv((remaining, _const(s)))
-                remaining = Mod((remaining, _const(s)))
-        
-        return morphism

@@ -1,5 +1,5 @@
 """
-Test AccessMap and FusionEngine implementation.
+Test AccessMap and polyhedral fusion implementation.
 
 Tests for the unified fusion framework:
 1. Reshape+Reshape fusion
@@ -12,12 +12,12 @@ from caten.ir import (
     AccessMap,
     ATenOpType,
     Sync,
-    FusionEngine,
     Load,
     Memory,
     Sin,
     Store,
 )
+from caten.aff import attempt_fusion, BasicMap, UnionMap, AffExpr
 
 print("=" * 60)
 print("Test 1: AccessMap Creation")
@@ -165,33 +165,33 @@ if isinstance(lowered_conv, Sync):
     print(lowered_conv.viz())
 print()
 print("=" * 60)
-print("Test 7: FusionEngine.analyze() detailed")
+print("Test 7: Polyhedral Fusion Analysis (aff.py)")
 print("=" * 60)
 
-# Create producer: sin(x) for shape [10, 20]
-x_mem = Memory.defglobal((10, 20), float32)
-x_load = Load.from_tensor(x_mem)
-x_sin = Sin((x_load,))
-x_out = Memory.defglobal((10, 20), float32, tmp=True)
-x_store = Store.new(Load.from_tensor(x_out), x_sin)
-producer = Sync.sync(x_out, x_store)
+# Test attempt_fusion with element-wise operations
+# Producer: sin(x) writes Out[i,j] = sin(In[i,j])
+# Consumer: sin(y) writes Res[i,j] = sin(Out[i,j])
 
-# Create consumer: sin of producer output for same shape
-y_load = Load.from_tensor(producer)
-y_sin = Sin((y_load,))
-y_out = Memory.defglobal((10, 20), float32, tmp=True)
-y_store = Store.new(Load.from_tensor(y_out), y_sin)
-consumer = Sync.sync(y_out, y_store)
+gid0, gid1 = "gid0", "gid1"
+# Access: 20*i + j (for a [10, 20] tensor)
+addr_expr = 20 * AffExpr.var(gid0) + AffExpr.var(gid1)
 
-# Analyze fusion
-fusion_result = FusionEngine.analyze(consumer, producer)
+producer_write = BasicMap.from_access((gid0, gid1), addr_expr)
+producer_read = BasicMap.from_access((gid0, gid1), addr_expr)
+consumer_write = BasicMap.from_access((gid0, gid1), addr_expr)
+consumer_read = BasicMap.from_access((gid0, gid1), addr_expr)
+
+fusion_result = attempt_fusion(
+    UnionMap.from_maps([producer_write]),
+    UnionMap.from_maps([producer_read]),
+    UnionMap.from_maps([consumer_write]),
+    UnionMap.from_maps([consumer_read]),
+)
+
 print("Fusion analysis result:")
-print(f"  fusible: {fusion_result.fusible}")
+print(f"  success: {fusion_result.success}")
 print(f"  fusion_type: {fusion_result.fusion_type}")
-print(f"  reason: {fusion_result.reason}")
-if fusion_result.morphism:
-    print(f"  morphism dims: {list(fusion_result.morphism.keys())}")
-
+print(f"  message: {fusion_result.message}")
 print()
 print("=" * 60)
 print("Test 8: Matmul + Softmax + Matmul (Attention Pattern)")
