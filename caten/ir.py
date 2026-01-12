@@ -190,8 +190,11 @@ class TensorOps():
             # Run r0 over band.all_dimensions(), with access relations defined by Load.from_tensor
             # returning out
             instance = Exec.schedule(band.all_dimensions(), (out,), r0)
-            return MemoryOf((instance,) nth=0)
+            return MemoryOf((instance,) nth=0, T=(out.T[0],)) # the output become contiguous array!
 # TODO:
+# UnaryOp, IDENTITYを導入する (does nothing)
+# View(View), ...これを綺麗にLoweringするために，どうしようかなな。。。
+# View <--- I
 # ShapeTracker: Check sizes
 # def schedule
 # Load.from_tensor -> use band
