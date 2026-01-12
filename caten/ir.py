@@ -195,8 +195,9 @@ class TensorOps():
             return (MemoryOf((instance,), nth=0, T=(out.T[0],)),) # the output become contiguous array!
 
 # [TODO] tensor.pyに戻って, semantic修正，initial value = -infとかをどうやって実装するか？
+# - Tensor.py: def fill
 # - LOADを実装する
-        
+# then fuse
 # TODO: (NOTE: REMOVE COMMENTS)
 # UnaryOp, IDENTITYを導入する (does nothing)
 # View(View), ...これを綺麗にLoweringするために，どうしようかなな。。。
@@ -438,7 +439,7 @@ class Reduce(MetaOps, ATenOp):
         Reduce((A, B), bop=Add, axis=(2,), )  # Sum reduction over axis 2
         Reduce((A, B), bop=Max, axis=(1,), )  # Max reduction over axis 1
     """
-    bop: type[BinaryOps] = Add
+    bop: Union[type[BinaryOps], None] = Add # If None, just move
     axis: tuple[int, ...] = ()
     keepdim: bool = False
     @classmethod
@@ -467,7 +468,8 @@ class Reduce(MetaOps, ATenOp):
         a, b = tuple([x.lower()[0] for x in self.args])
         a, b = [Load.from_tensor(a, band), Load.from_tensor(b, band)]
         # initially reduce is not fused.
-        instance = Exec.schedule(band.all_dimensions(), (a, ), Store.new(a, self.bop((a, b))))
+        reduced = self.bop((a, b)) if self.bop is not None else b
+        instance = Exec.schedule(band.all_dimensions(), (a, ), Store.new(a, reduced))
         return (MemoryOf((instance,), nth=0, T=(out.T[0],)),)
 
 @dataclass(frozen=True)
