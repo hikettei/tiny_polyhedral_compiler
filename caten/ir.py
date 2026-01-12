@@ -554,6 +554,8 @@ class Conv2D(MetaOps, ATenOp):
             Range((_const(KH),)),  # dim 5: KH (kh)
             Range((_const(KW),)),  # dim 6: KW (kw)
         ]
+
+        # Domain Definition
         domain = Domain(tuple(all_ranges))
 
         # Create Dim references for all dimensions
@@ -627,16 +629,19 @@ class Conv2D(MetaOps, ATenOp):
         return Sync(out_dims + (out_memory, outer_store), T=self.T, n_dims=4)
 
 
-## == SyncOps ============================================================
+## == ScheduleOps = ============================================================
+class ScheduleOps():
+    """
+    Ops for scheduling.
+    """
+    
 ### Array access graph constrained via only affine functions, sorted by lex order (for symbolic shape)
 @dataclass(frozen=True)
-class Range(ATenOp):
+class Range(ScheduleOps, ATenOp):
     """
     Range(SIZE) represents the half-open interval [0, SIZE).
-    
-    This is a pure bound - it does not carry dimension information.
-    Use Domain to group Ranges into an iteration space, and Dim to
-    extract a specific Range from a Domain.
+    - SIZE should be a scalar typed tensor.
+    - Domain is the only user for the Range.
     """
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
@@ -650,17 +655,16 @@ class Range(ATenOp):
         """Get the upper bound of this Range."""
         return self.args[0]
 
-
 @dataclass(frozen=True)
-class Domain(ATenOp):
+class Domain(ScheduleOps, ATenOp):
     """
-    Domain(Range1, Range2, ...) represents an iteration space.
+    Domain(Range1, Range2, ...) binds multiple ranges as an iteration space.
     
     A Domain is an ordered list of Ranges that defines the loop nest:
     - Domain(Range(M), Range(N)) represents: for i in [0,M): for j in [0,N):
     
     Use Dim(domain, dim=k) to extract the k-th Range.
-    
+
     Example:
         domain = Domain(Range(10), Range(20))
         # Represents: for i0 in [0,10): for i1 in [0,20):
@@ -673,26 +677,20 @@ class Domain(ATenOp):
         return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
 
     @property
-    def ndim(self) -> int:
-        """Number of dimensions in this Domain."""
-        return len(self.args)
-
+    def ndim(self) -> int: return len(self.args)
     @property
-    def ranges(self) -> tuple[Range, ...]:
-        """Get all Ranges in this Domain."""
-        return tuple(r for r in self.args if isinstance(r, Range))
-
+    def ranges(self) -> tuple[Range, ...]: return tuple(r for r in self.args)
     @property
-    def shape(self) -> tuple[ATenOp, ...]:
-        """Get the shape (sizes) of this Domain."""
-        return tuple(r.size for r in self.ranges)
-
+    def shape(self) -> tuple[ATenOp, ...]: return tuple(r.size for r in self.ranges)
+    # TODO:
+    # - Unsqueeze
+    # - Squeeze
+    # - Reshape
 
 @dataclass(frozen=True)
-class Dim(ATenOp):
+class Dim(ScheduleOps, ATenOp):
     """
     Dim(Domain, dim=k) extracts the k-th Range from a Domain.
-    
     This is how you reference a specific loop variable within an iteration space.
     
     Example:
@@ -701,7 +699,6 @@ class Dim(ATenOp):
         j = Dim(domain, dim=1)  # References the j-loop [0,20)
     """
     dim: int = 0
-
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) == 1, "Dim requires exactly one Domain argument"
@@ -727,12 +724,10 @@ class Dim(ATenOp):
 
 
 @dataclass(frozen=True)
-class Aff(ATenOp):
+class Aff(ScheduleOps, ATenOp):
     """
-    Aff(Stride, Dim, Offset, Incf) - Affine index expression.
-    
-    Computes: Stride * (Incf * Dim + Offset)
-    
+    Aff(Stride, Dim, Offset, Incf)
+    Equivalent to: Stride * (Incf * Dim + Offset)
     In polyhedral notation: [i] -> { Stmt[Stride * (Incf * i + Offset)] }
     
     Args:
@@ -761,42 +756,21 @@ class Aff(ATenOp):
             "Aff: Incf should be a scalar index"
         return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
 
-    def as_aff_str(self) -> str: return self.render_isl()
-    def as_aff_str(self) -> str: return self.render_isl()
-
 @dataclass(frozen=True)
-class AccessMap(ATenOp):
+class AccessMap(ScheduleOps, ATenOp):
     """
-    AccessMap represents an affine access pattern with explicit iteration domain.
-
-    Structure:
-    ==========
-    args = (Range1, Range2, ..., Aff1, Aff2, ...)
-    
-    Where:
-    - args[0:n_ranges]: Range nodes defining the iteration domain
-    - args[n_ranges:]: Aff nodes defining the access pattern
+    AccessMap(Domain, Aff1, Aff2, ...) represents an affine access pattern.
+    equivalent to this BasicMap
+    { Domain -> [Aff1+Aff2+...] }
 
     Example - Row-major 2D access:
     ==============================
     For out[i,j] = f(in[i,j]) where shapes are [M, N]:
-    
+        d = Domain(Range(M, dim=0), Range(N, dim=1))
         AccessMap(
-            Range(M, dim=0), Range(N, dim=1),  # Iteration domain
-            Aff(N, Range0, 0, 1),              # i * N
-            Aff(1, Range1, 0, 1)               # j
-        )
-    
-    Fusion Rule:
-    ============
-    Two AccessMaps can be fused iff their iteration domains are identical:
-    - Same number of ranges
-    - Same sizes for corresponding ranges
-    - Same dimension ordering
-
-    Mathematical Interpretation:
-    ===========================
-    AccessMap encodes: { [i0, ..., in] -> [addr] : 0 ≤ ik < Sk }
+            d,
+            Aff(N, Dim(d, dim=0), 1)
+            Aff(1, Dim(d, dim=1), 1))
     """
     n_ranges: int = 0
 
@@ -925,22 +899,20 @@ class AccessMap(ATenOp):
         return A.BasicMap.from_access(dom_vars, addr_expr, dom_name="S")
 
 @dataclass(frozen=True)
-class Load(ATenOp):
+class Load(ScheduleOps, ATenOp):
     """
-    Load(Memory | Sync, idx1, idx2, ...) - Load from memory.
-    
-    Indices are typically Aff nodes that encode the access pattern.
-    For fusion analysis, use Load.get_access_map() to extract
-    an AccessMap from the indices.
+    Load(Memory | MemoryOf, AccessMap)
+    Access AccessMapth element of Memory or MemoryOf
     """
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) >= 2, "Load: the number of argument should be larger than two"
-        assert isinstance(args[0], Memory) or isinstance(args[0], Sync), "Load: Can only load element from Memory or Array."
+        assert isinstance(args[0], Memory) or isinstance(args[0], MemoryOf), "Load: Can only load element from Memory or MemoryOf"
         assert args[0].T is not None and args[0].T.ndim > 0, f"Load: the first argument should be array, getting scalar {args[0].__class__}"
         assert all([arg.T is not None and arg.T.ndim == 0 for arg in args[1:]]), "Load: indices should be scalar expressions."
         return ATenOpType(axes=tuple(), dtype=args[0].T.dtype, offset=_const(0, index))
 
+    # [TODO] Update
     @staticmethod
     def from_tensor(tensor: ATenOp, T: "ATenOpType | None" = None) -> ATenOp:
         """Create a Load from a tensor using Domain/Dim structure.
@@ -1003,8 +975,8 @@ class Load(ATenOp):
         )
 ### Scheduling Graph
 @dataclass(frozen=True)
-class Memory(ViewOps, ATenOp):
-    """Memory(ATenOp, level="global or local")"""
+class Memory(ScheduleOps, ViewOps, ATenOp):
+    """Memory(ATenOp). Tensor Allocation."""
     level: str = "global"
     tmp: bool = False
     @staticmethod
@@ -1016,64 +988,40 @@ class Memory(ViewOps, ATenOp):
         return Memory((), T=ATenOpType.from_shape(shape, dtype), level="local", tmp=True)
 
 @dataclass(frozen=True)
-class Sync(ViewOps, ATenOp):
+class MemoryOf(ScheduleOps, ViewOps, ATenOp):
     """
-    Sync represents a loop nest with iteration domain, output, and body.
+    MemoryOf(Sync, nth=int) retrives the result of nth Synchronized tensor.
+    """
+    nth: int = 0
+    # TODO
 
-    Structure:
-    ==========
-    args = (dim1, dim2, ..., output, body)
+# TODO: Rename Sync -> Exec
+# TODO: Domain -> Band
+@dataclass(frozen=True)
+class Sync(ScheduleOps, ViewOps, ATenOp):
+    """
+    Sync(Dim1, Dim2, ..., Tensor1, Tensor2, ..., OP)
+    SyncはOPを実行し，OPが持つDomainに含まれるDimの全てが終端I.e.: SIZEに到達するまで実行する。
+    OPの成果物はTensor1, Tensor2であり，Listとして返される。MemoryOfで取得可能
 
-    Where:
-    - args[0:n_dims]: Dim nodes - references to shared Domain
-    - args[n_dims]: Memory node - the output array
-    - args[-1]: Body (Store or nested Sync)
-
-    The Dim nodes all reference the same Domain, which contains the Ranges.
-    This design cleanly separates:
-    - Domain: the iteration space (list of Ranges)
-    - Dim: a reference to a specific dimension in the Domain
-    - Sync: synchronization over Dims
-
-    Example - Element-wise sin:
-    ===========================
-    ```c
-    float out[10*10];
-    for (int i0 = 0; i0 < 10; i0++) {
-        for (int i1 = 0; i1 < 10; i1++) {
-            out[i0*10 + i1] = sinf(in[i0*10 + i1]);
-        }
-    }
-    ```
-    Represented as:
+    For example, elementwise reduction is represented as:
         domain = Domain(Range(10), Range(10))
         Sync(Dim(domain, 0), Dim(domain, 1), out_mem, Store(...))
 
-    Example - GEMM with k-reduction (nested Sync):
-    ==================================================
-    ```c
-    float C[M*N];
-    for (int i = 0; i < M; i++) {
-        for (int j = 0; j < N; j++) {
-            float acc = 0.0f;
-            for (int k = 0; k < K; k++) {
-                acc += A[i*K+k] * B[k*N+j];
-            }
-            C[i*N+j] = acc;
-        }
-    }
-    ```
-    Represented as:
+    For example, gemm with k-reduction is represented as:
         outer_domain = Domain(Range(M), Range(N))
         inner_domain = Domain(Range(K))
-        Sync(
-            Dim(outer_domain, 0), Dim(outer_domain, 1),
-            C,
-            Store(Load(C, ...),
-                Sync(
-                    Dim(inner_domain, 0),
-                    acc,
-                    Store(acc, Add(Load(acc), Mul(A[i,k], B[k,j]))))))
+        res = Run(
+          Dim(outer_domain, 0), Dim(outer_domain, 1), # schedule
+          C,                                          # output
+          Store(Load(C, AccessMap(Domain, Aff(...), Aff(...)))
+                Run(
+                  Dim(inner_domain, 0),
+                  acc,
+                  Store(acc, Add(Load(acc), Mul(...))))))
+        MemoryOf(res, nth=0) # Final Output!
+    Fusion / Kernel Schedule Semantic
+    TODO
     """
     n_dims: int = 0
 
@@ -1732,7 +1680,7 @@ class Sync(ViewOps, ATenOp):
         return node
 
 @dataclass(frozen=True)
-class Store(ATenOp):
+class Store(ScheduleOps, ATenOp):
     """
     Store(dst, src) - Store src value into dst location.
     dst is typically a Load (with Aff indices), src is the computed value.
