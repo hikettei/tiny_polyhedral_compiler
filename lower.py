@@ -47,8 +47,8 @@ print(f"After reshape 1: {[ax.size for ax in b.op.T.axes]}")
 print(f"After reshape 2: {[ax.size for ax in c.op.T.axes]}")
 print(f"After sin: {[ax.size for ax in d.op.T.axes]}")
 
-# Lower and check fusion
-lowered = d.op.lower()
+# Check lowered IR (tensor.op is already lowered)
+lowered = d.op
 print(f"\nLowered type: {type(lowered).__name__}")
 if isinstance(lowered, Sync):
     print(f"Sync dims: {lowered.dims}")
@@ -98,12 +98,11 @@ print(f"B shape: {[ax.size for ax in B.op.T.axes]}")
 print(f"GEMM shape: {[ax.size for ax in gemm.op.T.axes]}")
 print(f"Result shape: {[ax.size for ax in result.op.T.axes]}")
 
-# Lower GEMM
-lowered_gemm = gemm.op.lower()
+# tensor.op is already lowered
+lowered_gemm = gemm.op
 print(f"\nLowered GEMM type: {type(lowered_gemm).__name__}")
 
-# Lower the full expression
-lowered_result = result.op.lower()
+lowered_result = result.op
 print(f"Lowered result type: {type(lowered_result).__name__}")
 
 if isinstance(lowered_result, Sync):
@@ -132,30 +131,27 @@ if isinstance(load, Load):
 
 print()
 print("=" * 60)
-print("Test 6: Conv + Pool + Elementwise")
+print("Test 6: Conv2D (4x4 kernel) + Elementwise")
 print("=" * 60)
-# Conv2D (1x1): [N, C_in, H, W] * [C_out, C_in, 1, 1] -> [N, C_out, H, W]
-# Pool2D: [N, C_out, H, W] -> [N, C_out, H', W']
+# Conv2D (4x4): [N, C_in, H, W] * [C_out, C_in, 4, 4] -> [N, C_out, H-3, W-3]
 # Then apply sin
-N, C_in, C_out, H, W = 2, 3, 8, 8, 8
-pool_size = 2
+N, C_in, C_out, H, W = 2, 3, 8, 16, 16
+KH, KW = 4, 4
 
 x = C.Tensor([N, C_in, H, W])
-weight = C.Tensor([C_out, C_in, 1, 1])  # 1x1 conv kernel
+weight = C.Tensor([C_out, C_in, KH, KW])  # 4x4 conv kernel
 
-# Conv (1x1) -> Pool -> Sin
+# Conv (4x4) -> Sin
 conv_out = x.conv2d(weight)
-pooled = conv_out.pool2d(kernel_size=pool_size, op="max")
-result_conv = pooled.sin()
+result_conv = conv_out.sin()
 
 print(f"Input shape: {[ax.size for ax in x.op.T.axes]}")
 print(f"Weight shape: {[ax.size for ax in weight.op.T.axes]}")
-print(f"After conv2d (1x1): {[ax.size for ax in conv_out.op.T.axes]}")
-print(f"After pool2d: {[ax.size for ax in pooled.op.T.axes]}")
+print(f"After conv2d (4x4): {[ax.size for ax in conv_out.op.T.axes]}")
 print(f"After sin: {[ax.size for ax in result_conv.op.T.axes]}")
 
-lowered_conv = result_conv.op.lower()
-print(f"\nLowered conv+pool+sin type: {type(lowered_conv).__name__}")
+lowered_conv = result_conv.op
+print(f"\nLowered conv+sin type: {type(lowered_conv).__name__}")
 if isinstance(lowered_conv, Sync):
     print(f"Sync dims: {lowered_conv.dims}")
     sources = lowered_conv.load_sources()
@@ -163,7 +159,6 @@ if isinstance(lowered_conv, Sync):
     # Print IR graph
     print("\n--- IR Graph ---")
     print(lowered_conv.viz())
-print()
 print("=" * 60)
 print("Test 7: Polyhedral Fusion Analysis (aff.py)")
 print("=" * 60)

@@ -509,6 +509,98 @@ class Reduce(ATenOp):
 
         # Build outer Sync for parallel dimensions
         return Sync.sync(out_memory, outer_store)
+
+# TODO: this should have been implemenented in tensor.py
+@dataclass(frozen=True)
+class Conv2D(ATenOp):
+    """
+    Conv2D(X, W) - 2D Convolution operation.
+
+    X: [N, Cin, H, W] - Input tensor
+    W: [Cout, Cin, KH, KW] - Weight tensor
+
+    Y[n, cout, oh, ow] = sum_{cin,kh,kw} X[n, cin, oh*sh+kh, ow*sw+kw] * W[cout, cin, kh, kw]
+    """
+    kernel_size: tuple[int, int] = (3, 3)
+    stride: tuple[int, int] = (1, 1)
+
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        assert len(args) == 2, "Conv2D takes (input, weight)"
+        assert args[0].T is not None and args[1].T is not None
+        return T if T is not None else ATenOpType(axes=(), dtype=args[0].T.dtype)
+
+    def lower(self) -> ATenOp:
+        """Lower Conv2D to nested Sync with reduction over Cin, KH, KW."""
+        input_tensor = self.args[0].lower()
+        weight_tensor = self.args[1].lower()
+
+        input_T = input_tensor.T
+        weight_T = weight_tensor.T
+        assert input_T is not None and weight_T is not None
+        assert self.T is not None
+
+        # Extract dimensions
+        N = input_T.axes[0].size
+        C_in = input_T.axes[1].size
+        H = input_T.axes[2].size
+        W = input_T.axes[3].size
+        C_out = weight_T.axes[0].size
+        KH, KW = self.kernel_size
+        sh, sw = self.stride
+
+        H_out = self.T.axes[2].size
+        W_out = self.T.axes[3].size
+
+        # Create output memory
+        out_memory = Memory.defglobal([N, C_out, H_out, W_out], self.T.dtype, tmp=True)
+        acc = Memory.deflocal((), self.T.dtype)
+
+        # Build output iteration domain [N, Cout, H_out, W_out]
+        out_ranges = [Range((N,)), Range((C_out,)), Range((H_out,)), Range((W_out,))]
+        out_domain = Domain(tuple(out_ranges))
+        out_dims = tuple(Dim((out_domain,), dim=i) for i in range(4))
+        dim_n, dim_cout, dim_oh, dim_ow = out_dims
+
+        # Build reduction domain [Cin, KH, KW]
+        reduce_ranges = [Range((_const(C_in),)), Range((_const(KH),)), Range((_const(KW),))]
+        reduce_domain = Domain(tuple(reduce_ranges))
+        reduce_dims = tuple(Dim((reduce_domain,), dim=i) for i in range(3))
+        dim_cin, dim_kh, dim_kw = reduce_dims
+
+        # Input access: X[n, cin, oh*sh + kh, ow*sw + kw]
+        h_idx = Add((dim_oh, dim_kh)) if sh == 1 else Add((Mul((dim_oh, _const(sh))), dim_kh))
+        w_idx = Add((dim_ow, dim_kw)) if sw == 1 else Add((Mul((dim_ow, _const(sw))), dim_kw))
+
+        # Build address expression (row-major: n*C*H*W + cin*H*W + h*W + w)
+        input_addr = Add((Mul((dim_n, Mul((_const(C_in), Mul((_const(H), _const(W))))))),
+            Add((Mul((dim_cin, Mul((_const(H), _const(W))))),
+                Add((Mul((h_idx, _const(W))), w_idx))))))
+        input_load = Load((input_tensor, input_addr), T=ATenOpType(axes=(), dtype=input_T.dtype))
+
+        # Weight access: W[cout, cin, kh, kw]
+        weight_addr = Add((Mul((dim_cout, Mul((_const(C_in), Mul((_const(KH), _const(KW))))))),
+            Add((Mul((dim_cin, Mul((_const(KH), _const(KW))))),
+                Add((Mul((dim_kh, _const(KW))), dim_kw))))))
+        weight_load = Load((weight_tensor, weight_addr), T=ATenOpType(axes=(), dtype=weight_T.dtype))
+
+        # Inner reduction: acc += input * weight
+        acc_load = Load.from_tensor(acc)
+        inner_store = Store.new(acc_load, Add((acc_load, Mul((input_load, weight_load)))))
+
+        inner_sync = Sync(
+            reduce_dims + (acc, inner_store),
+            T=ATenOpType(axes=(), dtype=self.T.dtype),
+            n_dims=3,
+        )
+
+        # Outer: write to output
+        out_load = Load.from_tensor(out_memory)
+        outer_store = Store.new(out_load, inner_sync)
+
+        return Sync(out_dims + (out_memory, outer_store), T=self.T, n_dims=4)
+
+
 ## == SyncOps ============================================================
 ### Array access graph constrained via only affine functions, sorted by lex order (for symbolic shape)
 @dataclass(frozen=True)

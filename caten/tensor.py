@@ -371,14 +371,14 @@ class ATen:
                 w = weight.reshape((1, C_out, C_in, 1, 1))              # [1, Cout, Cin, 1, 1]
                 return x.mul(w).sum(axis=2)                             # [N, Cout, H, W]
             else:
-                # General case: use explicit loop via matmul-like expansion
-                # X: [N, Cin, H, W] -> [N, Cin*KH*KW, H_out*W_out] (im2col)
-                # W: [Cout, Cin, KH, KW] -> [Cout, Cin*KH*KW]
-                # Y = W @ X_col -> [N, Cout, H_out*W_out] -> [N, Cout, H_out, W_out]
-                raise NotImplementedError(
-                    f"General conv2d with KH={KH}, KW={KW} requires im2col, not yet implemented. "
-                    "Use 1x1 conv or pooling for now."
-                )
+                # General conv2d: build IR directly with polyhedral access pattern
+                # Y[n, cout, oh, ow] = sum_{cin,kh,kw} X[n, cin, oh+kh, ow+kw] * W[cout, cin, kh, kw]
+                return Tensor(op=ir.Conv2D(
+                    (self.op, weight.op),
+                    kernel_size=(KH, KW),
+                    stride=(sh, sw),
+                    T=ir.ATenOpType.from_shape((N, C_out, H_out, W_out), self.dtype)
+                ))
         else:
             raise NotImplementedError(f"Strided conv (stride={stride}) not implemented yet")
 
