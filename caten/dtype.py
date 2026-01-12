@@ -31,7 +31,7 @@ uint64 = DType.new("uint64")
 uint32 = DType.new("uint32")
 uint16 = DType.new("uint16")
 uint8 = DType.new("uint8")
-
+bool = DType.new("bool")
 ## dtype aliases
 index = int64
 default_float = float32
