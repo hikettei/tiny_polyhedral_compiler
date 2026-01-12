@@ -184,16 +184,20 @@ class TensorOps():
             for arg in self.args:
                 lowered = arg.lower()
                 assert len(lowered) == 1, "Tensor graph should not produce multiple outputs!"
-                args.append(Load.from_tensor(band, lowered[0]))
+                args.append(Load.from_tensor(lowered[0], band))
             # Note: out is keep viewed? or contiguous?
             r0 = replace(self, args=tuple(new_args)) # note: __call__ will update the output
             assert r0.T[0] is not None and r0.T[0].ndim == 0
             out = Memory.defglobal([arg.size for arg in self.T[0].axes], self.T[0].dtype, tmp=True)
             # Run r0 over band.all_dimensions(), with access relations defined by Load.from_tensor
             # returning out
-            instance = Exec.schedule(band.all_dimensions(), (out,), r0)
-            return MemoryOf((instance,), nth=0, T=(out.T[0],)) # the output become contiguous array!
-# TODO:
+            instance = Exec.schedule(band.all_dimensions(), (out,), Store.new(Load.from_tensor(out, band), r0))
+            return (MemoryOf((instance,), nth=0, T=(out.T[0],)),) # the output become contiguous array!
+
+# [TODO] tensor.pyに戻って, semantic修正，initial value = -infとかをどうやって実装するか？
+# - LOADを実装する
+        
+# TODO: (NOTE: REMOVE COMMENTS)
 # UnaryOp, IDENTITYを導入する (does nothing)
 # View(View), ...これを綺麗にLoweringするために，どうしようかなな。。。
 # View <--- I
@@ -412,10 +416,15 @@ class View(ViewOps, ATenOp):
     
     def lower(self) -> tuple[ATenOp, ...]:
         """Lower View to Sync that copies to contiguous buffer."""
-        # TODO: Reimpl
-        assert self.T is not None
-        tmp = Memory.defglobal([arg.size for arg in self.T.axes], self.T.dtype, tmp=True)
-        return (Exec.sync(tmp, Store.new(Load.from_tensor(tmp), Load.from_tensor(self.args[0], T=self.T))),)
+        # Y = View(X, T=(T_New,))
+        band = self.T[0].band()
+        lowered = self.args[0].lower()
+        assert len(lowered) == 1, "Tensor graph should not produce multiple outputs!"
+        src = Load.from_tensor(lowered[0], band, T=self.T[0])
+        dst = Memory.defglobal([arg.size for arg in self.T[0].axes], self.T[0].dtype, tmp=True)
+        mv = Store.new(Load.from_tensor(dst, band), src)
+        instance = Exec.schedule(band.all_dimensions(), (dst,), mv)
+        return (MemoryOf((instance,), nth=0),)
 
 # MetaOps: Something like a macro in CatenIR
 class MetaOps(): pass
@@ -423,11 +432,11 @@ class MetaOps(): pass
 @dataclass(frozen=True)
 class Reduce(MetaOps, ATenOp):
     """
-    OUT = Reduce(A, B, initial_value, op=BinaryOps)
+    OUT = Reduce(A, B, op=BinaryOps)
     Reduces tensor along specified axes using the binary operation.
     Example:
-        Reduce((A, init, initial_value), bop=Add, axis=(2,), )  # Sum reduction over axis 2
-        Reduce((A, init, initial_value), bop=Max, axis=(1,), )  # Max reduction over axis 1
+        Reduce((A, B), bop=Add, axis=(2,), )  # Sum reduction over axis 2
+        Reduce((A, B), bop=Max, axis=(1,), )  # Max reduction over axis 1
     """
     bop: type[BinaryOps] = Add
     axis: tuple[int, ...] = ()
@@ -435,8 +444,7 @@ class Reduce(MetaOps, ATenOp):
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         tensor = args[0]
-        assert len(args) == 3
-        assert args[2].T[0].ndim == 0, f"Reduce: initial_value should be a scalar constant."
+        assert len(args) == 2
         assert tensor.T[0] is not None
         new_axes = []
         for dim, i in enumerate(tensor.T[0].axes):
@@ -452,65 +460,16 @@ class Reduce(MetaOps, ATenOp):
                 new_axes.append(i)
         return (ATenOpType(axes=tuple(new_axes), dtype=tensor.T.dtype, offset=tensor.T.offset,),)
 
-    def lower(self) -> ATenOp:
-        # args[1] is the input tensor
-        input_tensor = self.args[1].lower()
-        input_T = input_tensor.T
-        assert input_T is not None
-        assert self.T is not None
+    def lower(self) -> tuple[ATenOp, ...]:
+        assert len(self.args) == 2
+        band = self.args[0].T[0].band()
 
-        # Create output memory using self.T (which has the correctly squeezed shape)
-        out_shape = [axis.size for axis in self.T.axes]
-        out_memory = Memory.defglobal(out_shape, dtype=self.T.dtype, tmp=True)
+        a, b = tuple([x.lower()[0] for x in self.args])
+        a, b = [Load.from_tensor(a, band), Load.from_tensor(b, band)]
+        # initially reduce is not fused.
+        instance = Exec.schedule(band.all_dimensions(), (a, ), Store.new(a, self.bop((a, b))))
+        return (MemoryOf((instance,), nth=0, T=(out.T[0],)),)
 
-        # TODO: This should be given as a tensor as args. do not hardcode
-        if self.bop == Add:
-            init_val = 0.0
-        elif self.bop == Max:
-            init_val = float("-inf")
-        else:
-            init_val = 0.0
-
-        # Create scalar accumulator for reduction
-        acc = Memory.deflocal((), input_T.dtype)
-
-        # Build ranges for reduction dimensions
-        reduce_ranges: list[Range] = []
-        for dim in self.axis:
-            if dim < len(input_T.axes):
-                reduce_ranges.append(input_T.axes[dim].range())
-
-        # Create Band and Dims for reduction
-        if reduce_ranges:
-            reduce_domain = Band(tuple(reduce_ranges))
-            reduce_dims = tuple(Dim((reduce_domain,), dim=i) for i in range(len(reduce_ranges)))
-        else:
-            reduce_dims = ()
-
-        # Inner body: acc = reduce_op(acc, input[...])
-        input_load = Load.from_tensor(input_tensor)
-        acc_load = Load.from_tensor(acc)
-        reduction_expr = self.bop((acc_load, input_load))
-        inner_store = Store.new(acc_load, reduction_expr)
-
-        # Build inner Sync for reduction loop (now using Dim nodes)
-        inner_args = reduce_dims + (acc, inner_store)
-        inner_endrange = Exec(
-            inner_args,
-            T=ATenOpType(axes=(), dtype=input_T.dtype),
-            n_dims=len(reduce_dims),
-        )
-        # Try to fuse inner Sync with its load sources (e.g., Mul)
-        for src in inner_endrange.load_sources():
-            inner_endrange = inner_endrange._fuse(src)
-        # Outer body: out[i,j] = inner_endrange (which produces the reduced acc)
-        out_load = Load.from_tensor(out_memory)
-        outer_store = Store.new(out_load, inner_endrange)
-
-        # Build outer Sync for parallel dimensions
-        return Exec.sync(out_memory, outer_store)
-
-# TODO:
 @dataclass(frozen=True)
 class Einsum(MetaOps, ATenOp): pass
 
@@ -656,7 +615,7 @@ class ScheduleOps():
     """
     Ops for scheduling.
     """
-    
+
 ### Array access graph constrained via only affine functions, sorted by lex order (for symbolic shape)
 @dataclass(frozen=True)
 class Range(ScheduleOps, ATenOp):
@@ -698,6 +657,8 @@ class Band(ScheduleOps, ATenOp):
     def ndim(self) -> int: return len(self.args)
     @property
     def ranges(self) -> tuple[Range, ...]: return tuple(r for r in self.args)
+    def all_dimensions(self) -> tuple[ATenOp, ...]:
+        return tuple([Dim((r,), dim=i) for i,r in enumerate(self.ranges)])
     @property
     def shape(self) -> tuple[ATenOp, ...]: return tuple(r.size for r in self.ranges)
     # TODO:
@@ -814,32 +775,16 @@ class AccessMap(ScheduleOps, ATenOp):
         return (ATenOpType(axes=(), dtype=index, offset=_const(0, index)), )
 
     @staticmethod
-    def from_tensor_type(T: ATenOpType) -> "AccessMap":
-        """
-        Create AccessMap from tensor type (ATenOpType).
-        
-        Uses the axes information to build iteration domain and access pattern.
-        """
-        raise NotImplementedError("TODO: BAND")
-        # Scalar
+    def from_tensor_type(band: Band, T: ATenOpType) -> "AccessMap":
         if T.ndim == 0: return AccessMap((), T=(ATenOpType(axes=(), dtype=T.dtype),), n_ranges=0)
-        ranges: list[Range] = [axis.range() for axis in T.axes]
-        domain = Band(tuple(ranges))
-        
-        # Create Affs using Dim references to Band
         affs: list[Aff] = [axis.aff(domain, dim) for dim, axis in enumerate(T.axes)]
-        
         return AccessMap(
-            tuple(ranges) + tuple(affs),
-            T=ATenOpType(axes=(), dtype=T.dtype),
-            n_ranges=len(ranges)
+            band.all_dimensions() + tuple(affs),
+            T=(ATenOpType(axes=(), dtype=T.dtype),),
+            n_ranges=len(band.ranges)
         )
 
-    @staticmethod
-    def from_shape(shape: tuple[ATenOp, ...], dtype: DType) -> "AccessMap":
-        """Create AccessMap for contiguous row-major layout."""
-        return AccessMap.from_tensor_type(ATenOpType.from_shape(shape, dtype))
-
+    # not checkd
     def domain_equals(self, other: "AccessMap") -> bool:
         """
         Check if two AccessMaps have identical iteration domains.
@@ -863,6 +808,7 @@ class AccessMap(ScheduleOps, ATenOp):
         
         return True
 
+    # not checkd
     def linear_address(self) -> ATenOp:
         """Compute linear memory address by summing Aff contributions."""
         addr: ATenOp = _const(0)
@@ -870,6 +816,7 @@ class AccessMap(ScheduleOps, ATenOp):
             addr = Add((addr, aff))
         return addr
 
+    # not checked
     def to_basic_map(self) -> "A.BasicMap":
         """Convert to BasicMap for polyhedral analysis."""
         dom_vars = tuple(f"gid{d}" for d in self.dims)
@@ -919,6 +866,7 @@ class Load(ScheduleOps, ATenOp):
         if dtype.ndim == 0: return tensor
         if isinstance(tensor, Const): return tensor
         # Create Affs with Dim references
+        AccessMap.from_tensor(band, tensor)
         return Load((tensor,) + tuple([axis.aff(band, dim) for dim in range(dtype.ndim)]))
 
     def get_access_map(self) -> "AccessMap":
@@ -1060,7 +1008,6 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
     """
     n_dims: int = 0
     n_out: int = 0
-
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         pass
     
@@ -1174,8 +1121,9 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
         return sources
 
     @staticmethod
-    def schedule():
-        pass
+    def schedule(dims: tuple[Dim, ...], outs: tuple[ATenOp, ...], op: ATenOp) -> Exec:
+        instance = Exec(dims + outs + tuple(op), n_dims=len(dims), n_outs=len(outs))
+        # TODO: FUsion
     
     @staticmethod
     def sync(
