@@ -28,11 +28,23 @@ class ATenOpMetaclass(type):
         if isinstance(x, dict):
             return tuple(sorted((k, ATenOpMetaclass._freeze(v)) for k, v in x.items()))
         return x
+    @staticmethod
+    def _check_struct(cls_name: str, args: tuple) -> None:
+        """Structural constraints: Exec→MemoryOf only, Range→Band only."""
+        for arg in args:
+            t = type(arg).__name__
+            if t == "Exec" and cls_name != "MemoryOf":
+                raise TypeError(f"{cls_name}: Exec can only be referenced by MemoryOf")
+            if t == "Range" and cls_name != "Band":
+                raise TypeError(f"{cls_name}: Range can only be referenced by Band")
+    
     def __call__(cls, args: tuple[ATenOp, ...] | list[ATenOp], T: "tuple[ATenOpType|None, ...]" = (None), **kwargs: Any) -> ATenOp:
-        T = cls.verify(tuple(args), T, **kwargs) # type: ignore
-        wret = ATenOpMetaclass.cache.get(key:=(cls, tuple(args), ATenOpMetaclass._freeze(T), ATenOpMetaclass._freeze(kwargs)), None)
+        args = tuple(args)
+        ATenOpMetaclass._check_struct(cls.__name__, args)
+        T = cls.verify(args, T, **kwargs) # type: ignore
+        wret = ATenOpMetaclass.cache.get(key:=(cls, args, ATenOpMetaclass._freeze(T), ATenOpMetaclass._freeze(kwargs)), None)
         if wret is not None and (ret:=wret()) is not None: return ret.simplify()
-        ATenOpMetaclass.cache[key] = weakref.ref(created:=super().__call__(tuple(args), T=T, **kwargs))
+        ATenOpMetaclass.cache[key] = weakref.ref(created:=super().__call__(args, T=T, **kwargs))
         return created.simplify()
 
 @dataclass(frozen=True)
