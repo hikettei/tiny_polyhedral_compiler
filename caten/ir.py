@@ -171,7 +171,7 @@ class TensorOps():
         # 2. analyse access dependencies
         # 3. tile if needed
         # 4. fuse if possible
-        return EndRange.sync(tmp, Store.new(Load.from_tensor(tmp), out))
+        return Sync.sync(tmp, Store.new(Load.from_tensor(tmp), out))
 # UnaryOps verifier: check dtypes/shapes of arguments
 class UnaryOps(TensorOps):
     # ops whose first argument is returned dtype
@@ -391,10 +391,10 @@ class View(ViewOps, ATenOp):
         return AccessMap.from_tensor_type(self.T)
     
     def lower(self) -> ATenOp:
-        """Lower View to EndRange that copies to contiguous buffer."""
+        """Lower View to Sync that copies to contiguous buffer."""
         assert self.T is not None
         tmp = Memory.defglobal([arg.size for arg in self.T.axes], self.T.dtype, tmp=True)
-        return EndRange.sync(tmp, Store.new(Load.from_tensor(tmp), Load.from_tensor(self.args[0], T=self.T)))
+        return Sync.sync(tmp, Store.new(Load.from_tensor(tmp), Load.from_tensor(self.args[0], T=self.T)))
 
 
 @dataclass(frozen=True)
@@ -437,7 +437,7 @@ class Reduce(ATenOp):
 
     def lower(self) -> ATenOp:
         """
-        Lower Reduce to nested EndRange with proper reduction semantics.
+        Lower Reduce to nested Sync with proper reduction semantics.
 
         For sum reduction over axis k:
         ```c
@@ -453,11 +453,11 @@ class Reduce(ATenOp):
         ```
 
         Represented as:
-            EndRange(
+            Sync(
                 Range(M, dim=0), Range(N, dim=1),
                 out,
                 Store(Load(out, ...),
-                    EndRange(
+                    Sync(
                         Range(K, dim=2),
                         acc,  # Memory(0.0)
                         Store(Load(acc), Add(Load(acc), x[i,j,k])))))
@@ -495,14 +495,14 @@ class Reduce(ATenOp):
         reduction_expr = self.bop((acc_load, input_load))
         inner_store = Store.new(acc_load, reduction_expr)
 
-        # Build inner EndRange for reduction loop
+        # Build inner Sync for reduction loop
         inner_args = tuple(reduce_ranges) + (acc, inner_store)
-        inner_endrange = EndRange(
+        inner_endrange = Sync(
             inner_args,
             T=ATenOpType(axes=(), dtype=input_T.dtype),
             n_ranges=len(reduce_ranges),
         )
-        # Try to fuse inner EndRange with its load sources (e.g., Mul)
+        # Try to fuse inner Sync with its load sources (e.g., Mul)
         for src in inner_endrange.load_sources():
             inner_endrange = inner_endrange._fuse(src)
 
@@ -510,9 +510,9 @@ class Reduce(ATenOp):
         out_load = Load.from_tensor(out_memory)
         outer_store = Store.new(out_load, inner_endrange)
 
-        # Build outer EndRange for parallel dimensions
-        return EndRange.sync(out_memory, outer_store)
-## == EndRangeOps ============================================================
+        # Build outer Sync for parallel dimensions
+        return Sync.sync(out_memory, outer_store)
+## == SyncOps ============================================================
 ### Array access graph constrained via only affine functions, sorted by lex order (for symbolic shape)
 @dataclass(frozen=True)
 class Range(ATenOp):
@@ -812,7 +812,7 @@ class AccessMap(ATenOp):
 @dataclass(frozen=True)
 class Load(ATenOp):
     """
-    Load(Memory | EndRange, idx1, idx2, ...) - Load from memory.
+    Load(Memory | Sync, idx1, idx2, ...) - Load from memory.
     
     Indices are typically Aff nodes that encode the access pattern.
     For fusion analysis, use Load.get_access_map() to extract
@@ -821,7 +821,7 @@ class Load(ATenOp):
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) >= 2, "Load: the number of argument should be larger than two"
-        assert isinstance(args[0], Memory) or isinstance(args[0], EndRange), "Load: Can only load element from Memory or Array."
+        assert isinstance(args[0], Memory) or isinstance(args[0], Sync), "Load: Can only load element from Memory or Array."
         assert args[0].T is not None and args[0].T.ndim > 0, f"Load: the first argument should be array, getting scalar {args[0].__class__}"
         assert all([arg.T is not None and arg.T.ndim == 0 for arg in args[1:]]), "Load: indices should be scalar expressions."
         return ATenOpType(axes=tuple(), dtype=args[0].T.dtype, offset=_const(0, index))
@@ -889,9 +889,9 @@ class Memory(ViewOps, ATenOp):
         return Memory((), T=ATenOpType.from_shape(shape, dtype), level="local", tmp=True)
 
 @dataclass(frozen=True)
-class EndRange(ViewOps, ATenOp):
+class Sync(ViewOps, ATenOp):
     """
-    EndRange represents a loop nest with ranges, output, and body.
+    Sync represents a loop nest with ranges, output, and body.
 
     Structure:
     ==========
@@ -900,7 +900,7 @@ class EndRange(ViewOps, ATenOp):
     Where:
     - args[0:n_ranges]: Range nodes - iteration space
     - args[n_ranges]: Memory node - the output array
-    - args[-1]: Body (Store or nested EndRange)
+    - args[-1]: Body (Store or nested Sync)
 
     Example - Element-wise sin:
     ===========================
@@ -913,9 +913,9 @@ class EndRange(ViewOps, ATenOp):
     }
     ```
     Represented as:
-        EndRange(Range(10, dim=0), Range(10, dim=1), out_mem, Store(...))
+        Sync(Range(10, dim=0), Range(10, dim=1), out_mem, Store(...))
 
-    Example - GEMM with k-reduction (nested EndRange):
+    Example - GEMM with k-reduction (nested Sync):
     ==================================================
     ```c
     float C[M*N];
@@ -930,11 +930,11 @@ class EndRange(ViewOps, ATenOp):
     }
     ```
     Represented as:
-        EndRange(
+        Sync(
             Range(M, dim=0), Range(N, dim=1),
             C,
             Store(Load(C, ...),
-                EndRange(
+                Sync(
                     Range(K, dim=2),
                     acc,  # Memory(0.0)
                     Store(acc, Add(Load(acc), Mul(A[i,k], B[k,j]))))))
@@ -970,7 +970,7 @@ class EndRange(ViewOps, ATenOp):
         Get the iteration domain as an AccessMap (ranges only, no access pattern).
         
         This represents the loop bounds without specifying how memory is accessed.
-        Useful for checking if two EndRanges can be fused (same iteration domain).
+        Useful for checking if two Syncs can be fused (same iteration domain).
         """
         ranges = tuple(r for r in self.ranges if isinstance(r, Range))
         return AccessMap(
@@ -993,11 +993,11 @@ class EndRange(ViewOps, ATenOp):
             if id(node) in seen:
                 return
             seen.add(id(node))
-            if isinstance(node, Load) and not isinstance(node.args[0], EndRange):
-                # Skip loads from EndRange (those are kernel boundaries)
+            if isinstance(node, Load) and not isinstance(node.args[0], Sync):
+                # Skip loads from Sync (those are kernel boundaries)
                 result.append((node, node.get_access_map()))
-            if isinstance(node, EndRange):
-                return  # Don't recurse into nested EndRanges
+            if isinstance(node, Sync):
+                return  # Don't recurse into nested Syncs
             if hasattr(node, "args"):
                 for arg in node.args:
                     _collect(arg)
@@ -1005,33 +1005,33 @@ class EndRange(ViewOps, ATenOp):
         _collect(self.body)
         return result
 
-    def can_fuse_with(self, other: "EndRange") -> bool:
+    def can_fuse_with(self, other: "Sync") -> bool:
         """
-        Check if this EndRange can be fused with another.
+        Check if this Sync can be fused with another.
         
         Fusion requires identical iteration domains (same Ranges).
         """
         return self.get_iteration_domain().domain_equals(other.get_iteration_domain())
 
-    def load_sources(self) -> "list[EndRange]":
+    def load_sources(self) -> "list[Sync]":
         """
-        Get EndRanges that are Load sources (require separate kernels).
+        Get Syncs that are Load sources (require separate kernels).
 
         Loop separation condition:
-        - Load(EndRange, ...) means the EndRange is a data source
+        - Load(Sync, ...) means the Sync is a data source
         - These must be computed as separate kernels before this one
-        - EndRanges appearing directly in computation (like reduction) are inline
+        - Syncs appearing directly in computation (like reduction) are inline
 
         Used by renderers (CPU, CUDA, etc.) to determine kernel boundaries.
         """
         seen: set[int] = set()
-        sources: list[EndRange] = []
+        sources: list[Sync] = []
 
         def _find(node: ATenOp) -> None:
             if id(node) in seen:
                 return
             seen.add(id(node))
-            if isinstance(node, Load) and isinstance(node.args[0], EndRange):
+            if isinstance(node, Load) and isinstance(node.args[0], Sync):
                 sources.append(node.args[0])
             if hasattr(node, "args"):
                 for arg in node.args:
@@ -1044,9 +1044,9 @@ class EndRange(ViewOps, ATenOp):
     def sync(
         output: "Memory",
         body: "Store",
-    ) -> "EndRange":
+    ) -> "Sync":
         """
-        Create an EndRange by synchronizing output with a computation body.
+        Create an Sync by synchronizing output with a computation body.
 
         Extracts the Domain from Dim nodes in the body, then builds:
         args = (ranges..., output, body)
@@ -1070,8 +1070,8 @@ class EndRange(ViewOps, ATenOp):
                     found_ranges = list(found_domain.ranges)
                 return  # Don't need to go deeper
             
-            if isinstance(node, EndRange):
-                return  # Don't collect from nested EndRanges
+            if isinstance(node, Sync):
+                return  # Don't collect from nested Syncs
             
             if hasattr(node, "args"):
                 for arg in node.args:
@@ -1091,29 +1091,29 @@ class EndRange(ViewOps, ATenOp):
             output.T.dtype
         )
 
-        endrange = EndRange(
+        endrange = Sync(
             args,
             T=T,
             n_ranges=len(ranges),
         )
 
-        # Try to fuse with parent EndRanges
+        # Try to fuse with parent Syncs
         parents = endrange._find_parent_endranges()
         for p in parents:
             endrange = endrange._fuse(p)
 
         return endrange
 
-    def _find_parent_endranges(self) -> "list[EndRange]":
-        """Find all EndRange nodes that this computation depends on. O(n)"""
+    def _find_parent_endranges(self) -> "list[Sync]":
+        """Find all Sync nodes that this computation depends on. O(n)"""
         seen: set[int] = set()
-        parents: list[EndRange] = []
+        parents: list[Sync] = []
 
         def _explore(node: ATenOp) -> None:
             if id(node) in seen:
                 return
             seen.add(id(node))
-            if isinstance(node, EndRange) and node is not self:
+            if isinstance(node, Sync) and node is not self:
                 parents.append(node)
                 return
             if hasattr(node, "args"):
@@ -1164,7 +1164,7 @@ class EndRange(ViewOps, ATenOp):
                     (writes if is_write else reads).append(m)
                 except Exception:
                     pass
-            if isinstance(node, EndRange):
+            if isinstance(node, Sync):
                 return
             if hasattr(node, "args"):
                 for arg in node.args:
@@ -1175,7 +1175,7 @@ class EndRange(ViewOps, ATenOp):
             collect(self.body.args[1], is_write=False)
         return reads, writes
 
-    def _fuse(self, producer: "EndRange") -> "EndRange":
+    def _fuse(self, producer: "Sync") -> "Sync":
         """
         Unified fusion via iteration space morphism.
 
@@ -1190,7 +1190,7 @@ class EndRange(ViewOps, ATenOp):
         if subst is None:
             return self
         return self._apply_fusion(producer, subst)
-    def _find_subst(self, producer: "EndRange") -> "dict[int, ATenOp] | None":
+    def _find_subst(self, producer: "Sync") -> "dict[int, ATenOp] | None":
         """
         Find iteration space morphism: producer_dims → consumer_dims.
 
@@ -1324,7 +1324,7 @@ class EndRange(ViewOps, ATenOp):
     def _extract_substitution(
         self,
         result: "A.FusionResult",
-        producer: "EndRange"
+        producer: "Sync"
     ) -> "dict[int, A.AffExpr] | None":
         """
         Extract dim -> expr substitution from fusion result.
@@ -1394,13 +1394,13 @@ class EndRange(ViewOps, ATenOp):
 
     def _apply_fusion(
         self,
-        producer: "EndRange",
+        producer: "Sync",
         subst: "dict[int, ATenOp]"
-    ) -> "EndRange":
+    ) -> "Sync":
         """
         Apply fusion by transforming producer and inlining.
 
-        In DAG, EndRange itself is the output reference.
+        In DAG, Sync itself is the output reference.
         Replace Load(producer) with transformed computation.
         """
         producer_comp = producer.body.args[1] if isinstance(producer.body, Store) else producer.body
@@ -1413,7 +1413,7 @@ class EndRange(ViewOps, ATenOp):
             if isinstance(node, Load):
                 if node.args[0] is producer:
                     return transformed
-            if isinstance(node, EndRange):
+            if isinstance(node, Sync):
                 return node
             if hasattr(node, "args") and node.args:
                 new_args = tuple(inline(arg) for arg in node.args)
@@ -1423,7 +1423,7 @@ class EndRange(ViewOps, ATenOp):
 
         new_body = inline(self.body)
 
-        return EndRange(
+        return Sync(
             self.ranges + (self.output, new_body),
             T=self.T,
             n_ranges=self.n_ranges,
@@ -1467,7 +1467,7 @@ class EndRange(ViewOps, ATenOp):
                 return Load((node.args[0],) + tuple(new_indices))
             return node
 
-        if isinstance(node, (EndRange, Memory)):
+        if isinstance(node, (Sync, Memory)):
             return node
 
         if hasattr(node, "args") and node.args:
@@ -1515,7 +1515,7 @@ class FusionEngine:
     
     Fusion Philosophy:
     ==================
-    Two kernels (EndRanges) can be fused if we can find an iteration space
+    Two kernels (Syncs) can be fused if we can find an iteration space
     morphism σ : producer_domain -> consumer_domain such that:
     
         producer.write ∘ σ⁻¹ = consumer.read
@@ -1556,7 +1556,7 @@ class FusionEngine:
     """
 
     @staticmethod
-    def analyze(consumer: EndRange, producer: EndRange) -> FusionResult:
+    def analyze(consumer: Sync, producer: Sync) -> FusionResult:
         """
         Analyze if consumer can fuse with producer.
         
@@ -1631,7 +1631,7 @@ class FusionEngine:
         return FusionResult(False, reason="No fusion strategy found")
 
     @staticmethod
-    def apply(consumer: EndRange, producer: EndRange, result: FusionResult) -> EndRange:
+    def apply(consumer: Sync, producer: Sync, result: FusionResult) -> Sync:
         """Apply fusion using the computed morphism."""
         if not result.fusible or result.morphism is None:
             return consumer
