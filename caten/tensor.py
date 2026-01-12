@@ -158,7 +158,7 @@ class ATen:
         if reverse: x, y = y, x
         return x.mul(y.recip())
 
-    def max(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Max, self._broadcasted(other, reverse=reverse))
+    def maximum(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Max, self._broadcasted(other, reverse=reverse))
     def mod(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Mod, self._broadcasted(other, reverse=reverse))
     def ne(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Neq, self._broadcasted(other, reverse=reverse))
     def lt(self, other: ATen|TOperand, reverse:bool=False) -> Tensor: return self.forward(ir.Lt, self._broadcasted(other, reverse=reverse))
@@ -201,7 +201,7 @@ class ATen:
     def log2(self) -> Tensor: return self.forward(ir.Log2, (self.op,))
     def sqrt(self) -> Tensor: return self.forward(ir.Sqrt, (self.op,))
 
-    def reduce(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False, op: Callable = ir.Add) -> Tensor:
+    def reduce(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False, op: Callable = ir.Add, initial_value: float = 0.0) -> Tensor:
         # TODO: initial elements
         assert self.op.T[0] is not None
         axes = tuple(range(self.ndim)) if axis is None else (tuple(axis) if isinstance(axis, (tuple, list)) else (axis,))
@@ -215,14 +215,14 @@ class ATen:
                 out_shape.append(self.op.T[0].axes[i].size)
         out = ir.Memory.defglobal(reduce_axes, dtype=self.op.T[0].dtype, tmp=True)
         out = ir.View.expand(out, tuple([arg.size for arg in self.op.T[0].axes]))
-        return self.forward(ir.Reduce, (out, self.op), bop=op, axis=axes, keepdim=keepdim)
-        
-    def sum(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False) -> Tensor:
-        return self.reduce(axis=axis, keepdim=keepdim, op=ir.Add)
+        return self.forward(ir.Reduce, (out, self.op, ir._const(initial_value, dtype=self.dtype)), bop=op, axis=axes, keepdim=keepdim)
 
-    def max_reduce(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False) -> Tensor:
+    def sum(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False) -> Tensor:
+        return self.reduce(axis=axis, keepdim=keepdim, op=ir.Add, initial_value=0.0)
+
+    def max(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False) -> Tensor:
         """Max reduction along axis."""
-        return self.reduce(axis=axis, keepdim=keepdim, op=ir.Max)
+        return self.reduce(axis=axis, keepdim=keepdim, op=ir.Max, initial_value=float("-inf"))
 
     def exp(self) -> Tensor:
         """Exponential: e^x = 2^(x * log2(e))"""
@@ -256,7 +256,7 @@ class ATen:
         axis = self._resolve_dim(axis)
 
         # Step 1: Compute max along axis (for numerical stability)
-        max_val = self.max_reduce(axis=axis, keepdim=True)
+        max_val = self.max(axis=axis, keepdim=True)
 
         # Step 2: Subtract max and compute exp
         shifted = self - max_val
@@ -308,7 +308,7 @@ class ATen:
         
         # Reduce over last two dimensions (kh, kw)
         if op == "max":
-            return x.max_reduce(axis=(-2, -1))
+            return x.max(axis=(-2, -1))
         elif op == "avg":
             return x.sum(axis=(-2, -1)) / Tensor.const(float(kh * kw), dtype=self.dtype)
         else:
@@ -377,7 +377,7 @@ class ATen:
                     (self.op, weight.op),
                     kernel_size=(KH, KW),
                     stride=(sh, sw),
-                    T=tuple(ir.ATenOpType.from_shape((N, C_out, H_out, W_out), self.dtype))
+                    T=(ir.ATenOpType.from_shape((N, C_out, H_out, W_out), self.dtype),)
                 ))
         else:
             raise NotImplementedError(f"Strided conv (stride={stride}) not implemented yet")
