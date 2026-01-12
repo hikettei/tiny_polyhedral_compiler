@@ -56,3 +56,4 @@ output = attn_weights @ V_2d  # [seq_len, d_v]
 # Lower and check
 print("FlashAttention")
 print(output.op.viz())
+print(output.render(output.op))
