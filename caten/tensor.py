@@ -201,7 +201,7 @@ class ATen:
     def log2(self) -> Tensor: return self.forward(ir.Log2, (self.op,))
     def sqrt(self) -> Tensor: return self.forward(ir.Sqrt, (self.op,))
 
-    def reduce(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False, op: Callable = ir.Add, initial_value: float = 0.0) -> Tensor:
+    def _reduce(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False, op: Callable|None = ir.Add, initial_value: float = 0.0) -> Tensor:
         # TODO: initial elements
         assert self.op.T[0] is not None
         axes = tuple(range(self.ndim)) if axis is None else (tuple(axis) if isinstance(axis, (tuple, list)) else (axis,))
@@ -215,14 +215,15 @@ class ATen:
                 out_shape.append(self.op.T[0].axes[i].size)
         out = ir.Memory.defglobal(reduce_axes, dtype=self.op.T[0].dtype, tmp=True)
         out = ir.View.expand(out, tuple([arg.size for arg in self.op.T[0].axes]))
+        out = ir.Reduce((out, ir._const(initial_value, self.dtype)), keepdims=False, axes=tuple(), bop=None) # out = initial_value
         return self.forward(ir.Reduce, (out, self.op, ir._const(initial_value, dtype=self.dtype)), bop=op, axis=axes, keepdim=keepdim)
 
     def sum(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False) -> Tensor:
-        return self.reduce(axis=axis, keepdim=keepdim, op=ir.Add, initial_value=0.0)
+        return self._reduce(axis=axis, keepdim=keepdim, op=ir.Add, initial_value=0.0)
 
     def max(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False) -> Tensor:
         """Max reduction along axis."""
-        return self.reduce(axis=axis, keepdim=keepdim, op=ir.Max, initial_value=float("-inf"))
+        return self._reduce(axis=axis, keepdim=keepdim, op=ir.Max, initial_value=float("-inf"))
 
     def exp(self) -> Tensor:
         """Exponential: e^x = 2^(x * log2(e))"""
