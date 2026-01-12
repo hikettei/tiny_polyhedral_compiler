@@ -113,7 +113,7 @@ def _coeff_mul(a: Coeff, b: Coeff) -> Coeff:
     """Multiply two coefficients."""
     if isinstance(a, int) and isinstance(b, int):
         return a * b
-    from caten.ir import Mul, Const, index
+    from caten.ir import Const, Mul, index
     if isinstance(a, int):
         a = Const.new(a, index)
     if isinstance(b, int):
@@ -1191,7 +1191,8 @@ def build_access_map_from_load(
 
     The linearized address is: Σ stride_i * (incf_i * gid_i + offset_i)
     """
-    from caten.ir import Aff as IRAff, Const, Range
+    from caten.ir import Aff as IRAff
+    from caten.ir import Range
 
     dom_vars = tuple(f"gid{i}" for i in range(dom_dim))
 
@@ -1213,9 +1214,9 @@ def build_access_map_from_load(
 
         # Build: stride * (incf * gid + offset)
         # For simplicity with symbolic, we track the contribution
-        stride_val = stride.item if hasattr(stride, 'item') else stride
-        offset_val = offset.item if hasattr(offset, 'item') else offset
-        incf_val = incf.item if hasattr(incf, 'item') else incf
+        stride_val = stride.item if hasattr(stride, "item") else stride
+        offset_val = offset.item if hasattr(offset, "item") else offset
+        incf_val = incf.item if hasattr(incf, "item") else incf
 
         # Create the affine term for this dimension
         if isinstance(stride_val, (int, float)) and isinstance(incf_val, (int, float)):

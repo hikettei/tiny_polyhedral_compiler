@@ -8,8 +8,10 @@ import weakref
 from dataclasses import dataclass, replace
 from typing import Any, Dict, Union
 
-from .dtype import DType, index
 import caten.aff as A
+
+from .dtype import DType, index
+
 
 class ATenOpMetaclass(type):
     cache: Dict[tuple, weakref.ReferenceType[ATenOp]] = {}
@@ -17,7 +19,7 @@ class ATenOpMetaclass(type):
     def _freeze(x: Any) -> Any:
         if isinstance(x, ATenOp): return x
         # Handle aff.py classes by hash (they have custom __hash__)
-        if hasattr(x, '__module__') and 'aff' in str(x.__module__):
+        if hasattr(x, "__module__") and "aff" in str(x.__module__):
             return (type(x).__name__, hash(x))
         if dataclasses.is_dataclass(x):
             return (type(x),) + tuple((f.name, ATenOpMetaclass._freeze(getattr(x, f.name))) for f in dataclasses.fields(x) if f.name not in ["args"])
@@ -39,8 +41,14 @@ class ATenAxis():
     stride: ATenOp
     offset: ATenOp
     incf: ATenOp
-    def range(self, dim: int) -> Range: return Range((self.size, ), dim=dim)
-    def aff(self, dim: int) -> Aff: return Aff((self.stride, self.range(dim), self.offset, self.incf))
+    
+    def range(self) -> "Range":
+        """Create a Range for this axis's size."""
+        return Range((self.size,))
+    
+    def aff(self, domain: "Domain", dim: int) -> "Aff":
+        """Create an Aff for this axis within the given Domain."""
+        return Aff((self.stride, Dim((domain,), dim=dim), self.offset, self.incf))
 
 def _const(val: Any, dtype: DType=index) -> ATenOp:
     if isinstance(val, Const): return val
@@ -318,12 +326,32 @@ class Const(ViewOps, ATenOp):
 @dataclass(frozen=True)
 class View(ViewOps, ATenOp):
     """
-    View(X, T=T_New)
-    View always materializes data contiguously. Each View operation creates
-    an EndRange that copies data to a new contiguous buffer. Fusion via _fuse
-    can merge consecutive Views into a single kernel.
+    View(X, T=T_New) - Materialize tensor to contiguous layout.
+    
+    Semantics:
+    ==========
+    View(X, T) ≡ X.contiguous(T)
+    
+    Every View operation explicitly represents a copy to a new contiguous
+    buffer with the specified shape/layout. This is the "contiguous model":
+    - Source tensor X may have any strided layout
+    - Output is always contiguous (row-major) with shape from T
+    
+    Fusion:
+    =======
+    The fusion engine can eliminate the materialization by composing
+    access patterns. If producer.write_map and consumer.read_map can
+    be unified under the same iteration domain, the copy is elided.
+    
+    Example - Reshape fusion:
+    -------------------------
+    ```python
+    a = Tensor([10, 10])              # Shape [10, 10]
+    b = a.reshape([2, 5, 2, 5])       # View: materialize to [2,5,2,5]
+    c = b.reshape([10, 10])           # View: materialize back to [10,10]
+    ```
+    After fusion: a single kernel with address transform (div/mod).
     """
-    # This is the definition of view
     @staticmethod
     def reshape(tensor: ATenOp, shape: tuple[ATenOp, ...]) -> View:
         assert tensor.T is not None
@@ -351,10 +379,23 @@ class View(ViewOps, ATenOp):
             dtype=tensor.T.dtype,
             offset=tensor.T.offset,
         ))
+
+    def get_source_access_map(self) -> "AccessMap":
+        """Get the AccessMap for reading from the source tensor."""
+        assert self.args[0].T is not None
+        return AccessMap.from_tensor_type(self.args[0].T)
+
+    def get_output_access_map(self) -> "AccessMap":
+        """Get the AccessMap for writing to the output (contiguous)."""
+        assert self.T is not None
+        return AccessMap.from_tensor_type(self.T)
     
-    def lower(self):
+    def lower(self) -> ATenOp:
+        """Lower View to EndRange that copies to contiguous buffer."""
+        assert self.T is not None
         tmp = Memory.defglobal([arg.size for arg in self.T.axes], self.T.dtype, tmp=True)
         return EndRange.sync(tmp, Store.new(Load.from_tensor(tmp), Load.from_tensor(self.args[0], T=self.T)))
+
 
 @dataclass(frozen=True)
 class Reduce(ATenOp):
@@ -435,7 +476,7 @@ class Reduce(ATenOp):
         if self.bop == Add:
             init_val = 0.0
         elif self.bop == Max:
-            init_val = float('-inf')
+            init_val = float("-inf")
         else:
             init_val = 0.0
 
@@ -446,7 +487,7 @@ class Reduce(ATenOp):
         reduce_ranges: list[Range] = []
         for dim in self.axis:
             if dim < len(input_T.axes):
-                reduce_ranges.append(input_T.axes[dim].range(dim))
+                reduce_ranges.append(input_T.axes[dim].range())
 
         # Inner body: acc = reduce_op(acc, input[...])
         input_load = Load.from_tensor(input_tensor)
@@ -476,10 +517,12 @@ class Reduce(ATenOp):
 @dataclass(frozen=True)
 class Range(ATenOp):
     """
-    OUT = Range(SIZE)
-    OUT is the range of [0, SIZE)
+    Range(SIZE) represents the half-open interval [0, SIZE).
+    
+    This is a pure bound - it does not carry dimension information.
+    Use Domain to group Ranges into an iteration space, and Dim to
+    extract a specific Range from a Domain.
     """
-    dim: int = 0
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) == 1 and args[0].T is not None, "Range is defined as: Range(SIZE)"
@@ -487,48 +530,350 @@ class Range(ATenOp):
         assert args[0].T.dtype == index, "Range: SIZE should be type of index"
         return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
 
+    @property
+    def size(self) -> ATenOp:
+        """Get the upper bound of this Range."""
+        return self.args[0]
+
+
 @dataclass(frozen=True)
-class Aff(ATenOp):
+class Domain(ATenOp):
     """
-    OUT = Aff(Stride, Range, Offset, Incx)
-    which is the equivalent to `Stride(Incx*Range+Offset)` in ir.INDEX
-    In lexorder, [Range] -> { Stmt[Incx*Range+Offset] }
-                                    Strideth dim
+    Domain(Range1, Range2, ...) represents an iteration space.
+    
+    A Domain is an ordered list of Ranges that defines the loop nest:
+    - Domain(Range(M), Range(N)) represents: for i in [0,M): for j in [0,N):
+    
+    Use Dim(domain, dim=k) to extract the k-th Range.
+    
+    Example:
+        domain = Domain(Range(10), Range(20))
+        # Represents: for i0 in [0,10): for i1 in [0,20):
     """
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
-        assert len(args) == 4, "Aff is defined as: Aff(Stride, Range, Offset, Incx)"
-        assert all([arg.T is not None and arg.T.ndim == 0 and arg.T.dtype == index for arg in args]), "Aff: Stride/Range/Offset/Incx should be a scalar typed index"
-        assert isinstance(args[1], Range), f"Aff: The second argument should be a Range, getting {args[1].__class__}"
-        # incf can be Const or any scalar index expression (e.g., Mul for tiled fusion)
+        assert len(args) > 0, "Domain requires at least one Range"
+        for i, arg in enumerate(args):
+            assert isinstance(arg, Range), f"Domain arg[{i}] must be Range, got {type(arg).__name__}"
         return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
+
+    @property
+    def ndim(self) -> int:
+        """Number of dimensions in this Domain."""
+        return len(self.args)
+
+    @property
+    def ranges(self) -> tuple[Range, ...]:
+        """Get all Ranges in this Domain."""
+        return tuple(r for r in self.args if isinstance(r, Range))
+
+    @property
+    def shape(self) -> tuple[ATenOp, ...]:
+        """Get the shape (sizes) of this Domain."""
+        return tuple(r.size for r in self.ranges)
+
+
+@dataclass(frozen=True)
+class Dim(ATenOp):
+    """
+    Dim(Domain, dim=k) extracts the k-th Range from a Domain.
+    
+    This is how you reference a specific loop variable within an iteration space.
+    
+    Example:
+        domain = Domain(Range(10), Range(20))
+        i = Dim(domain, dim=0)  # References the i-loop [0,10)
+        j = Dim(domain, dim=1)  # References the j-loop [0,20)
+    """
+    dim: int = 0
+
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        assert len(args) == 1, "Dim requires exactly one Domain argument"
+        assert isinstance(args[0], Domain), f"Dim arg must be Domain, got {type(args[0]).__name__}"
+        dim = kwargs.get("dim", 0)
+        assert 0 <= dim < args[0].ndim, f"Dim {dim} out of range for Domain with {args[0].ndim} dims"
+        return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
+
+    @property
+    def domain(self) -> Domain:
+        """Get the Domain this Dim references."""
+        return self.args[0]  # type: ignore
+
+    @property
+    def range(self) -> Range:
+        """Get the Range this Dim extracts."""
+        return self.domain.ranges[self.dim]
+
+    @property
+    def size(self) -> ATenOp:
+        """Get the size of this dimension."""
+        return self.range.size
+
+
+@dataclass(frozen=True)
+class Aff(ATenOp):
+    """
+    Aff(Stride, Dim, Offset, Incf) - Affine index expression.
+    
+    Computes: Stride * (Incf * Dim + Offset)
+    
+    In polyhedral notation: [i] -> { Stmt[Stride * (Incf * i + Offset)] }
+    
+    Args:
+        Stride: Coefficient for this dimension's contribution to address
+        Dim: The loop variable (Dim node referencing a Domain)
+        Offset: Constant offset added before scaling
+        Incf: Increment factor (usually 1)
+    
+    Example:
+        domain = Domain(Range(10), Range(20))
+        # Access pattern for A[i*20 + j]:
+        Aff(20, Dim(domain, dim=0), 0, 1)  # 20 * i
+        Aff(1, Dim(domain, dim=1), 0, 1)   # 1 * j
+    """
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        assert len(args) == 4, "Aff is defined as: Aff(Stride, Dim, Offset, Incf)"
+        stride, dim_node, offset, incf = args
+        assert stride.T is not None and stride.T.ndim == 0 and stride.T.dtype == index, \
+            "Aff: Stride should be a scalar index"
+        assert isinstance(dim_node, Dim), \
+            f"Aff: Second argument should be Dim, got {type(dim_node).__name__}"
+        assert offset.T is not None and offset.T.ndim == 0 and offset.T.dtype == index, \
+            "Aff: Offset should be a scalar index"
+        assert incf.T is not None and incf.T.ndim == 0 and incf.T.dtype == index, \
+            "Aff: Incf should be a scalar index"
+        return ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index))
+
     def as_aff_str(self) -> str: return self.render_isl()
+    def as_aff_str(self) -> str: return self.render_isl()
+
+@dataclass(frozen=True)
+class AccessMap(ATenOp):
+    """
+    AccessMap represents an affine access pattern with explicit iteration domain.
+
+    Structure:
+    ==========
+    args = (Range1, Range2, ..., Aff1, Aff2, ...)
+    
+    Where:
+    - args[0:n_ranges]: Range nodes defining the iteration domain
+    - args[n_ranges:]: Aff nodes defining the access pattern
+
+    Example - Row-major 2D access:
+    ==============================
+    For out[i,j] = f(in[i,j]) where shapes are [M, N]:
+    
+        AccessMap(
+            Range(M, dim=0), Range(N, dim=1),  # Iteration domain
+            Aff(N, Range0, 0, 1),              # i * N
+            Aff(1, Range1, 0, 1)               # j
+        )
+    
+    Fusion Rule:
+    ============
+    Two AccessMaps can be fused iff their iteration domains are identical:
+    - Same number of ranges
+    - Same sizes for corresponding ranges
+    - Same dimension ordering
+
+    Mathematical Interpretation:
+    ===========================
+    AccessMap encodes: { [i0, ..., in] -> [addr] : 0 ≤ ik < Sk }
+    """
+    n_ranges: int = 0
+
+    @property
+    def ranges(self) -> tuple[ATenOp, ...]:
+        """Get Range nodes defining the iteration domain."""
+        return self.args[:self.n_ranges]
+
+    @property
+    def affs(self) -> tuple[ATenOp, ...]:
+        """Get Aff nodes defining the access pattern."""
+        return self.args[self.n_ranges:]
+
+    @property
+    def dims(self) -> tuple[int, ...]:
+        """Get dimension indices (0, 1, 2, ... based on position)."""
+        return tuple(range(self.n_ranges))
+
+    @property
+    def domain_shape(self) -> tuple[ATenOp, ...]:
+        """Get the shape of iteration domain."""
+        return tuple(r.size for r in self.ranges if isinstance(r, Range))
+
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
+        """Verify AccessMap structure."""
+        n_ranges = kwargs.get("n_ranges", 0)
+        assert n_ranges >= 0, "AccessMap: n_ranges must be non-negative"
+        assert len(args) >= n_ranges, "AccessMap: not enough arguments for n_ranges"
+        
+        # Verify first n_ranges are Range nodes
+        for i in range(n_ranges):
+            assert isinstance(args[i], Range), \
+                f"AccessMap: arg[{i}] should be Range, got {type(args[i]).__name__}"
+        
+        # Verify remaining are scalar index expressions (Aff or arithmetic)
+        for i in range(n_ranges, len(args)):
+            assert args[i].T is not None and args[i].T.ndim == 0, \
+                f"AccessMap: arg[{i}] should be scalar index expression"
+        
+        return ATenOpType(axes=(), dtype=index, offset=_const(0, index))
+
+    @staticmethod
+    def from_tensor_type(T: ATenOpType) -> "AccessMap":
+        """
+        Create AccessMap from tensor type (ATenOpType).
+        
+        Uses the axes information to build iteration domain and access pattern.
+        """
+        if T.ndim == 0:
+            return AccessMap((), T=ATenOpType(axes=(), dtype=T.dtype), n_ranges=0)
+        
+        # First create all Ranges
+        ranges: list[Range] = [axis.range() for axis in T.axes]
+        
+        # Build Domain from Ranges
+        domain = Domain(tuple(ranges))
+        
+        # Create Affs using Dim references to Domain
+        affs: list[Aff] = [axis.aff(domain, dim) for dim, axis in enumerate(T.axes)]
+        
+        return AccessMap(
+            tuple(ranges) + tuple(affs),
+            T=ATenOpType(axes=(), dtype=T.dtype),
+            n_ranges=len(ranges)
+        )
+
+    @staticmethod
+    def from_shape(shape: tuple[ATenOp, ...], dtype: DType) -> "AccessMap":
+        """Create AccessMap for contiguous row-major layout."""
+        T = ATenOpType.from_shape(tuple(s.item if hasattr(s, 'item') else s for s in shape), dtype)
+        return AccessMap.from_tensor_type(T)
+
+    def domain_equals(self, other: "AccessMap") -> bool:
+        """
+        Check if two AccessMaps have identical iteration domains.
+        
+        This is the fundamental fusion check: two kernels can be fused
+        iff they iterate over the same domain.
+        
+        Compares Ranges by position and size (Range no longer has dim attribute).
+        """
+        if not isinstance(other, AccessMap):
+            return False
+        if self.n_ranges != other.n_ranges:
+            return False
+        
+        for r1, r2 in zip(self.ranges, other.ranges, strict=True):
+            if not isinstance(r1, Range) or not isinstance(r2, Range):
+                return False
+            # Compare sizes (positions are implicit by order)
+            if not ATenOp.eql(r1.size, r2.size):
+                return False
+        
+        return True
+
+    def linear_address(self) -> ATenOp:
+        """Compute linear memory address by summing Aff contributions."""
+        addr: ATenOp = _const(0)
+        for aff in self.affs:
+            addr = Add((addr, aff))
+        return addr
+
+    def to_basic_map(self) -> "A.BasicMap":
+        """Convert to BasicMap for polyhedral analysis."""
+        dom_vars = tuple(f"gid{d}" for d in self.dims)
+        addr_expr = A.AffExpr.zero()
+        
+        for aff in self.affs:
+            if not isinstance(aff, Aff):
+                continue
+            stride, range_node, offset, incf = aff.args
+            if not isinstance(range_node, Range):
+                continue
+            
+            gid_var = f"gid{range_node.dim}"
+            s = stride.item if hasattr(stride, "item") else stride
+            o = offset.item if hasattr(offset, "item") else offset
+            i = incf.item if hasattr(incf, "item") else incf
+            
+            if isinstance(s, (int, float)) and isinstance(i, (int, float)):
+                coeff = int(s * i)
+                const = int(s * o) if isinstance(o, (int, float)) else 0
+                addr_expr = addr_expr + A.AffExpr({gid_var: coeff}, const)
+        
+        return A.BasicMap.from_access(dom_vars, addr_expr, dom_name="S")
 
 @dataclass(frozen=True)
 class Load(ATenOp):
     """
-    X = Load(Memory | EndRange, idx1, idx2, ...)
-    Access the (idx1 + idx2 + ...)th element of Array.
-    Indices can be Aff nodes or scalar index expressions (for fused reshape).
+    Load(Memory | EndRange, idx1, idx2, ...) - Load from memory.
+    
+    Indices are typically Aff nodes that encode the access pattern.
+    For fusion analysis, use Load.get_access_map() to extract
+    an AccessMap from the indices.
     """
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: Union[None, ATenOpType], **kwargs: Any) -> ATenOpType:
         assert len(args) >= 2, "Load: the number of argument should be larger than two"
         assert isinstance(args[0], Memory) or isinstance(args[0], EndRange), "Load: Can only load element from Memory or Array."
         assert args[0].T is not None and args[0].T.ndim > 0, f"Load: the first argument should be array, getting scalar {args[0].__class__}"
-        # Indices can be Aff or any scalar index expression
         assert all([arg.T is not None and arg.T.ndim == 0 for arg in args[1:]]), "Load: indices should be scalar expressions."
         return ATenOpType(axes=tuple(), dtype=args[0].T.dtype, offset=_const(0, index))
 
     @staticmethod
     def from_tensor(tensor: ATenOp, T: "ATenOpType | None" = None) -> ATenOp:
-        """Create a Load from a tensor, or return scalar directly if 0-dim."""
+        """Create a Load from a tensor using Domain/Dim structure."""
         dtype = T or tensor.T
         assert dtype is not None
-        if dtype.ndim == 0: return tensor
-        if isinstance(tensor, Const): return tensor
-        return Load((tensor,) + tuple([axis.aff(dim) for dim, axis in enumerate(dtype.axes)]))
+        if dtype.ndim == 0:
+            return tensor
+        if isinstance(tensor, Const):
+            return tensor
+        
+        # Create Ranges and Domain
+        ranges = [axis.range() for axis in dtype.axes]
+        domain = Domain(tuple(ranges))
+        
+        # Create Affs with Dim references
+        affs = [axis.aff(domain, dim) for dim, axis in enumerate(dtype.axes)]
+        return Load((tensor,) + tuple(affs))
 
+    def get_access_map(self) -> "AccessMap":
+        """
+        Extract AccessMap from this Load's indices.
+        
+        Collects Dim nodes from Aff indices to extract the Domain,
+        and uses the Aff nodes as the access pattern.
+        """
+        affs: list[ATenOp] = []
+        domain: Union[Domain, None] = None
+        
+        for idx in self.args[1:]:
+            if isinstance(idx, Aff):
+                # Extract Domain from Dim node
+                dim_node = idx.args[1]
+                if isinstance(dim_node, Dim) and domain is None:
+                    domain = dim_node.domain
+                affs.append(idx)
+            else:
+                affs.append(idx)
+        
+        if domain is None:
+            # Fallback: no proper Aff nodes found
+            return AccessMap((), T=ATenOpType(axes=(), dtype=self.args[0].T.dtype if self.args[0].T else index), n_ranges=0)
+        
+        ranges = list(domain.ranges)
+        return AccessMap(
+            tuple(ranges) + tuple(affs),
+            T=ATenOpType(axes=(), dtype=self.args[0].T.dtype if self.args[0].T else index),
+            n_ranges=len(ranges)
+        )
 ### Scheduling Graph
 @dataclass(frozen=True)
 class Memory(ViewOps, ATenOp):
@@ -613,8 +958,60 @@ class EndRange(ViewOps, ATenOp):
 
     @property
     def dims(self) -> tuple[int, ...]:
-        """Get dimension indices from ranges."""
-        return tuple(r.dim for r in self.ranges if isinstance(r, Range))
+        """Get dimension indices (0, 1, 2, ... based on position).
+        
+        Note: Range no longer has dim attribute (removed in this refactor).
+        Dimensions are now implicit by position in the ranges tuple.
+        """
+        return tuple(range(self.n_ranges))
+
+    def get_iteration_domain(self) -> "AccessMap":
+        """
+        Get the iteration domain as an AccessMap (ranges only, no access pattern).
+        
+        This represents the loop bounds without specifying how memory is accessed.
+        Useful for checking if two EndRanges can be fused (same iteration domain).
+        """
+        ranges = tuple(r for r in self.ranges if isinstance(r, Range))
+        return AccessMap(
+            ranges,
+            T=ATenOpType(axes=(), dtype=index),
+            n_ranges=len(ranges)
+        )
+
+    def collect_load_access_maps(self) -> "list[tuple[Load, AccessMap]]":
+        """
+        Collect all (Load, AccessMap) pairs from the body.
+        
+        Returns list of (load_node, access_map) for fusion analysis.
+        The access maps can be compared to check if loads can be fused.
+        """
+        seen: set[int] = set()
+        result: list[tuple[Load, AccessMap]] = []
+
+        def _collect(node: ATenOp) -> None:
+            if id(node) in seen:
+                return
+            seen.add(id(node))
+            if isinstance(node, Load) and not isinstance(node.args[0], EndRange):
+                # Skip loads from EndRange (those are kernel boundaries)
+                result.append((node, node.get_access_map()))
+            if isinstance(node, EndRange):
+                return  # Don't recurse into nested EndRanges
+            if hasattr(node, "args"):
+                for arg in node.args:
+                    _collect(arg)
+
+        _collect(self.body)
+        return result
+
+    def can_fuse_with(self, other: "EndRange") -> bool:
+        """
+        Check if this EndRange can be fused with another.
+        
+        Fusion requires identical iteration domains (same Ranges).
+        """
+        return self.get_iteration_domain().domain_equals(other.get_iteration_domain())
 
     def load_sources(self) -> "list[EndRange]":
         """
@@ -636,7 +1033,7 @@ class EndRange(ViewOps, ATenOp):
             seen.add(id(node))
             if isinstance(node, Load) and isinstance(node.args[0], EndRange):
                 sources.append(node.args[0])
-            if hasattr(node, 'args'):
+            if hasattr(node, "args"):
                 for arg in node.args:
                     _find(arg)
 
@@ -651,34 +1048,39 @@ class EndRange(ViewOps, ATenOp):
         """
         Create an EndRange by synchronizing output with a computation body.
 
-        Builds args = (ranges..., output, body)
+        Extracts the Domain from Dim nodes in the body, then builds:
+        args = (ranges..., output, body)
 
-        Complexity: O(n) for collection, O(d log d) for sorting ranges
+        Complexity: O(n) for traversal
         """
-        # Collect all Range nodes from the body (not nested EndRanges) - O(n)
+        # Find Domain from Dim nodes in the body
         seen: set[int] = set()
-        dim2range: dict[int, Range] = {}
+        found_domain: Union[Domain, None] = None
+        found_ranges: list[Range] = []
 
-        def _collect_ranges(node: ATenOp) -> None:
+        def _collect_domain(node: ATenOp) -> None:
+            nonlocal found_domain, found_ranges
             if id(node) in seen:
                 return
             seen.add(id(node))
-            if isinstance(node, Range):
-                if node.dim in dim2range:
-                    assert ATenOp.eql(dim2range[node.dim].args[0], node.args[0]), \
-                        f"Conflicting Range sizes for dim {node.dim}"
-                dim2range[node.dim] = node
-            elif isinstance(node, EndRange):
-                return  # Don't collect ranges from nested EndRanges
-            if hasattr(node, 'args'):
+            
+            if isinstance(node, Dim):
+                if found_domain is None:
+                    found_domain = node.domain
+                    found_ranges = list(found_domain.ranges)
+                return  # Don't need to go deeper
+            
+            if isinstance(node, EndRange):
+                return  # Don't collect from nested EndRanges
+            
+            if hasattr(node, "args"):
                 for arg in node.args:
-                    _collect_ranges(arg)
+                    _collect_domain(arg)
 
-        _collect_ranges(body)
+        _collect_domain(body)
 
-        # Sort ranges by dimension - O(d log d)
-        sorted_dims = sorted(dim2range.keys())
-        ranges = tuple(dim2range[d] for d in sorted_dims)
+        # Use found ranges, or empty if none found
+        ranges = tuple(found_ranges) if found_ranges else ()
 
         # Build args: (ranges..., output, body)
         args = ranges + (output, body)
@@ -714,7 +1116,7 @@ class EndRange(ViewOps, ATenOp):
             if isinstance(node, EndRange) and node is not self:
                 parents.append(node)
                 return
-            if hasattr(node, 'args'):
+            if hasattr(node, "args"):
                 for arg in node.args:
                     _explore(arg)
 
@@ -734,9 +1136,9 @@ class EndRange(ViewOps, ATenOp):
                 continue
 
             gid_var = f"gid{range_node.dim}"
-            s = stride.item if hasattr(stride, 'item') else stride
-            o = offset.item if hasattr(offset, 'item') else offset
-            i = incf.item if hasattr(incf, 'item') else incf
+            s = stride.item if hasattr(stride, "item") else stride
+            o = offset.item if hasattr(offset, "item") else offset
+            i = incf.item if hasattr(incf, "item") else incf
 
             if isinstance(s, (int, float)) and isinstance(i, (int, float)):
                 coeff = int(s * i)
@@ -764,7 +1166,7 @@ class EndRange(ViewOps, ATenOp):
                     pass
             if isinstance(node, EndRange):
                 return
-            if hasattr(node, 'args'):
+            if hasattr(node, "args"):
                 for arg in node.args:
                     collect(arg, is_write)
 
@@ -788,28 +1190,28 @@ class EndRange(ViewOps, ATenOp):
         if subst is None:
             return self
         return self._apply_fusion(producer, subst)
-
     def _find_subst(self, producer: "EndRange") -> "dict[int, ATenOp] | None":
         """
         Find iteration space morphism: producer_dims → consumer_dims.
 
-        Returns dict mapping producer dim → IR expression over consumer Range nodes,
+        Returns dict mapping producer position → IR expression over consumer Dim nodes,
         or None if fusion is not possible.
 
-        Algorithm:
-        1. Compare producer's OUTPUT shape (not iteration shape) with consumer's iteration
+        Algorithm (using position-based indexing since Range no longer has dim):
+        1. Compare producer's OUTPUT shape with consumer's iteration
         2. Handle broadcast (size 1) and reduction (output smaller than iteration)
         3. Use identity mapping when shapes match
         4. Use linear decomposition for reshape
         """
-        prod_sizes = {r.dim: r.args[0] for r in producer.ranges if isinstance(r, Range)}
-        cons_sizes = {r.dim: r.args[0] for r in self.ranges if isinstance(r, Range)}
+        # Use position-based indexing
+        prod_sizes = {i: r.size for i, r in enumerate(producer.ranges) if isinstance(r, Range)}
+        cons_sizes = {i: r.size for i, r in enumerate(self.ranges) if isinstance(r, Range)}
 
-        # Build dim -> Range mapping for consumer
-        cons_dim_to_range: dict[int, Range] = {}
-        for rng in self.ranges:
+        # Build position -> Range mapping for consumer
+        cons_pos_to_range: dict[int, Range] = {}
+        for i, rng in enumerate(self.ranges):
             if isinstance(rng, Range):
-                cons_dim_to_range[rng.dim] = rng
+                cons_pos_to_range[i] = rng
 
         # Get integer sizes (bail on symbolic for now)
         def get_int_sizes(sizes: dict[int, ATenOp]) -> dict[int, int] | None:
@@ -842,45 +1244,35 @@ class EndRange(ViewOps, ATenOp):
             return prod_size == cons_size or prod_size == 1
 
         # Case: Consumer matches producer's OUTPUT shape (e.g., after reduction)
-        # Producer iterates [20, 50, 30] but outputs [20, 50, 1]
-        # Consumer iterates [20, 50, 1] - should fuse
         if prod_out_sizes and set(prod_out_sizes.keys()) == consumer_dims:
             if all(sizes_compatible(prod_out_sizes.get(d, 1), cons_int[d]) for d in consumer_dims):
-                # Map consumer dims to producer's output dims
                 subst: dict[int, ATenOp] = {}
                 for d in producer_dims:
-                    if d in consumer_dims and d in cons_dim_to_range:
+                    if d in consumer_dims and d in cons_pos_to_range:
                         if prod_int[d] == 1 and cons_int[d] != 1:
                             subst[d] = _const(0)
                         elif prod_int[d] == cons_int[d]:
-                            subst[d] = cons_dim_to_range[d]
-                        else:
-                            # Producer iterates more than consumer (reduction dim)
-                            # Don't substitute - keep producer's Range for reduction
-                            pass
-                    # Dims not in consumer stay as-is (use producer's Range)
+                            subst[d] = cons_pos_to_range[d]
+                        # else: Producer iterates more (reduction dim) - skip
                 if subst:
                     return subst
 
         if producer_dims == consumer_dims:
             # Same dims - check if sizes match (with broadcast)
             if all(sizes_compatible(prod_int[d], cons_int[d]) for d in consumer_dims):
-                # For broadcast dims (size 1), use constant 0; otherwise identity
                 subst = {}
                 for d in producer_dims:
                     if prod_int[d] == 1 and cons_int[d] != 1:
                         subst[d] = _const(0)  # Broadcast: always index 0
                     else:
-                        subst[d] = cons_dim_to_range[d]
+                        subst[d] = cons_pos_to_range[d]
                 return subst
 
         if consumer_dims < producer_dims:
             # Reduce case: producer iterates more, consumer is inner loop
-            # All producer dims must have matching consumer dims
             if consumer_dims == producer_dims & consumer_dims:
                 if all(prod_int.get(d) == cons_int.get(d) for d in consumer_dims):
-                    # Identity for shared dims, extras reference outer scope
-                    return {d: cons_dim_to_range[d] for d in producer_dims if d in cons_dim_to_range}
+                    return {d: cons_pos_to_range[d] for d in producer_dims if d in cons_pos_to_range}
 
         # Check: same total elements (reshape case)
         prod_total = 1
@@ -904,7 +1296,7 @@ class EndRange(ViewOps, ATenOp):
         # linear = Σ cons_stride[d] * Range(d)
         linear: ATenOp = _const(0)
         for d, s in zip(sorted_cons, cons_strides):
-            rng = cons_dim_to_range[d]
+            rng = cons_pos_to_range[d]
             if s == 1:
                 linear = Add((linear, rng))
             else:
@@ -1023,7 +1415,7 @@ class EndRange(ViewOps, ATenOp):
                     return transformed
             if isinstance(node, EndRange):
                 return node
-            if hasattr(node, 'args') and node.args:
+            if hasattr(node, "args") and node.args:
                 new_args = tuple(inline(arg) for arg in node.args)
                 if new_args != node.args:
                     return replace(node, args=new_args)
@@ -1078,7 +1470,7 @@ class EndRange(ViewOps, ATenOp):
         if isinstance(node, (EndRange, Memory)):
             return node
 
-        if hasattr(node, 'args') and node.args:
+        if hasattr(node, "args") and node.args:
             new_args = tuple(self._preimage(a, subst) for a in node.args)
             if new_args != node.args:
                 return replace(node, args=new_args)
@@ -1101,3 +1493,210 @@ class Store(ATenOp):
         assert len(args) == 2, "Store takes (dst, src)"
         assert args[0].T is not None
         return ATenOpType(axes=(), dtype=args[0].T.dtype)
+        return ATenOpType(axes=(), dtype=args[0].T.dtype)
+
+
+# =============================================================================
+# FusionEngine - Unified Loop Fusion via AccessMap
+# =============================================================================
+
+@dataclass
+class FusionResult:
+    """Result of fusion analysis between producer and consumer."""
+    fusible: bool
+    morphism: Union[Dict[int, ATenOp], None] = None  # producer_dim -> consumer_expr
+    fusion_type: str = "none"  # "perfect", "reshape", "reduce", "broadcast"
+    reason: str = ""
+
+
+class FusionEngine:
+    """
+    Unified loop fusion engine using AccessMap for iteration domain analysis.
+    
+    Fusion Philosophy:
+    ==================
+    Two kernels (EndRanges) can be fused if we can find an iteration space
+    morphism σ : producer_domain -> consumer_domain such that:
+    
+        producer.write ∘ σ⁻¹ = consumer.read
+    
+    In other words, for each point in consumer's iteration space, we can
+    compute the corresponding point in producer's space and inline the
+    computation.
+    
+    Fusion Types:
+    =============
+    1. Perfect Fusion (identity morphism)
+       - Domains are identical: σ = identity
+       - Example: sin(cos(x)) where both iterate [0, N)
+    
+    2. Reshape Fusion (linear morphism via div/mod)
+       - Same total elements, different shapes
+       - σ : [i,j,k,l] -> [linear // stride_p, linear % stride_p, ...]
+       - Example: reshape([10,10]) -> reshape([2,5,2,5])
+    
+    3. Reduce Fusion (projection morphism)
+       - Producer has extra dimensions (reduction axes)
+       - σ : [i,j] -> [i,j,k] where k is reduction dim
+       - Example: sum(x, axis=2).sin()
+    
+    4. Broadcast Fusion (embedding morphism)
+       - Producer has size-1 dims expanded in consumer
+       - σ : [i,j,k] -> [i,0,k] when producer has j=1
+       - Example: (x + bias) where bias has shape [1, N]
+    
+    Usage:
+    ======
+    ```python
+    engine = FusionEngine()
+    result = engine.analyze(consumer_endrange, producer_endrange)
+    if result.fusible:
+        fused = engine.apply(consumer_endrange, producer_endrange, result)
+    ```
+    """
+
+    @staticmethod
+    def analyze(consumer: EndRange, producer: EndRange) -> FusionResult:
+        """
+        Analyze if consumer can fuse with producer.
+        
+        Returns FusionResult with morphism if fusible.
+        """
+        cons_domain = consumer.get_iteration_domain()
+        prod_domain = producer.get_iteration_domain()
+        
+        # Get integer sizes for analysis
+        cons_sizes = FusionEngine._get_int_sizes(cons_domain)
+        prod_sizes = FusionEngine._get_int_sizes(prod_domain)
+        
+        if cons_sizes is None or prod_sizes is None:
+            return FusionResult(False, reason="Symbolic sizes not supported yet")
+        
+        # Build position -> Range mapping for consumer (position-based indexing)
+        cons_pos_to_range: Dict[int, Range] = {}
+        for i, rng in enumerate(consumer.ranges):
+            if isinstance(rng, Range):
+                cons_pos_to_range[i] = rng
+        
+        # Case 1: Perfect fusion - identical domains
+        if cons_domain.domain_equals(prod_domain):
+            morphism = {d: cons_pos_to_range[d] for d in cons_sizes.keys()}
+            return FusionResult(True, morphism, "perfect", "Identical domains")
+        
+        # Case 2: Broadcast fusion - producer has size-1 dims
+        prod_dims = set(prod_sizes.keys())
+        cons_dims = set(cons_sizes.keys())
+        
+        if prod_dims == cons_dims:
+            # Same dims but different sizes - check for broadcast
+            broadcast_dims = []
+            for d in prod_dims:
+                if prod_sizes[d] == 1 and cons_sizes[d] != 1:
+                    broadcast_dims.append(d)
+                elif prod_sizes[d] != cons_sizes[d]:
+                    return FusionResult(False, reason=f"Size mismatch on dim {d}")
+            
+            if broadcast_dims or prod_dims == cons_dims:
+                morphism: Dict[int, ATenOp] = {}
+                for d in prod_dims:
+                    if d in broadcast_dims:
+                        morphism[d] = _const(0)  # Broadcast: always index 0
+                    else:
+                        morphism[d] = cons_pos_to_range[d]
+                return FusionResult(True, morphism, "broadcast", f"Broadcast dims: {broadcast_dims}")
+        
+        # Case 3: Reduce fusion - producer has more dims
+        if cons_dims < prod_dims:
+            shared_dims = prod_dims & cons_dims
+            if all(prod_sizes[d] == cons_sizes[d] for d in shared_dims):
+                morphism = {d: cons_pos_to_range[d] for d in prod_dims if d in cons_pos_to_range}
+                return FusionResult(True, morphism, "reduce", "Consumer matches producer output")
+                return FusionResult(True, morphism, "reduce", "Consumer matches producer output")
+        
+        # Case 4: Reshape fusion - same total elements
+        prod_total = 1
+        for v in prod_sizes.values():
+            prod_total *= v
+        cons_total = 1
+        for v in cons_sizes.values():
+            cons_total *= v
+        
+        if prod_total == cons_total:
+            morphism = FusionEngine._build_reshape_morphism(
+                prod_sizes, cons_sizes, cons_pos_to_range
+            )
+            if morphism:
+                return FusionResult(True, morphism, "reshape", "Same total elements")
+        
+        return FusionResult(False, reason="No fusion strategy found")
+
+    @staticmethod
+    def apply(consumer: EndRange, producer: EndRange, result: FusionResult) -> EndRange:
+        """Apply fusion using the computed morphism."""
+        if not result.fusible or result.morphism is None:
+            return consumer
+        return consumer._apply_fusion(producer, result.morphism)
+
+    @staticmethod
+    def _get_int_sizes(domain: AccessMap) -> Union[Dict[int, int], None]:
+        """Extract integer sizes from AccessMap domain using position-based indexing."""
+        result: Dict[int, int] = {}
+        for i, rng in enumerate(domain.ranges):
+            if isinstance(rng, Range):
+                size = rng.size
+                if isinstance(size, Const) and isinstance(size.value, int):
+                    result[i] = size.value
+                else:
+                    return None
+        return result
+
+    @staticmethod
+    def _build_reshape_morphism(
+        prod_sizes: Dict[int, int],
+        cons_sizes: Dict[int, int],
+        cons_pos_to_range: Dict[int, Range]
+    ) -> Union[Dict[int, ATenOp], None]:
+        """
+        Build morphism for reshape fusion via linear decomposition.
+        
+        Maps producer positions to consumer positions via:
+        - Build linear index from consumer: linear = Σ cons_stride[d] * Range(d)
+        - Decompose into producer positions: prod_pos = linear // prod_stride % prod_size
+        """
+        # Build linear expression from consumer ranges (row-major order)
+        sorted_cons = sorted(cons_sizes.keys())
+        cons_strides: list[int] = []
+        stride = 1
+        for d in reversed(sorted_cons):
+            cons_strides.insert(0, stride)
+            stride *= cons_sizes[d]
+        
+        # linear = Σ cons_stride[d] * Range(d)
+        linear: ATenOp = _const(0)
+        for d, s in zip(sorted_cons, cons_strides):
+            rng = cons_pos_to_range.get(d)
+            if rng is None:
+                return None
+            if s == 1:
+                linear = Add((linear, rng))
+            else:
+                linear = Add((linear, Mul((rng, _const(s)))))
+        
+        # Decompose linear into producer dims (row-major order)
+        sorted_prod = sorted(prod_sizes.keys())
+        prod_strides: list[int] = []
+        stride = 1
+        for d in reversed(sorted_prod):
+            prod_strides.insert(0, stride)
+            stride *= prod_sizes[d]
+        
+        morphism: Dict[int, ATenOp] = {}
+        remaining = linear
+        for d, s in zip(sorted_prod, prod_strides):
+            if s == 1:
+                morphism[d] = remaining
+            else:
+                morphism[d] = IDiv((remaining, _const(s)))
+                remaining = Mod((remaining, _const(s)))
+        
+        return morphism

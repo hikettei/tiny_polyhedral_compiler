@@ -268,7 +268,7 @@ class ATen:
         # Step 4: Normalize
         return exp_shifted / sum_exp
 
-    def pool2d(self, kernel_size: int | tuple[int, int], stride: int | tuple[int, int] | None = None, op: str = 'max') -> Tensor:
+    def pool2d(self, kernel_size: int | tuple[int, int], stride: int | tuple[int, int] | None = None, op: str = "max") -> Tensor:
         """
         2D pooling operation.
         
@@ -307,9 +307,9 @@ class ATen:
         x = x.permute((0, 1, 2, 4, 3, 5))
         
         # Reduce over last two dimensions (kh, kw)
-        if op == 'max':
+        if op == "max":
             return x.max_reduce(axis=(-2, -1))
-        elif op == 'avg':
+        elif op == "avg":
             return x.sum(axis=(-2, -1)) / Tensor.const(float(kh * kw), dtype=self.dtype)
         else:
             raise ValueError(f"Unknown pooling op: {op}")
