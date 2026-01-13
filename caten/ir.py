@@ -973,6 +973,20 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
         _find(self.body)
         return sources
 
+    def find_parent_endranges(self) -> tuple[Exec, ...]:
+        """Find all Exec nodes that this computation depends on. O(n)"""
+        seen: set[int] = set()
+        parents: list[Exec] = []
+        def _explore(node: ATenOp) -> None:
+            if id(node) in seen: return
+            seen.add(id(node))
+            if isinstance(node, Exec) and node is not self:
+                parents.append(node)
+                return
+            for arg in node.args: _explore(arg)
+        _explore(self.body)
+        return parents
+
     @staticmethod
     def schedule(dims: tuple[Dim, ...], outs: tuple[ATenOp, ...], op: ATenOp) -> Exec:
         """
@@ -988,7 +1002,7 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
         
         # Automatically fuse with parent Execs (same pattern as sync())
         # _fuse() returns self if fusion is not possible, so this is safe
-        parents = instance._find_parent_endranges()
+        parents = instance.find_parent_endranges()
         for p in parents:
             print(p.viz())
             instance = instance._fuse(p)
@@ -1005,19 +1019,6 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
     # 2. Review how to implement reduction
     # 3. Exec+Exec Fusion implement
     # - Reshape, Permute, is all you need
-    def _find_parent_endranges(self) -> "list[Exec]":
-        """Find all Exec nodes that this computation depends on. O(n)"""
-        seen: set[int] = set()
-        parents: list[Exec] = []
-        def _explore(node: ATenOp) -> None:
-            if id(node) in seen: return
-            seen.add(id(node))
-            if isinstance(node, Exec) and node is not self:
-                parents.append(node)
-                return
-            for arg in node.args: _explore(arg)
-        _explore(self.body)
-        return parents
 
     def _load_to_basic_map(self, load: "Load") -> "A.BasicMap":
         """Convert Load node to BasicMap for dependency analysis. O(d)"""
