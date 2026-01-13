@@ -21,7 +21,7 @@ result = gemm.sin()
 
 print("matmul+elwise")
 print(result.op.viz())
-
+print(result.render(result.op))
 N, C_in, C_out, H, W = 2, 3, 8, 19, 19
 KH, KW = 4, 4
 

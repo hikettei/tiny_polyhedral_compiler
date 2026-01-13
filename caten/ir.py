@@ -962,54 +962,6 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
         """Get dimension indices from Dim nodes."""
         return tuple(d.dim for d in self.dim_nodes)
     
-    def get_iteration_domain(self) -> "AccessMap":
-        """
-        Get the iteration domain as an AccessMap (ranges only, no access pattern).
-        
-        This represents the loop bounds without specifying how memory is accessed.
-        Useful for checking if two Execs can be fused (same iteration domain).
-        """
-        ranges = tuple(r for r in self.ranges if isinstance(r, Range))
-        return AccessMap(
-            ranges,
-            T=(ATenOpType(axes=(), dtype=index),),
-            n_ranges=len(ranges)
-        )
-
-    def collect_load_access_maps(self) -> "list[tuple[Load, AccessMap]]":
-        """
-        Collect all (Load, AccessMap) pairs from the body.
-        
-        Returns list of (load_node, access_map) for fusion analysis.
-        The access maps can be compared to check if loads can be fused.
-        """
-        seen: set[int] = set()
-        result: list[tuple[Load, AccessMap]] = []
-
-        def _collect(node: ATenOp) -> None:
-            if id(node) in seen:
-                return
-            seen.add(id(node))
-            if isinstance(node, Load) and not isinstance(node.args[0], Exec):
-                # Skip loads from Exec (those are kernel boundaries)
-                result.append((node, node.get_access_map()))
-            if isinstance(node, Exec):
-                return  # Don't recurse into nested Execs
-            if hasattr(node, "args"):
-                for arg in node.args:
-                    _collect(arg)
-
-        _collect(self.body)
-        return result
-
-    def can_fuse_with(self, other: "Exec") -> bool:
-        """
-        Check if this Exec can be fused with another.
-        
-        Fusion requires identical iteration domains (same Ranges).
-        """
-        return self.get_iteration_domain().domain_equals(other.get_iteration_domain())
-
     def load_sources(self) -> "list[Exec]":
         """
         Get Execs that are Load sources (require separate kernels).
@@ -1039,8 +991,23 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
 
     @staticmethod
     def schedule(dims: tuple[Dim, ...], outs: tuple[ATenOp, ...], op: ATenOp) -> Exec:
+        """
+        Create an Exec and automatically fuse with parent Execs.
+        
+        This is the main entry point for creating scheduled computations.
+        Fusion is applied automatically based on polyhedral analysis.
+        
+        Note: _fuse() returns self if fusion is not possible (no exceptions),
+        so this is safe and always returns a valid Exec.
+        """
         instance = Exec(dims + outs + tuple([op]), n_dims=len(dims), n_out=len(outs), T=tuple([o.T[0] for o in outs]))
-        # TODO: FUsion
+        
+        # Automatically fuse with parent Execs (same pattern as sync())
+        # _fuse() returns self if fusion is not possible, so this is safe
+        parents = instance._find_parent_endranges()
+        for p in parents:
+            instance = instance._fuse(p)
+        
         return instance
     
     @staticmethod
@@ -1317,11 +1284,13 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
         prod_sizes = {i: r.size for i, r in enumerate(producer.ranges) if isinstance(r, Range)}
         cons_sizes = {i: r.size for i, r in enumerate(self.ranges) if isinstance(r, Range)}
 
-        # Build position -> Range mapping for consumer
-        cons_pos_to_range: dict[int, Range] = {}
-        for i, rng in enumerate(self.ranges):
-            if isinstance(rng, Range):
-                cons_pos_to_range[i] = rng
+        # Build position -> Dim mapping for consumer (Dim references Band properly)
+        cons_domain = self.domain
+        cons_pos_to_dim: dict[int, Dim] = {}
+        if cons_domain is not None:
+            for i, rng in enumerate(self.ranges):
+                if isinstance(rng, Range):
+                    cons_pos_to_dim[i] = Dim((cons_domain,), dim=i)
 
         # Get integer sizes (bail on symbolic for now)
         def get_int_sizes(sizes: dict[int, ATenOp]) -> dict[int, int] | None:
@@ -1338,8 +1307,9 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
 
         # Also get producer's OUTPUT shape (may differ from iteration due to reduction)
         prod_out_sizes: dict[int, int] = {}
-        if producer.output.T and producer.output.T.axes:
-            for i, ax in enumerate(producer.output.T.axes):
+        prod_out_T = producer.output.T[0] if producer.output.T else None
+        if prod_out_T and prod_out_T.axes:
+            for i, ax in enumerate(prod_out_T.axes):
                 if isinstance(ax.size, Const) and isinstance(ax.size.value, int):
                     prod_out_sizes[i] = ax.size.value
 
@@ -1358,11 +1328,11 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
             if all(sizes_compatible(prod_out_sizes.get(d, 1), cons_int[d]) for d in consumer_dims):
                 subst: dict[int, ATenOp] = {}
                 for d in producer_dims:
-                    if d in consumer_dims and d in cons_pos_to_range:
+                    if d in consumer_dims and d in cons_pos_to_dim:
                         if prod_int[d] == 1 and cons_int[d] != 1:
                             subst[d] = _const(0)
                         elif prod_int[d] == cons_int[d]:
-                            subst[d] = cons_pos_to_range[d]
+                            subst[d] = cons_pos_to_dim[d]
                         # else: Producer iterates more (reduction dim) - skip
                 if subst:
                     return subst
@@ -1375,14 +1345,14 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
                     if prod_int[d] == 1 and cons_int[d] != 1:
                         subst[d] = _const(0)  # Broadcast: always index 0
                     else:
-                        subst[d] = cons_pos_to_range[d]
+                        subst[d] = cons_pos_to_dim[d]
                 return subst
 
         if consumer_dims < producer_dims:
             # Reduce case: producer iterates more, consumer is inner loop
             if consumer_dims == producer_dims & consumer_dims:
                 if all(prod_int.get(d) == cons_int.get(d) for d in consumer_dims):
-                    return {d: cons_pos_to_range[d] for d in producer_dims if d in cons_pos_to_range}
+                    return {d: cons_pos_to_dim[d] for d in producer_dims if d in cons_pos_to_dim}
 
         # Check: same total elements (reshape case)
         prod_total = 1
@@ -1395,7 +1365,7 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
         if prod_total != cons_total:
             return None
 
-        # Build linear IR expression from consumer Range nodes (row-major order)
+        # Build linear IR expression from consumer Dim nodes (row-major order)
         sorted_cons = sorted(cons_int.keys())
         cons_strides: list[int] = []
         stride = 1
@@ -1403,14 +1373,14 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
             cons_strides.insert(0, stride)
             stride *= cons_int[d]
 
-        # linear = Σ cons_stride[d] * Range(d)
+        # linear = Σ cons_stride[d] * Dim(d)
         linear: ATenOp = _const(0)
         for d, s in zip(sorted_cons, cons_strides):
-            rng = cons_pos_to_range[d]
+            dim_node = cons_pos_to_dim[d]
             if s == 1:
-                linear = Add((linear, rng))
+                linear = Add((linear, dim_node))
             else:
-                linear = Add((linear, Mul((rng, _const(s)))))
+                linear = Add((linear, Mul((dim_node, _const(s)))))
 
         # Decompose linear into producer dims (row-major order)
         sorted_prod = sorted(prod_int.keys())
@@ -1431,76 +1401,6 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
 
         return subst
 
-    def _extract_substitution(
-        self,
-        result: "A.FusionResult",
-        producer: "Exec"
-    ) -> "dict[int, A.AffExpr] | None":
-        """
-        Extract dim -> expr substitution from fusion result.
-
-        For RAW constraint like: 128*h - 512*hp - 128*rh = 0
-        Solve for producer vars to get: h = 4*hp + rh
-
-        Returns dict mapping producer dim -> consumer AffExpr, or None if unsolvable.
-        """
-        subst: dict[int, A.AffExpr] = {}
-        producer_dims = set(producer.dims)
-        consumer_dims = set(self.dims)
-
-        # Identity for shared dims
-        for d in producer_dims & consumer_dims:
-            subst[d] = A.AffExpr.var(f"gid{d}")
-
-        # Handle tiled fusion
-        if result.tiling_info:
-            for pvar, (tile_size, rvar) in result.tiling_info.tile_dims.items():
-                if pvar.startswith("gid"):
-                    try:
-                        pdim = int(pvar[3:])
-                    except ValueError:
-                        continue
-
-                    # Find scaled consumer var from constraint
-                    if result.tiling_info.constraint:
-                        expr = result.tiling_info.constraint.expr
-                        p_coeff = expr.coeff_of(pvar)
-                        if isinstance(p_coeff, int) and p_coeff != 0:
-                            for var in expr.variables():
-                                if var in (pvar, rvar):
-                                    continue
-                                c = expr.coeff_of(var)
-                                if isinstance(c, int) and abs(c) == abs(p_coeff * tile_size):
-                                    # pdim = tile_size * var + rvar
-                                    subst[pdim] = tile_size * A.AffExpr.var(var) + A.AffExpr.var(rvar)
-                                    break
-            return subst if subst else None
-
-        # Handle perfect/partial: solve from RAW constraint
-        if result.dep_info.raw.maps:
-            raw_map = result.dep_info.raw.maps[0]
-            for pvar in raw_map.dom_vars:
-                if not pvar.startswith("gid"):
-                    continue
-                try:
-                    pdim = int(pvar[3:])
-                except ValueError:
-                    continue
-
-                if pdim in subst:
-                    continue
-
-                # Try to solve constraint for this var
-                for constraint in raw_map.constraints:
-                    sol = A._try_solve_for(constraint, pvar)
-                    if sol is not None:
-                        # Verify solution uses only consumer vars
-                        sol_vars = sol.variables()
-                        if all(v.startswith("gid") and int(v[3:]) in consumer_dims for v in sol_vars if v.startswith("gid")):
-                            subst[pdim] = sol
-                            break
-
-        return subst if subst else None
 
     def _apply_fusion(
         self,
@@ -1518,10 +1418,15 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
         # Transform producer's computation
         transformed = self._preimage(producer_comp, subst)
 
-        # Inline into consumer: replace Load(producer) with producer's computation
+        # Inline into consumer: replace Load(MemoryOf(producer)) with producer's computation
         def inline(node: ATenOp) -> ATenOp:
             if isinstance(node, Load):
-                if node.args[0] is producer:
+                src = node.args[0]
+                # Check for Load(producer) - direct reference
+                if src is producer:
+                    return transformed
+                # Check for Load(MemoryOf(producer)) - common pattern
+                if isinstance(src, MemoryOf) and src.args[0] is producer:
                     return transformed
             if isinstance(node, Exec):
                 return node
@@ -1563,6 +1468,25 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
                 return result
             return node
 
+        if isinstance(node, AccessMap):
+            # For AccessMap, compute the linear address and apply substitution
+            # AccessMap contains Dim nodes that reference producer's iteration space
+            # We need to express the access in terms of consumer's iteration space
+            # by evaluating Affs with substituted Dims
+            addr_parts: list[ATenOp] = []
+            for aff in node.affs:
+                # Each Aff is: stride * (incf * dim + offset)
+                transformed_aff = self._preimage(aff, subst)
+                addr_parts.append(transformed_aff)
+            
+            # Sum all parts to get scalar address
+            if not addr_parts:
+                return _const(0)
+            total: ATenOp = addr_parts[0]
+            for part in addr_parts[1:]:
+                total = Add((total, part))
+            return total
+
         if isinstance(node, Load):
             # Transform indices recursively
             new_indices = [self._preimage(a, subst) for a in node.args[1:]]
@@ -1574,7 +1498,7 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
                     for idx in new_indices:
                         total = Add((total, idx))
                     return Load((node.args[0], total), T=node.T)
-                return Load((node.args[0],) + tuple(new_indices))
+                return Load((node.args[0],) + tuple(new_indices), T=node.T)
             return node
 
         if isinstance(node, (Exec, Memory)):
