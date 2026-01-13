@@ -103,8 +103,6 @@ class ATenOpType():
 class ATenOp(metaclass=ATenOpMetaclass):
     args: tuple[ATenOp, ...]
     T: tuple[Union[ATenOpType, None], ...] = () # this should be provided via T=... option, or inferred via verify method.
-    # TODO:
-    # expected_users
     @property
     def predecessors(self) -> tuple[ATenOp, ...]:
         outputs = tuple(self.args)
@@ -357,10 +355,8 @@ class Const(ViewOps, ATenOp):
     @staticmethod
     def new(value: Union[int, float, str, bool, ATenOp], dtype: DType) -> Const:
         assert isinstance(value, (int, float, str, bool, ATenOp)), f"{value} should be int/float/str/bool"
-        if isinstance(value, ATenOp):
-            return value
-        else:
-            return Const(args=(), value=value, T=(ATenOpType(axes=(), dtype=dtype),))
+        if isinstance(value, ATenOp): return value
+        else: return Const(args=(), value=value, T=(ATenOpType(axes=(), dtype=dtype),))
 
 @dataclass(frozen=True)
 class View(ViewOps, ATenOp):
@@ -504,7 +500,7 @@ class Reduce(MetaOps, ATenOp):
 
         a, b = tuple([x.lower()[0] for x in self.args])
         a, b = [Load.from_tensor(a, band), Load.from_tensor(b, band)]
-        # initially reduce is not fused.
+        # note: set bop=None to just filling by values.
         reduced = self.bop((a, b)) if self.bop is not None else b
         instance = Exec.schedule(band.all_dimensions(), (a, ), Store.new(a, reduced))
         # Use self.T (reduce output type) instead of instance.T (buffer type)
@@ -994,6 +990,7 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
         # _fuse() returns self if fusion is not possible, so this is safe
         parents = instance._find_parent_endranges()
         for p in parents:
+            print(p.viz())
             instance = instance._fuse(p)
         return instance
 
@@ -1008,93 +1005,17 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
     # 2. Review how to implement reduction
     # 3. Exec+Exec Fusion implement
     # - Reshape, Permute, is all you need
-    
-    @staticmethod
-    def sync(
-        output: "Memory",
-        body: "Store",
-    ) -> "Exec":
-        """
-        Create a Exec by synchronizing output with a computation body.
-
-        Extracts the Band from Dim nodes in the body, then builds:
-        args = (dim1, dim2, ..., output, body)
-
-        Each Dim references the shared Band.
-
-        Complexity: O(n) for traversal
-        """
-        # Find Band and used dims from Dim nodes in the body
-        seen: set[int] = set()
-        found_domain: Union[Band, None] = None
-        used_dims: set[int] = set()  # Track which dim indices are actually used
-
-        def _collect_domain(node: ATenOp) -> None:
-            nonlocal found_domain
-            if id(node) in seen:
-                return
-            seen.add(id(node))
-            
-            if isinstance(node, Dim):
-                if found_domain is None:
-                    found_domain = node.domain
-                used_dims.add(node.dim)  # Track this dim as used
-                return  # Don't need to go deeper
-            
-            if isinstance(node, Exec):
-                return  # Don't collect from nested Execs
-            
-            if hasattr(node, "args"):
-                for arg in node.args:
-                    _collect_domain(arg)
-
-        _collect_domain(body)
-
-        # Create Dim nodes only for USED dimensions (sorted to maintain order)
-        if found_domain is not None and used_dims:
-            sorted_dims = sorted(used_dims)
-            dims = tuple(Dim((found_domain,), dim=d) for d in sorted_dims)
-        else:
-            dims = ()
-
-        # Build args: (dims..., output, body)
-        args = dims + (output, body)
-
-        assert output.T is not None
-        T = ATenOpType.from_shape(
-            tuple(s.size for s in output.T.axes),
-            output.T.dtype
-        )
-
-        sync_node = Exec(
-            args,
-            T=T,
-            n_dims=len(dims),
-        )
-
-        # Try to fuse with parent Execs
-        parents = sync_node._find_parent_endranges()
-        for p in parents:
-            sync_node = sync_node._fuse(p)
-
-        return sync_node
-
     def _find_parent_endranges(self) -> "list[Exec]":
         """Find all Exec nodes that this computation depends on. O(n)"""
         seen: set[int] = set()
         parents: list[Exec] = []
-
         def _explore(node: ATenOp) -> None:
-            if id(node) in seen:
-                return
+            if id(node) in seen: return
             seen.add(id(node))
             if isinstance(node, Exec) and node is not self:
                 parents.append(node)
                 return
-            if hasattr(node, "args"):
-                for arg in node.args:
-                    _explore(arg)
-
+            for arg in node.args: _explore(arg)
         _explore(self.body)
         return parents
 
