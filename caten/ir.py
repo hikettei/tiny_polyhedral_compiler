@@ -58,9 +58,9 @@ class ATenAxis():
         assert 0 <= dim < len(band.args), f"Band"
         return Aff((self.stride, Dim((band,), dim=dim), self.offset, self.incf))
     def index(self, band: "Band", dim: int) -> ATenOp:
-        assert 0 <= dim < len(band.args), f"Band"
-        # TODO: Add(Mul(...))
-        raise NotImplementedError("Not ready index")
+        assert 0 <= dim < len(band.args), f"Band dim {dim} out of range [0, {len(band.args)})"
+        # TODO
+        raise NotImplementedError("WIP")
 
 def _const(val: Any, dtype: DType=index) -> ATenOp:
     if isinstance(val, Const): return val
@@ -451,18 +451,6 @@ class View(ViewOps, ATenOp):
             dtype=tensor.T[0].dtype,
             offset=total_offset,
         ),))
-
-    # todo: check it
-    def get_source_access_map(self) -> "AccessMap":
-        """Get the AccessMap for reading from the source tensor."""
-        assert self.args[0].T[0] is not None
-        # ???
-        return AccessMap.from_tensor_type(self.args[0].T[0])
-    # todo: check it
-    def get_output_access_map(self) -> "AccessMap":
-        """Get the AccessMap for writing to the output (contiguous)."""
-        assert self.T[0] is not None
-        return AccessMap.from_tensor_type(self.T[0])
     
     def lower(self) -> tuple[ATenOp, ...]:
         """Lower View to Sync that copies to contiguous buffer."""
@@ -1007,8 +995,19 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
         parents = instance._find_parent_endranges()
         for p in parents:
             instance = instance._fuse(p)
-        
         return instance
+
+    # [TODO]
+    # 1. Review aff.py by human
+    # - Work on Symbolic?
+    # - Symbolic Tile?
+    # - Efficient?
+    # - Symbolic Equility Detection Algorithm
+    #   - SHA256, A*B同型？
+    #   - ConstantFolding
+    # 2. Review how to implement reduction
+    # 3. Exec+Exec Fusion implement
+    # - Reshape, Permute, is all you need
     
     @staticmethod
     def sync(
