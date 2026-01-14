@@ -140,6 +140,7 @@ class ATenOp(metaclass=ATenOpMetaclass):
     def __radd__(self, other: Any) -> ATenOp: return Add((_const(other), self))
     def __mul__(self, other: Any) -> ATenOp: return Mul((self, _const(other)))
     def __rmul__(self, other: Any) -> ATenOp: return Mul((_const(other), self))
+    def __neg__(self) -> ATenOp: return Neg((self,))
     # note: do not try to overload __eq__ since it is need to compute hash
     @staticmethod
     def eql(a: Union[int, float, ATenOp], b: Union[int, float, ATenOp]) -> bool:
