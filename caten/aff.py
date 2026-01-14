@@ -514,7 +514,7 @@ class BasicMap:
     rng_vars: Tuple[str, ...]
     constraints: Tuple[Constraint, ...]
     dom_name: str = "S"
-    rng_name: str = ""  # Empty string for anonymous tuple
+    rng_name: str = ""
 
     def __hash__(self) -> int:
         return hash((
@@ -817,13 +817,9 @@ class UnionMap:
         result: List[BasicMap] = []
         for m1 in self.maps:
             for m2 in other.maps:
-                try:
-                    composed = m1.apply_range(m2)
-                    if not composed.is_empty():
-                        result.append(composed)
-                except ValueError:
-                    # Arity mismatch - skip this pair
-                    continue
+                composed = m1.apply_range(m2)
+                if not composed.is_empty():
+                    result.append(composed)
         return UnionMap(result)
 
     def apply_domain(self, other: "UnionMap") -> "UnionMap":
@@ -831,12 +827,9 @@ class UnionMap:
         result: List[BasicMap] = []
         for m1 in self.maps:
             for m2 in other.maps:
-                try:
-                    composed = m1.apply_domain(m2)
-                    if not composed.is_empty():
-                        result.append(composed)
-                except ValueError:
-                    continue
+                composed = m1.apply_domain(m2)
+                if not composed.is_empty():
+                    result.append(composed)
         return UnionMap(result)
 
     def union(self, other: "UnionMap") -> "UnionMap":

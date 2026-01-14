@@ -8,7 +8,7 @@ import weakref
 from dataclasses import dataclass, replace
 from typing import Any, Dict, Union
 
-import caten.aff as A
+import caten.solver as solver
 
 from .dtype import DType, index
 
@@ -166,7 +166,7 @@ class TensorOps():
         For example:
           Add(A[0:10, 0:10], B[0:10, 0:10])
         will be transformed into:
-        band = A.band()
+        band = ir.band()
         out  = Memory() 
         MemoryOf(
           Exec(Dim(band, dim=0), Dim(band, dim=1),
@@ -510,6 +510,7 @@ class Range(ScheduleOps, ATenOp):
     - SIZE should be a scalar typed tensor.
     - Band is the only user for the Range.
     """
+    name: Union[str, None] = None
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 1 and args[0].T[0] is not None, "Range is defined as: Range(SIZE)"
@@ -519,6 +520,7 @@ class Range(ScheduleOps, ATenOp):
 
     @property
     def size(self) -> ATenOp: return self.args[0]
+    def named(self, name: str) -> Range: return Range(self.args, name=name)
 
 @dataclass(frozen=True)
 class Band(ScheduleOps, ATenOp):
@@ -668,6 +670,9 @@ class AccessMap(ScheduleOps, ATenOp):
             T=(ATenOpType(axes=(), dtype=T.dtype),),
             n_ranges=len(band.ranges)
         )
+
+    def to_basic_map(self) -> solver.BasicMap:
+        return
 ## == Read/Write access in the polyhedral model ==========================================
 @dataclass(frozen=True)
 class Load(ScheduleOps, ATenOp):
@@ -852,28 +857,26 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
     @staticmethod
     def schedule(dims: tuple[Dim, ...], outs: tuple[ATenOp, ...], op: ATenOp) -> Exec:
         instance = Exec(dims + outs + tuple([op]), n_dims=len(dims), n_out=len(outs), T=tuple([o.T[0] for o in outs]))
-        
-        # Automatically fuse with parent Execs (same pattern as sync())
-        # _fuse() returns self if fusion is not possible, so this is safe
         parents = instance.find_parent_endranges()
-        for p in parents:
-            print(p.viz())
-            # [TODO]
-            # - Fuseできるなら？Fuseする
-            # - Fuseできないなら？Separate的なノードを挿入する
-            #instance = instance.fuse(p)
+        for p in parents: instance += p
         return instance
+
     # [TODO]
-    # 1. Review aff.py by human
-    # - Work on Symbolic?
-    # - Symbolic Tile?
-    # - Efficient?
-    # - Symbolic Equility Detection Algorithm
-    #   - SHA256, A*B同型？
-    #   - ConstantFolding
-    # 2. Review how to implement reduction
-    # 3. Exec+Exec Fusion implement
-    # - Reshape, Permute, is all you need
+    # find_parent_endrangesの範囲ないの全てのノードが，Execと同じBandを持っているかverifyする
+
+    def __add__(self, predecessor: Exec) -> Exec:
+        """
+        Triggers the loop fusion.
+        Return Exec when:
+        - Fused     => Fused Exec Instance
+        - Non-Fused => self but separated with the node Separate (or smth)
+        """
+
+        print("FUSION")
+        print(self.viz())
+        print(predecessor.viz())
+        return self
+
     def search(self):
         # TODO: Beam Search Trigger.
         pass
