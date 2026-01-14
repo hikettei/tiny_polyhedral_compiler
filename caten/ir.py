@@ -59,8 +59,7 @@ class ATenAxis():
         return Aff((self.stride, Dim((band,), dim=dim), self.offset, self.incf))
     def index(self, band: "Band", dim: int) -> ATenOp:
         assert 0 <= dim < len(band.args), f"Band dim {dim} out of range [0, {len(band.args)})"
-        # TODO
-        raise NotImplementedError("WIP")
+        return self.stride * (Dim((band,), dim=dim) * self.incf + self.offset)
 
 def _const(val: Any, dtype: DType=index) -> ATenOp:
     if isinstance(val, Const): return val
@@ -554,10 +553,8 @@ class Band(ScheduleOps, ATenOp):
         return tuple([Dim((self,), dim=i) for i in range(self.ndim)])
     @property
     def shape(self) -> tuple[ATenOp, ...]: return tuple(r.size for r in self.ranges)
-    # TODO:
-    # - Unsqueeze
-    # - Squeeze
-    # - Reshape
+    # TODO: Implement reshape
+    # - Semantics: They returns "a new band" for the size.
 
 @dataclass(frozen=True)
 class Dim(ScheduleOps, ATenOp):

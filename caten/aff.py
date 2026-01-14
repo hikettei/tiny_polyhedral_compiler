@@ -101,7 +101,13 @@ class Constraint:
     """
     pass
 
+# UnionMap: List[Map]
+# f(x: UnionMap, y: UnionMap) = { x.union(y) | x.cst.union(y.cst) }
+# - x.cst.union(y.cst) requires simplifier!
+# - Should we use SYMPY? or fully rely on pattern matcher?
+# e.g.: Equivalence of (x+1)**2 == x**2 + 2x + 1
 # This is the core. move to solver.py
+# Or, use SYMPY
 class FourierMotzkinSolver():
     @staticmethod
     def try_solving_for(self):
