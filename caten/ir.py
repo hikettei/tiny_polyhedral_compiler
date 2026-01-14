@@ -6,9 +6,7 @@ import math
 import operator
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Dict, Union
-
-import caten.solver as solver
+from typing import Any, Dict, Union, FrozenSet
 
 from .dtype import DType, index
 
@@ -27,11 +25,11 @@ class ATenOpMetaclass(type):
         return x
     @staticmethod
     def _check_struct(cls_name: str, args: tuple) -> None:
-        """Structural constraints: Exec→MemoryOf only, Range→Band only."""
+        """Structural constraints: Polyhedron→MemoryOf only, Range→Band only."""
         for arg in args:
             t = type(arg).__name__
-            if t == "Exec" and cls_name != "MemoryOf":
-                raise TypeError(f"{cls_name}: Exec can only be referenced by MemoryOf")
+            if t == "Polyhedron" and cls_name != "MemoryOf":
+                raise TypeError(f"{cls_name}: Polyhedron can only be referenced by MemoryOf")
             if t == "Range" and cls_name != "Band":
                 raise TypeError(f"{cls_name}: Range can only be referenced by Band")
     
@@ -169,7 +167,7 @@ class TensorOps():
         band = ir.band()
         out  = Memory() 
         MemoryOf(
-          Exec(Dim(band, dim=0), Dim(band, dim=1),
+          Polyhedron(Dim(band, dim=0), Dim(band, dim=1),
                out,
                Store(out, Add(Load(A, AccessMap(band. ,,,)), Load(B, AccessMap(band, ...))))),
           nth=0
@@ -193,7 +191,7 @@ class TensorOps():
             out = Memory.defglobal([arg.size for arg in self.T[0].axes], self.T[0].dtype, tmp=True)
             # Run r0 over band.all_dimensions(), with access relations defined by Load.from_tensor
             # returning out
-            instance = Exec.schedule(band.all_dimensions(), (out,), Store.new(Load.from_tensor(out, band), r0))
+            instance = Polyhedron.schedule(band.all_dimensions(), (out,), Store.new(Load.from_tensor(out, band), r0))
             return (MemoryOf((instance,), nth=0, T=(out.T[0],)),) # the output become contiguous array!
 # UnaryOps verifier: check dtypes/shapes of arguments
 class UnaryOps(TensorOps):
@@ -449,7 +447,7 @@ class View(ViewOps, ATenOp):
         src = Load.from_tensor(lowered[0], band, T=self.T[0])
         dst = Memory.defglobal([arg.size for arg in self.T[0].axes], self.T[0].dtype, tmp=True)
         mv = Store.new(Load.from_tensor(dst, band), src)
-        instance = Exec.schedule(band.all_dimensions(), (dst,), mv)
+        instance = Polyhedron.schedule(band.all_dimensions(), (dst,), mv)
         return (MemoryOf((instance,), nth=0),)
 
 # MetaOps: Something like a macro in CatenIR
@@ -489,7 +487,7 @@ class Reduce(MetaOps, ATenOp):
         a, b = [Load.from_tensor(a, band), Load.from_tensor(b, band)]
         # note: set bop=None to just filling by values.
         reduced = self.bop((a, b)) if self.bop is not None else b
-        instance = Exec.schedule(band.all_dimensions(), (a, ), Store.new(a, reduced))
+        instance = Polyhedron.schedule(band.all_dimensions(), (a, ), Store.new(a, reduced))
         # Use self.T (reduce output type) instead of instance.T (buffer type)
         return (MemoryOf((instance,), nth=0, T=self.T),)
 
@@ -501,7 +499,6 @@ class ScheduleOps():
     """
     Ops for scheduling.
     """
-
 ### Array access graph constrained via only affine functions, sorted by lex order (for symbolic shape)
 @dataclass(frozen=True)
 class Range(ScheduleOps, ATenOp):
@@ -691,7 +688,7 @@ class Load(ScheduleOps, ATenOp):
     @staticmethod
     def from_tensor(tensor: ATenOp, band: "Band", T: "ATenOpType | None" = None) -> ATenOp:
         """Create a Load from a tensor using Band/Dim structure.
-        When tensor is a Exec, reuses its Band to ensure fused kernels
+        When tensor is a Polyhedron, reuses its Band to ensure fused kernels
         share the same Band structure.
         """
         dtype = T or tensor.T[0]
@@ -737,49 +734,144 @@ class Memory(ScheduleOps, ViewOps, ATenOp):
 @dataclass(frozen=True)
 class MemoryOf(ScheduleOps, ViewOps, ATenOp):
     """
-    MemoryOf(Exec, nth=int) retries the result of `Exec` node tensor. (artifact of Exec)
+    MemoryOf(Polyhedron, nth=int) retries the result of `Polyhedron` node tensor. (artifact of Polyhedron)
     """
     nth: int = 0
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...] | None, **kwargs: Any) -> tuple[ATenOpType, ...]:
-        assert len(args) == 1, "MemoryOf requires exactly one Exec argument"
-        assert isinstance(args[0], Exec), f"MemoryOf arg must be Exec, got {type(args[0]).__name__}"
+        assert len(args) == 1, "MemoryOf requires exactly one Polyhedron argument"
+        assert isinstance(args[0], Polyhedron), f"MemoryOf arg must be Polyhedron, got {type(args[0]).__name__}"
         assert "nth" in kwargs, "MemoryOf requires nth argument."
         nth = kwargs.get("nth")
-        assert 0 <= nth < len(args[0].T), f"MemoryOf(Exec, nth={nth}) out of range for Exec with {1+len(args[0].T_rest)} outputs"
+        assert 0 <= nth < len(args[0].T), f"MemoryOf(Polyhedron, nth={nth}) out of range for Polyhedron with {1+len(args[0].T_rest)} outputs"
         # If T is explicitly provided (e.g., from Reduce.lower()), use it
-        # Otherwise fall back to Exec's output type
+        # Otherwise fall back to Polyhedron's output type
         if T is not None and T[0] is not None:
             return T
         return (args[0].T[nth],)
         return (args[0].T[nth],)
-## Execute Instance
+## Polyhedral Instance
 @dataclass(frozen=True)
-class Exec(ScheduleOps, ViewOps, ATenOp):
+class Constraint(ScheduleOps, ViewOps, ATenOp):
+    """Equality constraint: expr == 0"""
+    def __hash__(self) -> int: return hash(self.expr)
+    def __eq__(self, other: ir.ATenOp) -> bool: return ir.ATenOp.eql(self.expr, other)
+    def substitute(self, name: str, aff: ir.ATenOp) -> "Constraint":
+        # TODO: pm
+        return Constraint(self.expr.substitute(var, aff))
+    def rename(self, mapping: Mapping[str, str]) -> "Constraint":
+        # TODO: pm
+        return Constraint(self.expr.rename(mapping))
+    def is_trivial(self) -> bool: return ir.ATenOp.eql(self.expr, 0)
+    def is_contradiction(self) -> bool:
+        """Check if constraint is const = 0 where const != 0."""
+        # ??
+        if self.expr.coeff: return False
+        return not _coeff_is_zero(self.expr.const)
+
+    def variables(self) -> FrozenSet[str]: return self.expr.variables()
+    def __str__(self) -> str: return f"{self.expr.render()} = 0"
+    # TODO: Implement eliminate_vars
+    def fourier_motzkin(self):
+        pass
+# TODO1:
+# - AccessMap -> BasicMap
+# - Load(Memory | MemoryOf, BasicMap but range dimensions are one)
+# - Constraint
+
+@dataclass(frozen=True)
+class BasicMap(ScheduleOps, ViewOps, ATenOp):
+    """
+    # TODO: AccessMap == BasicMap
+    # Load(Memory | MemoryOf, BasicMap but range dimensions are zero.)
+    BasicMap(*domains, *constraints)
+    An affine relation from domain to range, constrained by equalities.
+    Represents: { dom_name[dom_vars] -> rng_name[rng_vars] : constraints }
+    Example:
+        { S[gid0, gid1, gid2] -> [addr] : addr = 1500*gid0 + 30*gid1 + gid2 }
+    The constraints are stored as a list of Constraint objects.
+    """
+    n_dom: int = 0
+    n_rng: int = 0
+    n_cst: int = 0
+    dom_name: str = "S"
+    rng_name: str = ""
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+        """Verify AccessMap structure."""
+        assert all([isinstance(x, AccessMap) for x in args]), "UnionMap: all args should be type of AccessMap"
+        return (ATenOpType(axes=(), dtype=index, offset=_const(0, index)), )
+
+    def apply_range(self, other: BasicMap) -> BasicMap:
+        pass
+
+    def apply_domain(self, other: BasicMap) -> BasicMap:
+        pass
+    
+    def reverse(self) -> BasicMap:
+        pass
+
+@dataclass(frozen=True)
+class UnionMap(ScheduleOps, ViewOps, ATenOp):
+    """Union of multiple BasicMaps. { map1; map2; ...}"""
+    def __or__(self, other: UnionMap) -> UnionMap: return UnionMap(self.args + other.args)
+    def reverse(self) -> UnionMap: return UnionMap([m.reverse() for m in self.maps])
+    def is_empty(self) -> bool: return all(m.is_empty() for m in self.args) if self.args else True
+    def apply_range(self, other: UnionMap) -> UnionMap:
+        result: List[BasicMap] = []
+        for m1 in self.args:
+            for m2 in other.args:
+                if not (composed:=m1.apply_range(m2)).is_empty():
+                    result.append(composed)
+        return UnionMap(result)
+    def apply_domain(self, other: UnionMap) -> UnionMap:
+        result: List[BasicMap] = []
+        for m1 in self.args:
+            for m2 in other.args:
+                if not (composed:=m1.apply_domain(m2)).is_empty():
+                    result.append(composed)
+        return UnionMap(result)
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+        """Verify AccessMap structure."""
+        assert all([isinstance(x, AccessMap) for x in args]), "UnionMap: all args should be type of AccessMap"
+        return (ATenOpType(axes=(), dtype=index, offset=_const(0, index)), )
+
+@dataclass(frozen=True)
+class Polyhedron(ScheduleOps, ViewOps, ATenOp):
     """
     ```
-    Exec(Dim1, Dim2, ..., Tensor1, Tensor2, ..., OP)
-           n_dims             n_out
-    len(args) = n_dims + n_out + 1
+    Polyhedron(UnionMap, UnionMap, OP)
+            ^         ^
+         reads      writes
     ```
-    Exec iterates op over area constrainted by Dim1, Dim2, ... until they reaches end.
+    Polyhedron constructs an integer polyhedral shaped by the domain as it named.
+    - Each lattice point builds the graph via read and write union maps.
+    e.g.:
+    Polyhedron(..., ..., ...)
+
+    +--+
+    |  | (TODO: 3D AA)
+    +--+
+    
+    Polyhedron iterates op over area constrainted by Dim1, Dim2, ... until they reaches end.
     - Assuming OP produces Tensor1, Tensor2 as a result.
     - Returns (Tensor1, Tensor2, ...) as output
-      - This can be only retrived by MemoryOf(Exec, nth=int)
-    - MemoryOf is the only user of ExecNode.
+      - This can be only retrived by MemoryOf(Polyhedron, nth=int)
+    - MemoryOf is the only user of PolyhedronNode.
 
     For example, elementwise reduction is represented as:
         band = Band(Range(10), Range(10))
-        Exec(Dim(band, 0), Dim(band, 1), out_mem, Store(...))
+        Polyhedron(Dim(band, 0), Dim(band, 1), out_mem, Store(...))
 
     For example, gemm with k-reduction is represented as:
         outer_domain = Band(Range(M), Range(N))
         inner_domain = Band(Range(K))
-        res = Run(
+        res = Polyhedron.schedule(
           Dim(outer_domain, 0), Dim(outer_domain, 1), # schedule
           C,                                          # output
           Store(Load(C, AccessMap(Band, Aff(...), Aff(...)))
-                Run(
+                Polyhedron.schedule(
                   Dim(inner_domain, 0),
                   acc,
                   Store(acc, Add(Load(acc), Mul(...))))))
@@ -803,72 +895,59 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
       // (2.) But no room to insert here ---
     ```
     """
-    n_dims: int = 0
-    n_out: int = 0
-    
-    @property
-    def dim_nodes(self) -> tuple[Dim, ...]:
-        """Get all Dim nodes (iteration space references)."""
-        return tuple(d for d in self.args[:self.n_dims] if isinstance(d, Dim))
-
-    @property
-    def domain(self) -> Union[Band, None]:
-        """Get the shared Band (all Dims should reference the same Band)."""
-        dims = self.dim_nodes
-        if not dims: return
-        return dims[0].domain
-
-    @property
-    def ranges(self) -> tuple[Range, ...]:
-        """Get all Range nodes from the Band."""
-        domain = self.domain
-        if domain is None: return ()
-        return domain.ranges
-
-    @property
-    def output(self) -> ATenOp:
-        """Get the output memory."""
-        return self.args[self.n_dims]
-
-    @property
-    def body(self) -> ATenOp:
-        """Get the body computation (Store node)."""
-        return self.args[-1]
-
-    @property
-    def dims(self) -> tuple[int, ...]:
-        """Get dimension indices from Dim nodes."""
-        return tuple(d.dim for d in self.dim_nodes)
-
-    def find_parent_endranges(self) -> tuple[Exec, ...]:
-        """Find all Exec nodes that this computation depends on."""
+    n_outs: int = 0
+    @staticmethod
+    def explore_predecessors(roots: tuple[ATenOp, ...]) -> tuple[tuple[Polyhedron, ...], tuple[ATenOp, ...], tuple[AccessMap, ...], tuple[AccessMap, ...]]:
+        """Extract all Polyhedron nodes that roots depend on."""
         seen: set[int] = set()
-        parents: list[Exec] = []
-        def _explore(node: ATenOp) -> None:
+        body: list[ATenOp] = []
+        parents: list[Polyhedron] = []
+        reads: list[AccessMap] = []
+        writes: list[AccessMap] = []
+        def _explore(node: ATenOp, read: bool=True) -> None:
             if id(node) in seen: return
             seen.add(id(node))
-            if isinstance(node, Exec) and node is not self:
-                parents.append(node)
-                return
-            for arg in node.args: _explore(arg)
-        _explore(self.body)
-        return parents
+            match node:
+                case Polyhedron():
+                    parents.append(node)
+                    return
+                case AccessMap():
+                    if read: reads.append(node)
+                    else:    writes.append(node)
+            body.append(node)
+            if isinstance(node, Store):
+                assert len(node.args) == 2 and read is True, f"Currently WaW (write-after-write) dependency is not supported"
+                # Note: how to support waw
+                # for a in range(10):
+                #   a[i] = 10
+                #   a[i] = 20
+                _explore(node.args[0], read=False)
+                _explore(node.args[1], read=True)
+            else:
+                for arg in node.args: _explore(arg, read=read)
+        for root in roots: _explore(root, read=True)
+        return tuple(parents), tuple(body), tuple(reads), tuple(writes)
 
     @staticmethod
-    def schedule(dims: tuple[Dim, ...], outs: tuple[ATenOp, ...], op: ATenOp) -> Exec:
-        instance = Exec(dims + outs + tuple([op]), n_dims=len(dims), n_out=len(outs), T=tuple([o.T[0] for o in outs]))
-        parents = instance.find_parent_endranges()
-        for p in parents: instance += p
+    def schedule(dims: tuple[Dim, ...], outs: tuple[ATenOp, ...], op: ATenOp) -> Polyhedron:
+        parents, body, R, W = Polyhedron.explore_predecessors((op,))
+        assert all([o in body for o in outs]), f"Cannot schedule missing vars for {outs}"
+        for item in body:
+            # TODO: Doing some assertions
+            pass
+        instance = Polyhedron((UnionMap(R), UnionMap(W), op), n_outs=len(outs), T=tuple([o.T[0] for o in outs]))
+        #parents, _ = instance.find_parent_endranges()
+        #for p in parents: instance += p
         return instance
 
     # [TODO]
-    # find_parent_endrangesの範囲ないの全てのノードが，Execと同じBandを持っているかverifyする
-
-    def __add__(self, predecessor: Exec) -> Exec:
+    # - find_parent_endrangesの範囲ないの全てのノードが，Polyhedronと同じBandを持っているかverifyする
+    # - Rename Polyhedron -> Polyhedra
+    def __add__(self, predecessor: Polyhedron) -> Polyhedron:
         """
         Triggers the loop fusion.
-        Return Exec when:
-        - Fused     => Fused Exec Instance
+        Return Polyhedron when:
+        - Fused     => Fused Polyhedron Instance
         - Non-Fused => self but separated with the node Separate (or smth)
         """
 

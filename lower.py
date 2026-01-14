@@ -9,11 +9,16 @@ Tests for the unified fusion framework:
 import caten as C
 import caten.ir as ir
 
+def stop():
+    import sys
+    print("Early stopping")
+    sys.exit(0)
+
 graph = C.Tensor([10, 10]).reshape(5, 2, 5, 2).sin().reshape(10, 10).sin()
 
 print("Reshape+Reshape")
 print(graph.op.viz())
-
+stop()
 A = C.Tensor([20, 30])
 B = C.Tensor([30, 50])
 gemm = A @ B
@@ -22,9 +27,6 @@ result = gemm.sin()
 print("matmul+elwise")
 print(result.op.viz())
 print(result.render(result.op))
-import sys
-print("Early stopping")
-sys.exit(0)
 N, C_in, C_out, H, W = 2, 3, 8, 19, 19
 KH, KW = 4, 4
 

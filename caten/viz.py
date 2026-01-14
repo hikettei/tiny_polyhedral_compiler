@@ -168,7 +168,7 @@ def _node_kind_color(n: ATenOp) -> str:
         return _Ansi.FG_CYAN
     if isinstance(n, (ir.Load, ir.Aff)):
         return _Ansi.FG_MAGENTA
-    if isinstance(n, (ir.Range, ir.Exec)):
+    if isinstance(n, (ir.Range, ir.Polyhedron)):
         return _Ansi.FG_GREEN
     # arithmetic default
     return _Ansi.FG_BLUE
@@ -190,8 +190,6 @@ def _node_line(
     extra = ""
     if show_value and isinstance(n, ir.Const):
         extra = f" val={expr_to_str(n)}"
-    if isinstance(n, ir.Exec):
-        extra = f" dims={n.dims}"
 
     # Reduce op type
     if isinstance(n, ir.Reduce):
