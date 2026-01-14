@@ -61,6 +61,65 @@ if TYPE_CHECKING:
 # Type alias for coefficients: can be integer or symbolic (ATenOp)
 Coeff = Union[int, "ATenOp"]
 
+class Pressburger:
+    """
+    A wrapper for Pressburger Arithmetic in CaTEN Symbolic Graph
+    """
+    @staticmethod
+    def equal(x: ATenOp, val: int) -> bool:
+        pass
+
+    @staticmethod
+    def add(x: ATenOp, y: ATenOp) -> ATenOp:
+        pass
+
+    @staticmethod
+    def mul(x: ATenOp, y: ATenOp) -> ATenOp:
+        pass
+
+    @staticmethod
+    def neg(x: ATenOp) -> ATenOp:
+        pass
+
+    @staticmethod
+    def eq(x: ATenOp, y: ATenOp) -> bool:
+        # TODO:
+        # - 同型 A*B B*Aを同一のHashに計算する
+        # - How To Simmplifier
+        # どうやって実装する？
+        pass
+
+class Affine():
+    """
+    a*x_n-0 + b*x_n-1 + c*x_n-2 + ... + cst
+    """
+    pass
+
+class Constraint:
+    """
+    Aff == 0
+    """
+    pass
+
+# This is the core. move to solver.py
+class FourierMotzkinSolver():
+    @staticmethod
+    def try_solving_for(self):
+        pass
+    @staticmethod
+    def solve(self):
+        pass
+
+class BasicMap():
+    pass
+
+class UnionMap():
+    pass
+
+# TODO:
+# - 1. Move the Solver into ir.py
+# - 2. 
+
 
 def _is_aten_op(x: Any) -> bool:
     """Check if x is an ATenOp without importing ir at module level."""

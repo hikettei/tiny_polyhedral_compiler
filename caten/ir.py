@@ -90,10 +90,8 @@ class ATenOpType():
         # Size-1 dimensions get stride=0 for broadcast semantics
         axes = []
         for size, stride in zip(shape, strides, strict=True):
-            if ATenOp.eql(size, 1):
-                axes.append(ATenAxis(size=_const(size), stride=_const(0), offset=_const(0), incf=_const(1)))
-            else:
-                axes.append(ATenAxis(size=_const(size), stride=_const(stride), offset=_const(0), incf=_const(1)))
+            stride = 0 if ATenOp.eql(size, 1) else stride
+            axes.append(ATenAxis(size=_const(size), stride=_const(stride), offset=_const(0), incf=_const(1)))
         return ATenOpType(
             axes=tuple(axes),
             dtype=dtype,
@@ -484,12 +482,7 @@ class Reduce(MetaOps, ATenOp):
         for dim, i in enumerate(tensor.T[0].axes):
             if dim in kwargs["axis"]:
                 if kwargs["keepdim"]:
-                    new_axes.append(ATenAxis(
-                        size=_const(1, index),
-                        stride=_const(1, index),
-                        offset=_const(0, index),
-                        incf=_const(0, index)
-                    ))
+                    new_axes.append(ATenAxis(size=_const(1, index), stride=_const(1, index), offset=_const(0, index), incf=_const(0, index)))
             else:
                 new_axes.append(i)
         return (ATenOpType(axes=tuple(new_axes), dtype=tensor.T[0].dtype, offset=tensor.T[0].offset,),)
