@@ -88,10 +88,7 @@ class ATenOpType():
         for size, stride in zip(shape, strides, strict=True):
             stride = 0 if ATenOp.eql(size, 1) else stride
             axes.append(ATenAxis(size=_const(size), stride=_const(stride), offset=_const(0), incf=_const(1)))
-        return ATenOpType(
-            axes=tuple(axes),
-            dtype=dtype,
-        )
+        return ATenOpType(axes=tuple(axes), dtype=dtype)
 
 @dataclass(frozen=True)
 class ATenOp(metaclass=ATenOpMetaclass):
@@ -671,63 +668,6 @@ class AccessMap(ScheduleOps, ATenOp):
             T=(ATenOpType(axes=(), dtype=T.dtype),),
             n_ranges=len(band.ranges)
         )
-
-    # not checkd
-    def domain_equals(self, other: "AccessMap") -> bool:
-        """
-        Check if two AccessMaps have identical iteration domains.
-        
-        This is the fundamental fusion check: two kernels can be fused
-        iff they iterate over the same domain.
-        
-        Compares Ranges by position and size (Range no longer has dim attribute).
-        """
-        if not isinstance(other, AccessMap):
-            return False
-        if self.n_ranges != other.n_ranges:
-            return False
-        
-        for r1, r2 in zip(self.ranges, other.ranges, strict=True):
-            if not isinstance(r1, Range) or not isinstance(r2, Range):
-                return False
-            # Compare sizes (positions are implicit by order)
-            if not ATenOp.eql(r1.size, r2.size):
-                return False
-        
-        return True
-
-    # not checkd
-    def linear_address(self) -> ATenOp:
-        """Compute linear memory address by summing Aff contributions."""
-        addr: ATenOp = _const(0)
-        for aff in self.affs:
-            addr = Add((addr, aff))
-        return addr
-
-    # not checked
-    def to_basic_map(self) -> "A.BasicMap":
-        """Convert to BasicMap for polyhedral analysis."""
-        dom_vars = tuple(f"gid{d}" for d in self.dims)
-        addr_expr = A.AffExpr.zero()
-        
-        for aff in self.affs:
-            if not isinstance(aff, Aff):
-                continue
-            stride, range_node, offset, incf = aff.args
-            if not isinstance(range_node, Range):
-                continue
-            
-            gid_var = f"gid{range_node.dim}"
-            s = stride.item if hasattr(stride, "item") else stride
-            o = offset.item if hasattr(offset, "item") else offset
-            i = incf.item if hasattr(incf, "item") else incf
-            
-            if isinstance(s, (int, float)) and isinstance(i, (int, float)):
-                coeff = int(s * i)
-                const = int(s * o) if isinstance(o, (int, float)) else 0
-                addr_expr = addr_expr + A.AffExpr({gid_var: coeff}, const)
-        
-        return A.BasicMap.from_access(dom_vars, addr_expr, dom_name="S")
 ## == Read/Write access in the polyhedral model ==========================================
 @dataclass(frozen=True)
 class Load(ScheduleOps, ATenOp):
@@ -756,37 +696,6 @@ class Load(ScheduleOps, ATenOp):
         # Create Affs with Dim references
         am = AccessMap.from_tensor_type(band, dtype)
         return Load((tensor, am))
-
-    def get_access_map(self) -> "AccessMap":
-        """
-        Extract AccessMap from this Load's indices.
-        
-        Collects Dim nodes from Aff indices to extract the Band,
-        and uses the Aff nodes as the access pattern.
-        """
-        affs: list[ATenOp] = []
-        domain: Union[Band, None] = None
-        
-        for idx in self.args[1:]:
-            if isinstance(idx, Aff):
-                # Extract Band from Dim node
-                dim_node = idx.args[1]
-                if isinstance(dim_node, Dim) and domain is None:
-                    domain = dim_node.domain
-                affs.append(idx)
-            else:
-                affs.append(idx)
-        
-        if domain is None:
-            # Fallback: no proper Aff nodes found
-            return AccessMap((), T=(ATenOpType(axes=(), dtype=self.args[0].T.dtype if self.args[0].T else index),), n_ranges=0)
-        
-        ranges = list(domain.ranges)
-        return AccessMap(
-            tuple(ranges) + tuple(affs),
-            T=(ATenOpType(axes=(), dtype=self.args[0].T.dtype if self.args[0].T else index),),
-            n_ranges=len(ranges)
-        )
 
 @dataclass(frozen=True)
 class Store(ScheduleOps, ATenOp):
@@ -888,16 +797,6 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
       // (1.) Trying to render Run(...)    |
       // (2.) But no room to insert here ---
     ```
-
-    ## Scheduling
-    The loop is separated when:
-    - 
-    Overapするまで分割しちゃダメだよね。
-    - わかりやすい条件式で言い表すと？
-    TODO: class Domain/EndDomainを実装する？Execでやる？
-    Kernel is separated when:
-    Loop Fusion is doable when:
-    TODO
     """
     n_dims: int = 0
     n_out: int = 0
@@ -935,33 +834,6 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
     def dims(self) -> tuple[int, ...]:
         """Get dimension indices from Dim nodes."""
         return tuple(d.dim for d in self.dim_nodes)
-    
-    def load_sources(self) -> "list[Exec]":
-        """
-        Get Execs that are Load sources (require separate kernels).
-
-        Loop separation condition:
-        - Load(Exec, ...) means the Exec is a data source
-        - These must be computed as separate kernels before this one
-        - Execs appearing directly in computation (like reduction) are inline
-
-        Used by renderers (CPU, CUDA, etc.) to determine kernel boundaries.
-        """
-        seen: set[int] = set()
-        sources: list[Exec] = []
-
-        def _find(node: ATenOp) -> None:
-            if id(node) in seen:
-                return
-            seen.add(id(node))
-            if isinstance(node, Load) and isinstance(node.args[0], Exec):
-                sources.append(node.args[0])
-            if hasattr(node, "args"):
-                for arg in node.args:
-                    _find(arg)
-
-        _find(self.body)
-        return sources
 
     def find_parent_endranges(self) -> tuple[Exec, ...]:
         """Find all Exec nodes that this computation depends on."""
@@ -979,15 +851,6 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
 
     @staticmethod
     def schedule(dims: tuple[Dim, ...], outs: tuple[ATenOp, ...], op: ATenOp) -> Exec:
-        """
-        Create an Exec and automatically fuse with parent Execs.
-        
-        This is the main entry point for creating scheduled computations.
-        Fusion is applied automatically based on polyhedral analysis.
-        
-        Note: _fuse() returns self if fusion is not possible (no exceptions),
-        so this is safe and always returns a valid Exec.
-        """
         instance = Exec(dims + outs + tuple([op]), n_dims=len(dims), n_out=len(outs), T=tuple([o.T[0] for o in outs]))
         
         # Automatically fuse with parent Execs (same pattern as sync())
@@ -995,44 +858,11 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
         parents = instance.find_parent_endranges()
         for p in parents:
             print(p.viz())
+            # [TODO]
+            # - Fuseできるなら？Fuseする
+            # - Fuseできないなら？Separate的なノードを挿入する
             #instance = instance.fuse(p)
         return instance
-
-    def __add__(self, other: Exec) -> Exec:
-        """
-        Fuse Self+other
-        """
-        pass
-    
-    def fuse(self, predecessor: Exec) -> Exec:
-        """
-        Returns self is not fusible, otherwise returns self+predecessor
-        """
-        src = Exec.access_relations(self)
-        dst = Exec.access_relations(predecessor)
-        # TODO:
-        # src vs dstで依存関係を作る
-        # 
-        
-    
-    def _fuse(self, producer: "Exec") -> "Exec":
-        """
-        Unified fusion via polyhedral analysis (aff.py).
-
-        Uses attempt_fusion() from aff.py to analyze RAW dependencies
-        via BasicMap composition. Falls back to shape-based analysis.
-        """
-        # Try polyhedral analysis first (handles tiled fusion like Conv+Pool)
-        subst = self._find_subst_polyhedral(producer)
-
-        # Fall back to shape-based analysis
-        if subst is None:
-            subst = self._find_subst(producer)
-
-        if subst is None:
-            return self
-        return self._apply_fusion(producer, subst)
-
     # [TODO]
     # 1. Review aff.py by human
     # - Work on Symbolic?
@@ -1044,7 +874,6 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
     # 2. Review how to implement reduction
     # 3. Exec+Exec Fusion implement
     # - Reshape, Permute, is all you need
-
     def search(self):
         # TODO: Beam Search Trigger.
         pass
