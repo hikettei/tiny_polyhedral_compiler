@@ -46,6 +46,7 @@ class BasicMap:
 class UnionMap:
     """Union of multiple BasicMaps. { map1; map2; ...}"""
     maps: List[BasicMap] = field(default_factory=list)
+    def __or__(self, other: UnionMap) -> UnionMap: return UnionMap(self.maps + other.maps)
     def reverse(self) -> UnionMap: return UnionMap([m.reverse() for m in self.maps])
     def is_empty(self) -> bool: return all(m.is_empty() for m in self.maps) if self.maps else True
     def apply_range(self, other: UnionMap) -> UnionMap:
