@@ -974,7 +974,7 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
         return sources
 
     def find_parent_endranges(self) -> tuple[Exec, ...]:
-        """Find all Exec nodes that this computation depends on. O(n)"""
+        """Find all Exec nodes that this computation depends on."""
         seen: set[int] = set()
         parents: list[Exec] = []
         def _explore(node: ATenOp) -> None:
@@ -1005,8 +1005,59 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
         parents = instance.find_parent_endranges()
         for p in parents:
             print(p.viz())
-            instance = instance._fuse(p)
+            #instance = instance.fuse(p)
         return instance
+
+    def __add__(self, other: Exec) -> Exec:
+        """
+        Fuse Self+other
+        """
+        pass
+    
+    def fuse(self, predecessor: Exec) -> Exec:
+        """
+        Returns self is not fusible, otherwise returns self+predecessor
+        """
+        src = Exec.access_relations(self)
+        dst = Exec.access_relations(predecessor)
+        # TODO:
+        # src vs dstで依存関係を作る
+        # 
+        
+
+    @staticmethod
+    def extract_read_and_write(instance: Exec): 
+        reads, writes = [], []
+        seen: set[int] = set()
+        def _explore(node: ATenOp) -> None:
+            if id(node) in seen: return
+            seen.add(id(node))
+            if isinstance(node, Exec) and node is not instance: return
+            if isinstance(node, Store):
+                writes.append(node.args[0])
+            for arg in node.args:
+                
+                _explore(arg)
+        _explore(instance.body)
+        return parents
+    
+    def _fuse(self, producer: "Exec") -> "Exec":
+        """
+        Unified fusion via polyhedral analysis (aff.py).
+
+        Uses attempt_fusion() from aff.py to analyze RAW dependencies
+        via BasicMap composition. Falls back to shape-based analysis.
+        """
+        # Try polyhedral analysis first (handles tiled fusion like Conv+Pool)
+        subst = self._find_subst_polyhedral(producer)
+
+        # Fall back to shape-based analysis
+        if subst is None:
+            subst = self._find_subst(producer)
+
+        if subst is None:
+            return self
+        return self._apply_fusion(producer, subst)
 
     # [TODO]
     # 1. Review aff.py by human
@@ -1075,24 +1126,6 @@ class Exec(ScheduleOps, ViewOps, ATenOp):
             collect(self.body.args[0], is_write=True)
             collect(self.body.args[1], is_write=False)
         return reads, writes
-
-    def _fuse(self, producer: "Exec") -> "Exec":
-        """
-        Unified fusion via polyhedral analysis (aff.py).
-
-        Uses attempt_fusion() from aff.py to analyze RAW dependencies
-        via BasicMap composition. Falls back to shape-based analysis.
-        """
-        # Try polyhedral analysis first (handles tiled fusion like Conv+Pool)
-        subst = self._find_subst_polyhedral(producer)
-
-        # Fall back to shape-based analysis
-        if subst is None:
-            subst = self._find_subst(producer)
-
-        if subst is None:
-            return self
-        return self._apply_fusion(producer, subst)
 
     def _find_subst_polyhedral(self, producer: "Exec") -> "dict[int, ATenOp] | None":
         """

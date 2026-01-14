@@ -1235,6 +1235,10 @@ def build_access_map_from_load(
     return BasicMap.from_access(dom_vars, addr_expr)
 
 
+# TODO
+# We can simplify the implementation of Fourier-Motzkin
+# - Fourier-Motzkin Implementation for Sybolic Graph
+# - With Simplifier 
 # =============================================================================
 # Test/Demo
 # =============================================================================
