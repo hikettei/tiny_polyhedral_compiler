@@ -18,9 +18,6 @@ class ATenOpMetaclass(type):
     @staticmethod
     def _freeze(x: Any) -> Any:
         if isinstance(x, ATenOp): return x
-        # Handle aff.py classes by hash (they have custom __hash__)
-        if hasattr(x, "__module__") and "aff" in str(x.__module__):
-            return (type(x).__name__, hash(x))
         if dataclasses.is_dataclass(x):
             return (type(x),) + tuple((f.name, ATenOpMetaclass._freeze(getattr(x, f.name))) for f in dataclasses.fields(x) if f.name not in ["args"])
         if isinstance(x, (list, tuple)):

@@ -22,6 +22,9 @@ result = gemm.sin()
 print("matmul+elwise")
 print(result.op.viz())
 print(result.render(result.op))
+import sys
+print("Early stopping")
+sys.exit(0)
 N, C_in, C_out, H, W = 2, 3, 8, 19, 19
 KH, KW = 4, 4
 
