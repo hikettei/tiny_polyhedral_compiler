@@ -5,7 +5,7 @@ import itertools
 import math
 import operator
 import weakref
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, field
 from typing import Any, Dict, Union, FrozenSet
 
 import caten.dtype as dtype
@@ -612,10 +612,11 @@ class Aff(ScheduleOps, ATenOp):
         # a=stride*incf (incremental), b=stride*offset(offset)
         # Aff = a*self.dim+b
         return self.stride*self.incf, self.stride*self.offset
-    
+    # TODO is_cst
     @staticmethod
-    def var(name: str) -> Aff:
-        return Aff((_const(1, index), Range((_const(1, index), name="_cst")), Const.new(name, index), _const(1, index)))
+    def var(name: str, flip:bool=False) -> Aff:
+        cst = Dim((Band((Range((_const(1, index),), name="_cst"),)),), dim=0)
+        return Aff((_const(1, index), cst, Const.new(name, index), _const(-1 if flip else 1, index),))
 
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
@@ -646,8 +647,6 @@ class Constraint(ScheduleOps, ViewOps, ATenOp):
         """Verify AccessMap structure."""
         assert all([isinstance(x, Aff) for x in args]), "Constraint is created from a list of Aff"
         return (ATenOpType(axes=(), dtype=dtype.bool, offset=_const(0, index)), )
-        
-    def __hash__(self) -> int: return hash(self.expr)
     def __eq__(self, other: ir.ATenOp) -> bool: return ir.ATenOp.eql(self.expr, other)
     def substitute(self, name: str, aff: ir.ATenOp) -> "Constraint":
         # TODO: pm
@@ -680,28 +679,29 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
         { S[gid0, gid1, gid2] -> [addr] : addr = 1500*gid0 + 30*gid1 + gid2 }
     The constraints are stored as a list of Constraint objects.
     """
-    dom_vars: Tuple[str, ...]
-    rng_vars: Tuple[str, ...]
+    dom_vars: tuple[str, ...] = field(default_factory=list)
+    rng_vars: tuple[str, ...] = field(default_factory=list)
     dom_name: str = "S"
     rng_name: str = ""
     @staticmethod
-    def from_affine(dom_vars: tuple[str, ...], rng_vars: tuple[str, ...], rng_exprs: tuple[Aff, ...], dom_name: str = "S", rng_name: str = "") -> BasicMap:
-        if len(rng_vars) == len(rng_exprs):
+    def from_affine(dom_vars: tuple[str, ...], rng_vars: tuple[str, ...], rng_exprs: tuple[tuple[Aff, ...], ...], dom_name: str = "S", rng_name: str = "") -> BasicMap:
+        if not len(rng_vars) == len(rng_exprs):
             raise ValueError("rng_vars and rng_exprs length mismatch")
         constraints: List[Constraint] = []
         for rv, ex in zip(rng_vars, rng_exprs, strict=True):
-            constraints.append(Constraint((Aff.var(rv) + (-ex)),))
-        return BasicMap(tuple(constraints), dom_vars=dom_vars, rng_vars=rng_vars
+            a = ex + (Aff.var(rv, flip=True),)
+            constraints.append(Constraint(a))
+        return BasicMap(tuple(constraints), dom_vars=dom_vars, rng_vars=rng_vars,
                         dom_name=dom_name, rng_name=rng_name,
                         T=(ATenOpType(axes=(), dtype=index),))
 
     @staticmethod
     def from_tensor_type(band: Band, T: ATenOpType) -> BasicMap:
         if T.ndim == 0: return BasicMap((), T=(ATenOpType(axes=(), dtype=T.dtype),), n_ranges=0)
+        affs: tuple[Aff, ...] = tuple(axis.aff(band, dim) for dim, axis in enumerate(T.axes))
         return BasicMap.from_affine(
             tuple([f"gid_{i}" for i in range(len(affs))]),
-            ("addr",),
-            tuple([axis.aff(band, dim) for dim, axis in enumerate(T.axes)]),
+            ("addr",), (affs,),
             dom_name="S",
             rng_name="",
         )
@@ -758,7 +758,7 @@ class UnionMap(ScheduleOps, ViewOps, ATenOp):
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         """Verify AccessMap structure."""
-        assert all([isinstance(x, AccessMap) for x in args]), "UnionMap: all args should be type of AccessMap"
+        assert all([isinstance(x, BasicMap) for x in args]), "UnionMap: all args should be type of BasicMap"
         return (ATenOpType(axes=(), dtype=index, offset=_const(0, index)), )
 ## == Read/Write access in the polyhedral model ==========================================
 @dataclass(frozen=True)
@@ -771,6 +771,7 @@ class Load(ScheduleOps, ATenOp):
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 2, f"Load definition is Load(Memory | MemoryOf, AccessMap), getting args={len(args)}"
         assert isinstance(args[0], Memory) or isinstance(args[0], MemoryOf), f"Load definition is Load(Memory | MemoryOf, AccessMap), getting first argument = {type(args[0])}"
+        assert isinstance(args[1], BasicMap) and len(args[1].rng_vars), "Load: The first argument should be BasicMap where len(rng_vars) == 1"
         assert args[0].T[0] is not None and args[0].T[0].ndim > 0, f"Load: the first argument should be array, getting scalar {args[0].__class__}"
         # Create scalar from array
         return (ATenOpType(axes=tuple(), dtype=args[0].T[0].dtype, offset=_const(0, index)),)
@@ -914,7 +915,7 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
                 case Polyhedron():
                     parents.append(node)
                     return
-                case AccessMap():
+                case BasicMap():
                     if read: reads.append(node)
                     else:    writes.append(node)
             body.append(node)
