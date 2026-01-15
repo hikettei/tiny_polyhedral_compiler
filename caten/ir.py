@@ -8,6 +8,7 @@ import weakref
 from dataclasses import dataclass, replace
 from typing import Any, Dict, Union, FrozenSet
 
+import caten.dtype as dtype
 from .dtype import DType, index
 
 
@@ -579,6 +580,7 @@ class Dim(ScheduleOps, ATenOp):
     @property
     def ndim(self) -> ATenOp: return len(self.domain.args)
 
+### Polyhedral Compiler Primitives
 @dataclass(frozen=True)
 class Aff(ScheduleOps, ATenOp):
     """
@@ -598,6 +600,23 @@ class Aff(ScheduleOps, ATenOp):
         Aff(20, Dim(domain, dim=0), 0, 1)  # 20 * i
         Aff(1, Dim(domain, dim=1), 0, 1)   # 1 * j
     """
+    @property
+    def stride(self) -> ATenOp: return self.args[0]
+    @property
+    def dim(self) -> ATenOp: return self.args[1]
+    @property
+    def offset(self) -> ATenOp: return self.args[2]
+    @property
+    def incf(self) -> ATenOp: return self.args[3]
+    def ax_b(self) -> tuple[ATenOp, ATenOp]:
+        # a=stride*incf (incremental), b=stride*offset(offset)
+        # Aff = a*self.dim+b
+        return self.stride*self.incf, self.stride*self.offset
+    
+    @staticmethod
+    def var(name: str) -> Aff:
+        return Aff((_const(1, index), Range((_const(1, index), name="_cst")), Const.new(name, index), _const(1, index)))
+
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 4, "Aff is defined as: Aff(Stride, Dim, Offset, Incf)"
@@ -613,63 +632,134 @@ class Aff(ScheduleOps, ATenOp):
         return (ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index)), )
 
 @dataclass(frozen=True)
-class AccessMap(ScheduleOps, ATenOp):
+class Constraint(ScheduleOps, ViewOps, ATenOp):
     """
-    AccessMap(Band, Aff1, Aff2, ...) represents an affine access pattern.
-    equivalent to the following BasicMap.
-    { Band -> [Aff1+Aff2+...] }
-    Example - Row-major 2D access:
-    ==============================
-    For out[i,j] where shapes are [M, N]:
-        d = Band(Range(M, dim=0), Range(N, dim=1))
-        Load(out,
-          AccessMap(
-              d,
-              Aff(N, Dim(d, dim=0), 1)
-              Aff(1, Dim(d, dim=1), 1)))
+    Equality constraint:
+    Constraint(aff1, aff2, ...) == 0
+    i.e.: aff1 + aff2 + aff3 + ... == 0
+    where each aff is Aff(Stride, Dim, Offset, Incf)
+    Stride(Dim*Incf+Offset)
+    (Stride*Incf)*Dim+Offset*Stride
     """
-    n_ranges: int=0
-    @property
-    def ranges(self) -> tuple[ATenOp, ...]: return self.args[:self.n_ranges]
-    @property
-    def affs(self) -> tuple[ATenOp, ...]: return self.args[self.n_ranges:]
-    @property
-    def dims(self) -> tuple[int, ...]: return tuple(range(self.n_ranges))
-    @property
-    def domain_shape(self) -> tuple[ATenOp, ...]: return tuple(r.size for r in self.ranges if isinstance(r, Range))
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+        """Verify AccessMap structure."""
+        assert all([isinstance(x, Aff) for x in args]), "Constraint is created from a list of Aff"
+        return (ATenOpType(axes=(), dtype=dtype.bool, offset=_const(0, index)), )
+        
+    def __hash__(self) -> int: return hash(self.expr)
+    def __eq__(self, other: ir.ATenOp) -> bool: return ir.ATenOp.eql(self.expr, other)
+    def substitute(self, name: str, aff: ir.ATenOp) -> "Constraint":
+        # TODO: pm
+        return Constraint(self.expr.substitute(var, aff))
+    def rename(self, mapping: Mapping[str, str]) -> "Constraint":
+        # TODO: pm
+        return Constraint(self.expr.rename(mapping))
+    def is_trivial(self) -> bool: return ir.ATenOp.eql(self.expr, 0)
+    def is_contradiction(self) -> bool:
+        """Check if constraint is const = 0 where const != 0."""
+        # ??
+        if self.expr.coeff: return False
+        return not _coeff_is_zero(self.expr.const)
+
+    def variables(self) -> FrozenSet[str]: return self.expr.variables()
+    def __str__(self) -> str: return f"{self.expr.render()} = 0"
+    # TODO: Implement eliminate_vars
+    def fourier_motzkin(self):
+        pass
+
+@dataclass(frozen=True)
+class BasicMap(ScheduleOps, ViewOps, ATenOp):
+    """
+    ```
+    BasicMap(*constraints, dom_vars=list, rng_vars=list)
+    ```
+    An affine relation from domain to range, constrained by equalities.
+    Represents: { dom_name[*dom_vars] -> rng_name[*rng_vars] : *constraints }
+    Example:
+        { S[gid0, gid1, gid2] -> [addr] : addr = 1500*gid0 + 30*gid1 + gid2 }
+    The constraints are stored as a list of Constraint objects.
+    """
+    dom_vars: Tuple[str, ...]
+    rng_vars: Tuple[str, ...]
+    dom_name: str = "S"
+    rng_name: str = ""
+    @staticmethod
+    def from_affine(dom_vars: tuple[str, ...], rng_vars: tuple[str, ...], rng_exprs: tuple[Aff, ...], dom_name: str = "S", rng_name: str = "") -> BasicMap:
+        if len(rng_vars) == len(rng_exprs):
+            raise ValueError("rng_vars and rng_exprs length mismatch")
+        constraints: List[Constraint] = []
+        for rv, ex in zip(rng_vars, rng_exprs, strict=True):
+            constraints.append(Constraint((Aff.var(rv) + (-ex)),))
+        return BasicMap(tuple(constraints), dom_vars=dom_vars, rng_vars=rng_vars
+                        dom_name=dom_name, rng_name=rng_name,
+                        T=(ATenOpType(axes=(), dtype=index),))
+
+    @staticmethod
+    def from_tensor_type(band: Band, T: ATenOpType) -> BasicMap:
+        if T.ndim == 0: return BasicMap((), T=(ATenOpType(axes=(), dtype=T.dtype),), n_ranges=0)
+        return BasicMap.from_affine(
+            tuple([f"gid_{i}" for i in range(len(affs))]),
+            ("addr",),
+            tuple([axis.aff(band, dim) for dim, axis in enumerate(T.axes)]),
+            dom_name="S",
+            rng_name="",
+        )
+    # TODO: def index
+    def all_variables(self) -> FrozenSet[str]:
+        vars_set: Set[str] = set(self.dom_vars) | set(self.rng_vars)
+        for c in self.args: vars_set |= self.variables()
+        return frozenset(vars_set)
+
+    def rename_vars(self, mapping: Mapping[str, str]) -> BasicMap:
+        new_dom = tuple(mapping.get(v, v) for v in self.dom_vars)
+        new_rng = tuple(mapping.get(v, v) for v in self.rng_vars)
+        new_cons = tuple(c.rename(mapping) for c in self.args)
+        return BasicMap(new_cons, dom_vars=new_dom, rng_vars=rng_vars, dom_name=self.dom_name, rng_name=self.rng_name)
+
+    def reverse(self) -> BasicMap:
+        return BasicMap(self.args, dom_vars=self.rng_vars, rng_vars=self.dom_vars, dom_name=self.rng_name or "S", rng_name=self.dom_name)
 
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         """Verify AccessMap structure."""
-        assert "n_ranges" in kwargs
-        n_ranges = kwargs.get("n_ranges")
-        assert n_ranges >= 0, "AccessMap: n_ranges must be non-negative"
-        assert len(args) >= n_ranges, "AccessMap: not enough arguments for n_ranges"
-        
-        # Verify first n_ranges are Range nodes
-        for i in range(n_ranges):
-            assert isinstance(args[i], Dim), \
-                f"AccessMap: arg[{i}] should be Dim, got {type(args[i]).__name__}"
-        
-        # Verify remaining are scalar index expressions (Aff or arithmetic)
-        for i in range(n_ranges, len(args)):
-            assert args[i].T[0] is not None and args[i].T[0].ndim == 0, \
-                f"AccessMap: arg[{i}] should be scalar index expression"
-        
+        assert all([isinstance(x, Constraint) for x in args]), "BasicMap is only constrainted by Constraint."
         return (ATenOpType(axes=(), dtype=index, offset=_const(0, index)), )
 
-    @staticmethod
-    def from_tensor_type(band: Band, T: ATenOpType) -> "AccessMap":
-        if T.ndim == 0: return AccessMap((), T=(ATenOpType(axes=(), dtype=T.dtype),), n_ranges=0)
-        affs: list[Aff] = [axis.aff(band, dim) for dim, axis in enumerate(T.axes)]
-        return AccessMap(
-            band.all_dimensions() + tuple(affs),
-            T=(ATenOpType(axes=(), dtype=T.dtype),),
-            n_ranges=len(band.ranges)
-        )
+    def apply_range(self, other: BasicMap) -> BasicMap:
+        pass
 
-    def to_basic_map(self) -> solver.BasicMap:
-        return
+    def apply_domain(self, other: BasicMap) -> BasicMap:
+        pass
+    
+    def reverse(self) -> BasicMap:
+        pass
+
+@dataclass(frozen=True)
+class UnionMap(ScheduleOps, ViewOps, ATenOp):
+    """Union of multiple BasicMaps. { map1; map2; ...}"""
+    def __or__(self, other: UnionMap) -> UnionMap: return UnionMap(self.args + other.args)
+    def reverse(self) -> UnionMap: return UnionMap([m.reverse() for m in self.maps])
+    def is_empty(self) -> bool: return all(m.is_empty() for m in self.args) if self.args else True
+    def apply_range(self, other: UnionMap) -> UnionMap:
+        result: List[BasicMap] = []
+        for m1 in self.args:
+            for m2 in other.args:
+                if not (composed:=m1.apply_range(m2)).is_empty():
+                    result.append(composed)
+        return UnionMap(result)
+    def apply_domain(self, other: UnionMap) -> UnionMap:
+        result: List[BasicMap] = []
+        for m1 in self.args:
+            for m2 in other.args:
+                if not (composed:=m1.apply_domain(m2)).is_empty():
+                    result.append(composed)
+        return UnionMap(result)
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+        """Verify AccessMap structure."""
+        assert all([isinstance(x, AccessMap) for x in args]), "UnionMap: all args should be type of AccessMap"
+        return (ATenOpType(axes=(), dtype=index, offset=_const(0, index)), )
 ## == Read/Write access in the polyhedral model ==========================================
 @dataclass(frozen=True)
 class Load(ScheduleOps, ATenOp):
@@ -696,7 +786,7 @@ class Load(ScheduleOps, ATenOp):
         if dtype.ndim == 0: return tensor
         if isinstance(tensor, Const): return tensor
         # Create Affs with Dim references
-        am = AccessMap.from_tensor_type(band, dtype)
+        am = BasicMap.from_tensor_type(band, dtype)
         return Load((tensor, am))
 
 @dataclass(frozen=True)
@@ -749,92 +839,6 @@ class MemoryOf(ScheduleOps, ViewOps, ATenOp):
         if T is not None and T[0] is not None:
             return T
         return (args[0].T[nth],)
-## Polyhedral Instance
-@dataclass(frozen=True)
-class Constraint(ScheduleOps, ViewOps, ATenOp):
-    """Equality constraint: expr == 0"""
-    def __hash__(self) -> int: return hash(self.expr)
-    def __eq__(self, other: ir.ATenOp) -> bool: return ir.ATenOp.eql(self.expr, other)
-    def substitute(self, name: str, aff: ir.ATenOp) -> "Constraint":
-        # TODO: pm
-        return Constraint(self.expr.substitute(var, aff))
-    def rename(self, mapping: Mapping[str, str]) -> "Constraint":
-        # TODO: pm
-        return Constraint(self.expr.rename(mapping))
-    def is_trivial(self) -> bool: return ir.ATenOp.eql(self.expr, 0)
-    def is_contradiction(self) -> bool:
-        """Check if constraint is const = 0 where const != 0."""
-        # ??
-        if self.expr.coeff: return False
-        return not _coeff_is_zero(self.expr.const)
-
-    def variables(self) -> FrozenSet[str]: return self.expr.variables()
-    def __str__(self) -> str: return f"{self.expr.render()} = 0"
-    # TODO: Implement eliminate_vars
-    def fourier_motzkin(self):
-        pass
-# TODO1:
-# - AccessMap -> BasicMap
-# - Load(Memory | MemoryOf, BasicMap but range dimensions are one)
-# - Constraint
-
-@dataclass(frozen=True)
-class BasicMap(ScheduleOps, ViewOps, ATenOp):
-    """
-    # TODO: AccessMap == BasicMap
-    # Load(Memory | MemoryOf, BasicMap but range dimensions are zero.)
-    BasicMap(*domains, *constraints)
-    An affine relation from domain to range, constrained by equalities.
-    Represents: { dom_name[dom_vars] -> rng_name[rng_vars] : constraints }
-    Example:
-        { S[gid0, gid1, gid2] -> [addr] : addr = 1500*gid0 + 30*gid1 + gid2 }
-    The constraints are stored as a list of Constraint objects.
-    """
-    n_dom: int = 0
-    n_rng: int = 0
-    n_cst: int = 0
-    dom_name: str = "S"
-    rng_name: str = ""
-    @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
-        """Verify AccessMap structure."""
-        assert all([isinstance(x, AccessMap) for x in args]), "UnionMap: all args should be type of AccessMap"
-        return (ATenOpType(axes=(), dtype=index, offset=_const(0, index)), )
-
-    def apply_range(self, other: BasicMap) -> BasicMap:
-        pass
-
-    def apply_domain(self, other: BasicMap) -> BasicMap:
-        pass
-    
-    def reverse(self) -> BasicMap:
-        pass
-
-@dataclass(frozen=True)
-class UnionMap(ScheduleOps, ViewOps, ATenOp):
-    """Union of multiple BasicMaps. { map1; map2; ...}"""
-    def __or__(self, other: UnionMap) -> UnionMap: return UnionMap(self.args + other.args)
-    def reverse(self) -> UnionMap: return UnionMap([m.reverse() for m in self.maps])
-    def is_empty(self) -> bool: return all(m.is_empty() for m in self.args) if self.args else True
-    def apply_range(self, other: UnionMap) -> UnionMap:
-        result: List[BasicMap] = []
-        for m1 in self.args:
-            for m2 in other.args:
-                if not (composed:=m1.apply_range(m2)).is_empty():
-                    result.append(composed)
-        return UnionMap(result)
-    def apply_domain(self, other: UnionMap) -> UnionMap:
-        result: List[BasicMap] = []
-        for m1 in self.args:
-            for m2 in other.args:
-                if not (composed:=m1.apply_domain(m2)).is_empty():
-                    result.append(composed)
-        return UnionMap(result)
-    @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
-        """Verify AccessMap structure."""
-        assert all([isinstance(x, AccessMap) for x in args]), "UnionMap: all args should be type of AccessMap"
-        return (ATenOpType(axes=(), dtype=index, offset=_const(0, index)), )
 
 @dataclass(frozen=True)
 class Polyhedron(ScheduleOps, ViewOps, ATenOp):
@@ -931,12 +935,12 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
     def schedule(dims: tuple[Dim, ...], outs: tuple[ATenOp, ...], op: ATenOp) -> Polyhedron:
         parents, body, R, W = Polyhedron.explore_predecessors((op,))
         assert all([o in body for o in outs]), f"Cannot schedule missing vars for {outs}"
-        for item in body:
+        for item in body: pass
             # TODO: Doing some assertions
-            pass
+            # like every user sharing the same band
         instance = Polyhedron((UnionMap(R), UnionMap(W), op), n_outs=len(outs), T=tuple([o.T[0] for o in outs]))
-        #parents, _ = instance.find_parent_endranges()
-        #for p in parents: instance += p
+        # triggers fusion
+        for p in parents: instance += p
         return instance
 
     # [TODO]
@@ -949,7 +953,9 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
         - Fused     => Fused Polyhedron Instance
         - Non-Fused => self but separated with the node Separate (or smth)
         """
-
+        # 1. AccessMapを削除
+        # 2. IRを適切に定義するところを実装
+        # 3. Domain+Domainの計算を実装
         print("FUSION")
         print(self.viz())
         print(predecessor.viz())
