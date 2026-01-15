@@ -689,8 +689,7 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
             raise ValueError("rng_vars and rng_exprs length mismatch")
         constraints: List[Constraint] = []
         for rv, ex in zip(rng_vars, rng_exprs, strict=True):
-            a = ex + (Aff.var(rv, flip=True),)
-            constraints.append(Constraint(a))
+            constraints.append(Constraint(ex + (Aff.var(rv, flip=True),)))
         return BasicMap(tuple(constraints), dom_vars=dom_vars, rng_vars=rng_vars,
                         dom_name=dom_name, rng_name=rng_name,
                         T=(ATenOpType(axes=(), dtype=index),))
