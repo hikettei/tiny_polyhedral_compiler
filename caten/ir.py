@@ -936,8 +936,8 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
         parents, body, R, W = Polyhedron.explore_predecessors((op,))
         assert all([o in body for o in outs]), f"Cannot schedule missing vars for {outs}"
         for item in body: pass
-            # TODO: Doing some assertions
-            # like every user sharing the same band
+        # TODO: Doing some assertions
+        # like every user sharing the same band
         instance = Polyhedron((UnionMap(R), UnionMap(W), op), n_outs=len(outs), T=tuple([o.T[0] for o in outs]))
         # triggers fusion
         for p in parents: instance += p
@@ -956,9 +956,15 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
         # 1. AccessMapを削除
         # 2. IRを適切に定義するところを実装
         # 3. Domain+Domainの計算を実装
-        print("FUSION")
-        print(self.viz())
-        print(predecessor.viz())
+        R: UnionMap = self.args[0]
+        W: UnionMap = predecessor.args[0]
+        D: UnionMap = R.apply_range(W.reverse())
+        print("Fusion Triggered")
+        # TODO
+        # - ir.pyをEGraphで実装したい！
+        # - apply_range, reverse, apply_domain,
+        # - 計算グラフ中に常にR.apply_range(W.reverse())が存在するようにしてもいい。
+        # - If not fused, Insert Separate
         return self
 
     def search(self):
