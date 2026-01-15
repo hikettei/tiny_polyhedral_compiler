@@ -749,7 +749,6 @@ class MemoryOf(ScheduleOps, ViewOps, ATenOp):
         if T is not None and T[0] is not None:
             return T
         return (args[0].T[nth],)
-        return (args[0].T[nth],)
 ## Polyhedral Instance
 @dataclass(frozen=True)
 class Constraint(ScheduleOps, ViewOps, ATenOp):
