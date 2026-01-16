@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import dataclasses
-import itertools
-import math
-import operator
-import weakref
+import itertools, functools, math, operator, weakref, dataclasses
 from dataclasses import dataclass, replace, field
 from typing import Any, Dict, Union, FrozenSet
 
@@ -612,6 +608,9 @@ class Aff(ScheduleOps, ATenOp):
         # a=stride*incf (incremental), b=stride*offset(offset)
         # Aff = a*self.dim+b
         return self.stride*self.incf, self.stride*self.offset
+    def index(self) -> ATenOp:
+        a, b = self.ax_b()
+        return a * self.dim + b
     # TODO is_cst
     @staticmethod
     def var(name: str, flip:bool=False) -> Aff:
@@ -662,7 +661,9 @@ class Constraint(ScheduleOps, ViewOps, ATenOp):
         return not _coeff_is_zero(self.expr.const)
 
     def variables(self) -> FrozenSet[str]: return self.expr.variables()
-    def __str__(self) -> str: return f"{self.expr.render()} = 0"
+    def __str__(self) -> str:
+        total = functools.reduce(lambda a, b: Add((a, b)), [x.index() for x in self.args])
+        return f"{total.render()} = 0"
     # TODO: Implement eliminate_vars
     def fourier_motzkin(self):
         pass
@@ -734,11 +735,20 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
     def reverse(self) -> BasicMap:
         pass
 
+    def __str__(self) -> str:
+        dom, rng = ", ".join(self.dom_vars), ", ".join(self.rng_vars)
+        dom_str, rng_str = f"{self.dom_name}[{dom}]", f"{self.rng_name}[{rng}]"
+        if self.args:
+            cons_str = " and ".join(str(c) for c in self.args)
+            return f"{{ {dom_str} -> {rng_str} : {cons_str} }}"
+        else:
+            return f"{{ {dom_str} -> {rng_str} }}"
+
 @dataclass(frozen=True)
 class UnionMap(ScheduleOps, ViewOps, ATenOp):
     """Union of multiple BasicMaps. { map1; map2; ...}"""
     def __or__(self, other: UnionMap) -> UnionMap: return UnionMap(self.args + other.args)
-    def reverse(self) -> UnionMap: return UnionMap([m.reverse() for m in self.maps])
+    def reverse(self) -> UnionMap: return UnionMap([m.reverse() for m in self.args])
     def is_empty(self) -> bool: return all(m.is_empty() for m in self.args) if self.args else True
     def apply_range(self, other: UnionMap) -> UnionMap:
         result: List[BasicMap] = []
@@ -759,6 +769,9 @@ class UnionMap(ScheduleOps, ViewOps, ATenOp):
         """Verify AccessMap structure."""
         assert all([isinstance(x, BasicMap) for x in args]), "UnionMap: all args should be type of BasicMap"
         return (ATenOpType(axes=(), dtype=index, offset=_const(0, index)), )
+
+    def __str__(self) -> str:
+        return "<UnionMap: { " + " ; ".join(str(m)[2:-2] for m in self.args) + " }>"
 ## == Read/Write access in the polyhedral model ==========================================
 @dataclass(frozen=True)
 class Load(ScheduleOps, ATenOp):
@@ -957,9 +970,14 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
         # 2. IRを適切に定義するところを実装
         # 3. Domain+Domainの計算を実装
         R: UnionMap = self.args[0]
-        W: UnionMap = predecessor.args[0]
+        W: UnionMap = self.args[1]
+        print(R)
+        print(W)
+        print(len(R.args))
+        print(len(W.args))
         D: UnionMap = R.apply_range(W.reverse())
         print("Fusion Triggered")
+        print(D)
         # TODO
         # - ir.pyをEGraphで実装したい！
         # - apply_range, reverse, apply_domain,
