@@ -656,13 +656,17 @@ class Constraint(ScheduleOps, ViewOps, ATenOp):
         assert all([isinstance(x, Aff) for x in args]), "Constraint is created from a list of Aff"
         return (ATenOpType(axes=(), dtype=dtype.bool, offset=_const(0, index)), )
     def __eq__(self, other: ir.ATenOp) -> bool: return ir.ATenOp.eql(self.expr, other)
-    def substitute(self, name: str, aff: ir.ATenOp) -> "Constraint":
-        # TODO: pm
-        return Constraint(self.expr.substitute(var, aff))
-    def rename(self, mapping: Mapping[str, str]) -> "Constraint":
+    def rename(self, mapping: Mapping[str, str]) -> Costraint:
         return Constraint(tuple(x.rename(mapping) for x in self.args))
+    
+    def substitute(self, name: str, aff: ir.ATenOp) -> Constraint:
+        # TODO: This not implemented yet
+        # 
+        return Constraint(self.expr.substitute(var, aff))
+    
     def is_trivial(self) -> bool:
         return ir.ATenOp.eql(self.expr, 0)
+
     def is_contradiction(self) -> bool:
         """Check if constraint is const = 0 where const != 0."""
         # ??
@@ -673,7 +677,11 @@ class Constraint(ScheduleOps, ViewOps, ATenOp):
     def __str__(self) -> str:
         total = functools.reduce(lambda a, b: Add((a, b)), [x.index() for x in self.args])
         return f"{total.render()} = 0"
-    # TODO: Implement eliminate_vars
+    # [TODO]
+    # ./test/test_union_map.py
+    # Implement eliminate_vars
+    # Enhancement on Symbolic Array
+    # Symbolic Equality Graph
     @staticmethod
     def fourier_motzkin(constraints: List[Constraint], vars_to_elim: Sequence[str]) -> List[Constraint]:
         """
@@ -683,9 +691,8 @@ class Constraint(ScheduleOps, ViewOps, ATenOp):
             # TODO
             # self.expr helper (compute into aff expr)
             c = constraint.get_coefficient_of(var)
-            if ir.ATenOp.eql(c, 0):
-                return None
-            if not ((is_one:=ir.ATenOp.eql(c, 1)) or ir.ATenOp.eql(c, -1)):
+            if (ir.ATenOp.eql(c, 0) or
+                (not ((is_one:=ir.ATenOp.eql(c, 1)) or ir.ATenOp.eql(c, -1)))):
                 return None
             # rest = expr - c*var
             rest = Aff(...) # TODO
@@ -967,6 +974,7 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
     ```
     """
     n_outs: int = 0
+    root: bool = True
     @staticmethod
     def explore_predecessors(roots: tuple[ATenOp, ...]) -> tuple[tuple[Polyhedron, ...], tuple[ATenOp, ...], tuple[AccessMap, ...], tuple[AccessMap, ...]]:
         """Extract all Polyhedron nodes that roots depend on."""
@@ -1037,7 +1045,9 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
         # - ir.pyをEGraphで実装したい！
         # - apply_range, reverse, apply_domain,
         # - 計算グラフ中に常にR.apply_range(W.reverse())が存在するようにしてもいい。
-        # - If not fused, Insert Separate
+        # TODO:
+        # - Set root=True if non-fusible
+        # - otherwise root=False
         return self
 
     def search(self):
