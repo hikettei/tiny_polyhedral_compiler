@@ -684,6 +684,12 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
     rng_vars: tuple[str, ...] = field(default_factory=list)
     dom_name: str = "S"
     rng_name: str = ""
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+        """Verify AccessMap structure."""
+        assert all([isinstance(x, Constraint) for x in args]), "BasicMap is only constrainted by Constraint."
+        return (ATenOpType(axes=(), dtype=index, offset=_const(0, index)), )
+
     @staticmethod
     def from_affine(dom_vars: tuple[str, ...], rng_vars: tuple[str, ...], rng_exprs: tuple[tuple[Aff, ...], ...], dom_name: str = "S", rng_name: str = "") -> BasicMap:
         if not len(rng_vars) == len(rng_exprs):
@@ -720,21 +726,12 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
     def reverse(self) -> BasicMap:
         return BasicMap(self.args, dom_vars=self.rng_vars, rng_vars=self.dom_vars, dom_name=self.rng_name or "S", rng_name=self.dom_name)
 
-    @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
-        """Verify AccessMap structure."""
-        assert all([isinstance(x, Constraint) for x in args]), "BasicMap is only constrainted by Constraint."
-        return (ATenOpType(axes=(), dtype=index, offset=_const(0, index)), )
-
     def apply_range(self, other: BasicMap) -> BasicMap:
         pass
 
     def apply_domain(self, other: BasicMap) -> BasicMap:
         pass
     
-    def reverse(self) -> BasicMap:
-        pass
-
     def __str__(self) -> str:
         dom, rng = ", ".join(self.dom_vars), ", ".join(self.rng_vars)
         dom_str, rng_str = f"{self.dom_name}[{dom}]", f"{self.rng_name}[{rng}]"
@@ -973,6 +970,7 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
         W: UnionMap = self.args[1]
         print(R)
         print(W)
+        print(W.reverse())
         print(len(R.args))
         print(len(W.args))
         D: UnionMap = R.apply_range(W.reverse())

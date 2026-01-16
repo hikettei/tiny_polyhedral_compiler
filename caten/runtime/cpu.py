@@ -34,8 +34,10 @@ class CPUTensor(C.TensorImpl):
                     return str(node.value)
 
                 case ir.Dim():
-                    # Use kernel-local loop variable
-                    return f"i{node.dim}"
+                    return emit_expr(node.range)
+
+                case ir.Range():
+                    return f"{node.name}"
 
                 case ir.Add():
                     a, b = emit_expr(node.args[0]), emit_expr(node.args[1])
