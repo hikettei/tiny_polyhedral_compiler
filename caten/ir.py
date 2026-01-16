@@ -581,7 +581,7 @@ class Dim(ScheduleOps, ATenOp):
     @property
     def ndim(self) -> ATenOp: return len(self.domain.args)
     def rename(self, mapping: Mapping[str, str]) -> Dim:
-        return Band((self.args[0].rename(mapping),), dim=self.dim)
+        return Dim((self.args[0].rename(mapping),), dim=self.dim)
 
 ### Polyhedral Compiler Primitives
 @dataclass(frozen=True)
@@ -767,7 +767,7 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
         new_dom = tuple(mapping.get(v, v) for v in self.dom_vars)
         new_rng = tuple(mapping.get(v, v) for v in self.rng_vars)
         new_cons = tuple(c.rename(mapping) for c in self.args)
-        return BasicMap(new_cons, dom_vars=new_dom, rng_vars=rng_vars, dom_name=self.dom_name, rng_name=self.rng_name)
+        return BasicMap(new_cons, dom_vars=new_dom, rng_vars=new_rng, dom_name=self.dom_name, rng_name=self.rng_name)
 
     def reverse(self) -> BasicMap:
         return BasicMap(self.args, dom_vars=self.rng_vars, rng_vars=self.dom_vars, dom_name=self.rng_name or "S", rng_name=self.dom_name)
