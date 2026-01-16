@@ -515,6 +515,9 @@ class Range(ScheduleOps, ATenOp):
     @property
     def size(self) -> ATenOp: return self.args[0]
     def named(self, name: str) -> Range: return Range(self.args, name=name)
+    def rename(self, mapping: Mapping[str, str]) -> Range:
+        if self.name in mapping: return self.named(mapping.get(self.name))
+        else: return self
 
 @dataclass(frozen=True)
 class Band(ScheduleOps, ATenOp):
@@ -543,6 +546,8 @@ class Band(ScheduleOps, ATenOp):
         return tuple([Dim((self,), dim=i) for i in range(self.ndim)])
     @property
     def shape(self) -> tuple[ATenOp, ...]: return tuple(r.size for r in self.ranges)
+    def rename(self, mapping: Mapping[str, str]) -> Band:
+        return Band(tuple(x.rename(mapping) for x in self.args))
     # TODO: Implement reshape
     # - Semantics: They returns "a new band" for the size.
     # def tile(self):
@@ -575,6 +580,8 @@ class Dim(ScheduleOps, ATenOp):
     def range(self) -> Range: return self.domain.args[self.dim]
     @property
     def ndim(self) -> ATenOp: return len(self.domain.args)
+    def rename(self, mapping: Mapping[str, str]) -> Dim:
+        return Band((self.args[0].rename(mapping),), dim=self.dim)
 
 ### Polyhedral Compiler Primitives
 @dataclass(frozen=True)
@@ -616,7 +623,9 @@ class Aff(ScheduleOps, ATenOp):
     def var(name: str, flip:bool=False) -> Aff:
         cst = Dim((Band((Range((_const(1, index),), name="_cst"),)),), dim=0)
         return Aff((_const(1, index), cst, Const.new(name, index), _const(-1 if flip else 1, index),))
-
+    
+    def rename(self, mapping: Mapping[str, str]) -> Aff:
+        return Aff((self.stride, self.dim.rename(mapping), self.offset, self.incf))
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 4, "Aff is defined as: Aff(Stride, Dim, Offset, Incf)"
@@ -651,8 +660,7 @@ class Constraint(ScheduleOps, ViewOps, ATenOp):
         # TODO: pm
         return Constraint(self.expr.substitute(var, aff))
     def rename(self, mapping: Mapping[str, str]) -> "Constraint":
-        # TODO: pm
-        return Constraint(self.expr.rename(mapping))
+        return Constraint(tuple(x.rename(mapping) for x in self.args))
     def is_trivial(self) -> bool: return ir.ATenOp.eql(self.expr, 0)
     def is_contradiction(self) -> bool:
         """Check if constraint is const = 0 where const != 0."""
@@ -727,10 +735,28 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
         return BasicMap(self.args, dom_vars=self.rng_vars, rng_vars=self.dom_vars, dom_name=self.rng_name or "S", rng_name=self.dom_name)
 
     def apply_range(self, other: BasicMap) -> BasicMap:
-        pass
+        if len(self.rng_vars) != len(other.dom_vars):
+            return ValueError(
+                f"Range/Domain arity mismatch: {len(self.rng_vars)} vs {len(other.dom_vars)}")
+        intermidate = tuple(f"__m{i}" for i in range(len(self.rng_vars)))
+        self_renamed = self.rename_vars(
+            {v: m for v, m in zip(self.rng_vars, intermidate, strict=True)}
+        )
+        other_renamed = other.rename_vars(
+            {v: m for v, m in zip(other.dom_vars, intermidate, strict=True)}
+        )
+        all_csts = list(self_renamed.constraints) + list(other_renamed.constraints)
+        final_constraints = eliminate_variables(all_constraints, intermidate)
+        return BasicMap(
+            tuple(final_constraints),
+            dom_vars=self_renamed.dom_vars,
+            rng_vars=other_renamed.rng_vars,
+            dom_name=self_renamed.dom_name,
+            rng_name=other_renamed.rng_name
+        )
 
     def apply_domain(self, other: BasicMap) -> BasicMap:
-        pass
+        return other.apply_range(self)
     
     def __str__(self) -> str:
         dom, rng = ", ".join(self.dom_vars), ", ".join(self.rng_vars)
@@ -970,9 +996,8 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
         W: UnionMap = self.args[1]
         print(R)
         print(W)
-        print(W.reverse())
-        print(len(R.args))
-        print(len(W.args))
+        # [TODO]
+        # - This should be lru_cache d
         D: UnionMap = R.apply_range(W.reverse())
         print("Fusion Triggered")
         print(D)
