@@ -661,7 +661,8 @@ class Constraint(ScheduleOps, ViewOps, ATenOp):
         return Constraint(self.expr.substitute(var, aff))
     def rename(self, mapping: Mapping[str, str]) -> "Constraint":
         return Constraint(tuple(x.rename(mapping) for x in self.args))
-    def is_trivial(self) -> bool: return ir.ATenOp.eql(self.expr, 0)
+    def is_trivial(self) -> bool:
+        return ir.ATenOp.eql(self.expr, 0)
     def is_contradiction(self) -> bool:
         """Check if constraint is const = 0 where const != 0."""
         # ??
@@ -673,8 +674,38 @@ class Constraint(ScheduleOps, ViewOps, ATenOp):
         total = functools.reduce(lambda a, b: Add((a, b)), [x.index() for x in self.args])
         return f"{total.render()} = 0"
     # TODO: Implement eliminate_vars
-    def fourier_motzkin(self):
-        pass
+    @staticmethod
+    def fourier_motzkin(constraints: List[Constraint], vars_to_elim: Sequence[str]) -> List[Constraint]:
+        """
+        Eliminate variables via Fourier-Motzkin style substitution.
+        """
+        def _solve_for(constraint: Constraint, var: str) -> Optional[Aff]:
+            # TODO
+            # self.expr helper (compute into aff expr)
+            c = constraint.get_coefficient_of(var)
+            if ir.ATenOp.eql(c, 0):
+                return None
+            if not ((is_one:=ir.ATenOp.eql(c, 1)) or ir.ATenOp.eql(c, -1)):
+                return None
+            # rest = expr - c*var
+            rest = Aff(...) # TODO
+            # If c=1:  var + rest = 0 => var = -rest
+            # If c=-1: -var + rest =0 => var = rest
+            if is_one: return -rest
+            return rest
+
+        for var in vars_to_elim:
+            pivot_idx: Optional[int] = None
+            solution: Optional[Aff] = None
+            for i, c in enumerate(constraints):
+                if (sol := _solve_for(c, var)) is not None:
+                    pivot_idx, solution = i, sol
+                    break
+                # cannot eliminate this variable with +- 1 coeff?
+                if pivot_idx is None or solution is None: continue
+                constraints.pop(pivot_idx)
+                constraints = [c.substitute(var, solution) for c in constraints]
+        return [c for c in constraints if not c.is_trivial()]
 
 @dataclass(frozen=True)
 class BasicMap(ScheduleOps, ViewOps, ATenOp):
@@ -734,6 +765,7 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
     def reverse(self) -> BasicMap:
         return BasicMap(self.args, dom_vars=self.rng_vars, rng_vars=self.dom_vars, dom_name=self.rng_name or "S", rng_name=self.dom_name)
 
+    # [TODO] lru_cache
     def apply_range(self, other: BasicMap) -> BasicMap:
         if len(self.rng_vars) != len(other.dom_vars):
             return ValueError(
@@ -745,8 +777,8 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
         other_renamed = other.rename_vars(
             {v: m for v, m in zip(other.dom_vars, intermidate, strict=True)}
         )
-        all_csts = list(self_renamed.constraints) + list(other_renamed.constraints)
-        final_constraints = eliminate_variables(all_constraints, intermidate)
+        all_csts = list(self_renamed.args) + list(other_renamed.args)
+        final_constraints = Constraints.fourier_motzkin(all_constraints, intermidate)
         return BasicMap(
             tuple(final_constraints),
             dom_vars=self_renamed.dom_vars,
@@ -754,9 +786,9 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
             dom_name=self_renamed.dom_name,
             rng_name=other_renamed.rng_name
         )
-
+    # apply_domain is equivalent to self.reverse().apply_range(other.reverse())?
     def apply_domain(self, other: BasicMap) -> BasicMap:
-        return other.apply_range(self)
+        return self.reverse().apply_range(other.reverse()).reverse()
     
     def __str__(self) -> str:
         dom, rng = ", ".join(self.dom_vars), ", ".join(self.rng_vars)
