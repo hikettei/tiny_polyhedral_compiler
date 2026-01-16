@@ -22,6 +22,8 @@ print(out)
 
 TODO:
 
+- [ ] Node: Equality or Inequality which is a subclass of Constraint.
+  - [ ] Extend Fourier-Motzkin
 - [ ] test/test_union_map.py
 - [ ] Rewrite Everything in EGraph
   - Validity Computation
