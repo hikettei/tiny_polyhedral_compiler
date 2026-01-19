@@ -2,6 +2,33 @@
 
 **Caten** is a Python-based Polyhedral Compiler framework designed for deep learning and high-performance computing education and experimentation. It provides Python bindings for the [Integer Set Library (ISL)](https://libisl.sourceforge.io/) and high-level abstractions for tensor scheduling and optimization.
 
+## Usage
+
+Everything is `caten/ir.py`.
+
+```python
+import caten.ir as ir
+
+outer = ir.Band((ir.Range(10, name="gid0"), ir.Range(10, name="gid1")))
+inner = ir.Band((ir.Range(10, name="gid2")))
+
+i, j, k = outer[0], outer[1], inner[0] # Dims
+
+
+acc = ir.Polyhedral.schedule(inner, Store(...), fuse=True)
+out = ir.Polyhedral.schedule(outer, Store(...), fuse=True)
+print(out)
+```
+
+TODO:
+
+- [ ] Node: Equality or Inequality which is a subclass of Constraint.
+  - [ ] Extend Fourier-Motzkin
+- [ ] test/test_union_map.py
+- [ ] Rewrite Everything in EGraph
+  - Validity Computation
+  - print("Profiling ...") in EGraph
+
 ## Vision
 
 Caten aims to bridge the gap between high-level tensor operations (like in PyTorch/NumPy) and low-level loop optimizations (Tiling, Fusion, Vectorization). By leveraging the Polyhedral Model, Caten allows users to:
@@ -48,7 +75,3 @@ uv sync
 3.  [ ] **IR & Kernel**: Implement `caten.ops` and `caten.kernel`.
 4.  [ ] **Runtime & Renderer**: Code generation for CPU/C.
 5.  [ ] **Auto-Scheduler**: Basic search for optimal schedules.
-
-## License
-
-MIT
