@@ -734,6 +734,379 @@ class TestMapComposition:
         assert len(umap2.args) == 1
 
 
+
+# =============================================================================
+# Fourier-Motzkin Elimination and Dependency Analysis Tests
+# =============================================================================
+
+class TestConstraintMethods:
+    """Tests for Constraint class methods used in fourier_motzkin.
+    
+    Note: get_coefficient_of() and get_constant() return ATenOp computation graphs.
+    Use .simplify().item to extract concrete values for assertions.
+    """
+
+    def test_get_coefficient_of_single_var(self):
+        """Test get_coefficient_of with single variable term."""
+        # Constraint: 3*x = 0
+        c = ir.Constraint((ir.Aff.term(3, "x"),))
+        assert c.get_coefficient_of("x").simplify().item == 3
+        assert c.get_coefficient_of("y").simplify().item == 0
+
+    def test_get_coefficient_of_negative(self):
+        """Test get_coefficient_of with negative coefficient."""
+        # Constraint: -5*x = 0
+        c = ir.Constraint((ir.Aff.term(-5, "x"),))
+        assert c.get_coefficient_of("x").simplify().item == -5
+
+    def test_get_coefficient_of_multiple_vars(self):
+        """Test get_coefficient_of with multiple variables."""
+        # Constraint: 2*x + 3*y - 4*z = 0
+        c = ir.Constraint((ir.Aff.term(2, "x"), ir.Aff.term(3, "y"), ir.Aff.term(-4, "z")))
+        assert c.get_coefficient_of("x").simplify().item == 2
+        assert c.get_coefficient_of("y").simplify().item == 3
+        assert c.get_coefficient_of("z").simplify().item == -4
+        assert c.get_coefficient_of("w").simplify().item == 0
+
+    def test_get_constant_simple(self):
+        """Test get_constant with a constant term."""
+        # Constraint: x + 5 = 0
+        c = ir.Constraint((ir.Aff.term(1, "x"), ir.Aff.const(5)))
+        assert c.get_constant().simplify().item == 5
+
+    def test_get_constant_negative(self):
+        """Test get_constant with negative constant."""
+        # Constraint: x - 10 = 0
+        c = ir.Constraint((ir.Aff.term(1, "x"), ir.Aff.const(-10)))
+        assert c.get_constant().simplify().item == -10
+
+    def test_get_constant_no_constant(self):
+        """Test get_constant when no constant term."""
+        # Constraint: x + y = 0
+        c = ir.Constraint((ir.Aff.term(1, "x"), ir.Aff.term(1, "y")))
+        assert c.get_constant().simplify().item == 0
+
+    def test_variables_extraction(self):
+        """Test variables() extracts all variable names."""
+        # Constraint: 2*x + 3*y + 5 = 0
+        c = ir.Constraint((ir.Aff.term(2, "x"), ir.Aff.term(3, "y"), ir.Aff.const(5)))
+        vars_set = c.variables()
+        assert vars_set == frozenset({"x", "y"})
+
+    def test_without_var_removes_variable(self):
+        """Test without_var removes specified variable's Affs."""
+        # Constraint: 2*x + 3*y + 5 = 0
+        c = ir.Constraint((ir.Aff.term(2, "x"), ir.Aff.term(3, "y"), ir.Aff.const(5)))
+        rest = c.without_var("x")
+        # Should have y term and constant
+        assert len(rest) == 2
+        # Check the remaining constraint
+        c2 = ir.Constraint(rest)
+        assert c2.get_coefficient_of("y").simplify().item == 3
+        assert c2.get_constant().simplify().item == 5
+        assert c2.get_coefficient_of("x").simplify().item == 0
+
+    def test_is_trivial_zero_constraint(self):
+        """Test is_trivial for 0 = 0."""
+        c = ir.Constraint(())
+        assert c.is_trivial() is True
+
+    def test_is_trivial_non_trivial(self):
+        """Test is_trivial for non-trivial constraint."""
+        c = ir.Constraint((ir.Aff.term(1, "x"),))
+        assert c.is_trivial() is False
+
+    def test_is_contradiction_with_nonzero_const(self):
+        """Test is_contradiction with only non-zero constant."""
+        c = ir.Constraint((ir.Aff.const(5),))
+        assert c.is_contradiction() is True
+
+    def test_is_contradiction_with_variables(self):
+        """Test is_contradiction with variables is False."""
+        c = ir.Constraint((ir.Aff.term(1, "x"), ir.Aff.const(5)))
+        assert c.is_contradiction() is False
+
+    def test_substitute_simple(self):
+        """Test substitute replaces variable."""
+        # Constraint: x + y = 0
+        # Substitute x = -z (solution: z term)
+        c = ir.Constraint((ir.Aff.term(1, "x"), ir.Aff.term(1, "y")))
+        solution = (ir.Aff.term(-1, "z"),)  # x = -z means substitute with -z
+        c2 = c.substitute("x", solution)
+        # Result should be: -z + y = 0
+        assert c2.get_coefficient_of("z").simplify().item == -1
+        assert c2.get_coefficient_of("y").simplify().item == 1
+        assert c2.get_coefficient_of("x").simplify().item == 0
+
+class TestFourierMotzkin:
+    """Tests for Fourier-Motzkin variable elimination.
+    
+    Note: get_coefficient_of() and get_constant() return ATenOp computation graphs.
+    Use .simplify().item to extract concrete values for assertions.
+    """
+
+    def test_fourier_motzkin_single_var(self):
+        """Test eliminating a single variable."""
+        # Constraints: x = y, x + z = 5
+        # Eliminate x:
+        # From x = y: x -> y
+        # Substitute into x + z = 5: y + z = 5
+        c1 = ir.Constraint((ir.Aff.term(1, "x"), ir.Aff.term(-1, "y")))  # x - y = 0
+        c2 = ir.Constraint((ir.Aff.term(1, "x"), ir.Aff.term(1, "z"), ir.Aff.const(-5)))  # x + z - 5 = 0
+        
+        result = ir.Constraint.fourier_motzkin([c1, c2], ["x"])
+        # Should have one constraint: y + z - 5 = 0
+        assert len(result) == 1
+        assert result[0].get_coefficient_of("y").simplify().item == 1
+        assert result[0].get_coefficient_of("z").simplify().item == 1
+        assert result[0].get_constant().simplify().item == -5
+
+    def test_fourier_motzkin_multiple_vars(self):
+        """Test eliminating multiple variables sequentially."""
+        # Constraints: x = a, y = b, x + y + z = c
+        # Eliminate x, y:
+        # From x = a: substitute x -> a in x + y + z = c => a + y + z = c
+        # From y = b: substitute y -> b in a + y + z = c => a + b + z = c
+        c1 = ir.Constraint((ir.Aff.term(1, "x"), ir.Aff.term(-1, "a")))  # x - a = 0
+        c2 = ir.Constraint((ir.Aff.term(1, "y"), ir.Aff.term(-1, "b")))  # y - b = 0
+        c3 = ir.Constraint((ir.Aff.term(1, "x"), ir.Aff.term(1, "y"), ir.Aff.term(1, "z"), ir.Aff.term(-1, "c")))  # x + y + z - c = 0
+        
+        result = ir.Constraint.fourier_motzkin([c1, c2, c3], ["x", "y"])
+        # Should have one constraint: a + b + z - c = 0
+        assert len(result) == 1
+        assert result[0].get_coefficient_of("a").simplify().item == 1
+        assert result[0].get_coefficient_of("b").simplify().item == 1
+        assert result[0].get_coefficient_of("z").simplify().item == 1
+        assert result[0].get_coefficient_of("c").simplify().item == -1
+
+    def test_fourier_motzkin_no_unit_coefficient_skips(self):
+        """Test that variables without ±1 coefficient are skipped."""
+        # Constraint: 2*x + y = 0 (cannot eliminate x directly with coefficient 2)
+        c = ir.Constraint((ir.Aff.term(2, "x"), ir.Aff.term(1, "y")))
+        result = ir.Constraint.fourier_motzkin([c], ["x"])
+        # x has coefficient 2, not ±1, so not eliminated
+        assert len(result) == 1
+        assert result[0].get_coefficient_of("x").simplify().item == 2
+
+    def test_fourier_motzkin_eliminates_trivial(self):
+        """Test that trivial constraints (0=0) are removed."""
+        # Constraint: x - x = 0 which becomes 0 = 0 after cancellation
+        # Actually let's use: x = x (which is x - x = 0)
+        c = ir.Constraint((ir.Aff.term(1, "x"), ir.Aff.term(-1, "x")))
+        # This constraint has x with coefficient 1 + (-1) = 0, so no x variable actually
+        # It should be trivial after fourier_motzkin
+        result = ir.Constraint.fourier_motzkin([c], [])
+        # The constraint has no variables (x cancels), and constant 0
+        # So it's trivial and removed
+        assert len(result) == 0
+
+class TestDependencyAnalysis:
+    """Tests for dependency analysis using apply_range.
+    
+    Dependency analysis computes: D = W ∘ R^{-1}
+    Where:
+        W = { S[i] -> mem[addr] : write relation }
+        R = { S[i'] -> mem[addr'] : read relation }
+        R^{-1} = { mem[addr'] -> S[i'] : reversed }
+        D = { S[i] -> S[i'] : i writes what i' reads }
+    """
+
+    def test_basic_map_reverse(self):
+        """Test BasicMap.reverse() swaps domain and range."""
+        # Map: S[i] -> T[2*i + 1]
+        bmap = ir.BasicMap.define(
+            dom=("i",),
+            mapping={"addr": ir.Aff.lin(2, "i", 1)},
+            dom_name="S",
+            rng_name="T"
+        )
+        assert bmap.dom_name == "S"
+        assert bmap.rng_name == "T"
+        
+        rev = bmap.reverse()
+        assert rev.dom_name == "T"
+        assert rev.rng_name == "S"
+
+    def test_apply_range_identity(self):
+        """Test apply_range with identity-like mapping."""
+        # Map1: S[i] -> M[i]
+        # Map2: M[j] -> T[j]
+        # Composition: S[i] -> T[i] (where i=j)
+        map1 = ir.BasicMap.define(
+            dom=("i",),
+            mapping={"x": (ir.Aff.term(1, "i"),)},
+            dom_name="S",
+            rng_name="M"
+        )
+        map2 = ir.BasicMap.define(
+            dom=("j",),
+            mapping={"y": (ir.Aff.term(1, "j"),)},
+            dom_name="M",
+            rng_name="T"
+        )
+        composed = map1.apply_range(map2)
+        assert composed.dom_name == "S"
+        assert composed.rng_name == "T"
+
+    def test_apply_range_with_scaling(self):
+        """Test apply_range where range vars match with scaling."""
+        # Map1: S[i] -> M[2*i]
+        # Map2: M[x] -> T[x + 1]
+        # Composition should substitute x = 2*i
+        map1 = ir.BasicMap.define(
+            dom=("i",),
+            mapping={"x": (ir.Aff.term(2, "i"),)},
+            dom_name="S",
+            rng_name="M"
+        )
+        map2 = ir.BasicMap.define(
+            dom=("x",),
+            mapping={"y": (ir.Aff.term(1, "x"), ir.Aff.const(1))},
+            dom_name="M",
+            rng_name="T"
+        )
+        composed = map1.apply_range(map2)
+        # Result: S[i] -> T[2*i + 1]
+        assert composed.dom_name == "S"
+        assert composed.rng_name == "T"
+
+    def test_dependency_analysis_simple_1d(self):
+        """Test simple 1D dependency: addr = i."""
+        # Write: S[i] -> mem[i]
+        # Read: S[j] -> mem[j]
+        # Dependency: S[i] -> S[j] where i = j
+        write = ir.BasicMap.define(
+            dom=("i",),
+            mapping={"addr": (ir.Aff.term(1, "i"),)},
+            dom_name="S_w"
+        )
+        read = ir.BasicMap.define(
+            dom=("j",),
+            mapping={"addr": (ir.Aff.term(1, "j"),)},
+            dom_name="S_r"
+        )
+        # D = W ∘ R^{-1}
+        read_rev = read.reverse()
+        dep = write.apply_range(read_rev)
+        
+        # The dependency should link S_w to S_r
+        assert dep.dom_name == "S_w"
+        assert dep.rng_name == "S_r"
+        # Constraints should express: i = j (addr matches)
+
+    def test_dependency_analysis_strided_3d(self):
+        """Test strided 3D dependency: addr = 1500*gid0 + 30*gid1 + gid2.
+        
+        This is the example from aff.py:
+        addr_expr = 1500 * gid0 + 30 * gid1 + gid2
+        
+        For a [50, 30] tensor, the dependency should resolve to:
+        - gid0 = gid0' (batch dimension preserved)
+        - gid1 = gid1' (row dimension preserved)
+        - gid2 = gid2' (column dimension preserved)
+        """
+        # Write: S[gid0, gid1, gid2] -> mem[1500*gid0 + 30*gid1 + gid2]
+        write = ir.BasicMap.define(
+            dom=("gid0", "gid1", "gid2"),
+            mapping={"addr": (
+                ir.Aff.term(1500, "gid0"),
+                ir.Aff.term(30, "gid1"),
+                ir.Aff.term(1, "gid2"),
+            )},
+            dom_name="S"
+        )
+        
+        # Read: S[gid0', gid1', gid2'] -> mem[1500*gid0' + 30*gid1' + gid2']
+        read = ir.BasicMap.define(
+            dom=("gid0_", "gid1_", "gid2_"),
+            mapping={"addr": (
+                ir.Aff.term(1500, "gid0_"),
+                ir.Aff.term(30, "gid1_"),
+                ir.Aff.term(1, "gid2_"),
+            )},
+            dom_name="S"
+        )
+        
+        # D = W ∘ R^{-1}
+        read_rev = read.reverse()
+        dep = write.apply_range(read_rev)
+        
+        # Verify structure
+        assert dep.dom_name == "S"
+        assert dep.rng_name == "S"
+        # Domain should be (gid0, gid1, gid2)
+        assert set(dep.dom_vars) == {"gid0", "gid1", "gid2"}
+        # Range should be (gid0_, gid1_, gid2_)
+        assert set(dep.rng_vars) == {"gid0_", "gid1_", "gid2_"}
+
+    def test_dependency_analysis_with_offset(self):
+        """Test dependency with offset: addr = i + 10."""
+        # Write: S[i] -> mem[i + 10]
+        # Read: S[j] -> mem[j]
+        # For dependency to exist: i + 10 = j => j = i + 10
+        write = ir.BasicMap.define(
+            dom=("i",),
+            mapping={"addr": (ir.Aff.term(1, "i"), ir.Aff.const(10))},
+            dom_name="S_w"
+        )
+        read = ir.BasicMap.define(
+            dom=("j",),
+            mapping={"addr": (ir.Aff.term(1, "j"),)},
+            dom_name="S_r"
+        )
+        
+        read_rev = read.reverse()
+        dep = write.apply_range(read_rev)
+        
+        # Constraints should encode: i + 10 - j = 0
+        assert dep.dom_name == "S_w"
+        assert dep.rng_name == "S_r"
+
+
+class TestUnionMapDependencyAnalysis:
+    """Tests for UnionMap-based dependency analysis."""
+
+    def test_union_map_apply_range_basic(self):
+        """Test UnionMap.apply_range() works correctly."""
+        bmap1 = ir.BasicMap.define(
+            dom=("i",),
+            mapping={"x": (ir.Aff.term(1, "i"),)},
+            dom_name="S",
+            rng_name="M"
+        )
+        bmap2 = ir.BasicMap.define(
+            dom=("x",),
+            mapping={"y": (ir.Aff.term(1, "x"),)},
+            dom_name="M",
+            rng_name="T"
+        )
+        
+        umap1 = ir.UnionMap((bmap1,))
+        umap2 = ir.UnionMap((bmap2,))
+        
+        composed = umap1.apply_range(umap2)
+        assert isinstance(composed, ir.UnionMap)
+        assert len(composed.args) >= 1
+
+    def test_union_map_reverse(self):
+        """Test UnionMap.reverse() reverses all BasicMaps."""
+        bmap = ir.BasicMap.define(
+            dom=("i",),
+            mapping={"addr": (ir.Aff.term(1, "i"),)},
+            dom_name="S",
+            rng_name="M"
+        )
+        umap = ir.UnionMap((bmap,))
+        
+        rev = umap.reverse()
+        assert isinstance(rev, ir.UnionMap)
+        assert len(rev.args) == 1
+        # Check the reversed BasicMap
+        rev_bmap = rev.args[0]
+        assert rev_bmap.dom_name == "M"
+        assert rev_bmap.rng_name == "S"
+
+
 # =============================================================================
 # ATenOpType and Memory Integration Tests
 # =============================================================================

@@ -123,9 +123,9 @@ class ATenOp(metaclass=ATenOpMetaclass):
         return get_jupyter_graphviz(to_dot(self))
 
     @property
-    def item(self) -> Union[int, float, ATenOp]:
+    def item(self) -> Union[int, float, str, ATenOp]:
         # Returns scalar value if self is constant folded
-        if isinstance(self, Const) and isinstance(self.value, (int, float)):
+        if isinstance(self, Const) and isinstance(self.value, (int, float, str)):
             return self.value
         else: return self
     # Mixin for computing shapes (required by reshape, etc)
@@ -681,7 +681,12 @@ class Aff(ScheduleOps, ATenOp):
         return (Aff.term(coef, varname), Aff.const(const))
     
     def rename(self, mapping: Mapping[str, str]) -> Aff:
-        return Aff((self.stride, self.dim.rename(mapping), self.offset, self.incf))
+        # For symbolic Affs, the variable name is stored in offset (as a string Const)
+        new_offset = self.offset
+        offset_val = self.offset.item
+        if isinstance(offset_val, str) and offset_val in mapping:
+            new_offset = Const.new(mapping[offset_val], self.offset.T[0].dtype)
+        return Aff((self.stride, self.dim.rename(mapping), new_offset, self.incf))
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 4, "Aff is defined as: Aff(Stride, Dim, Offset, Incf)"
@@ -699,59 +704,159 @@ class Aff(ScheduleOps, ATenOp):
 @dataclass(frozen=True)
 class Constraint(ScheduleOps, ViewOps, ATenOp):
     """
-    Equality constraint:
-    Constraint(aff1, aff2, ...) == 0
-    i.e.: aff1 + aff2 + aff3 + ... == 0
-    where each aff is Aff(Stride, Dim, Offset, Incf)
-    Stride(Dim*Incf+Offset)
-    (Stride*Incf)*Dim+Offset*Stride
+    Equality constraint: sum of Affs == 0
+    
+    Constraint(aff1, aff2, ...) represents: aff1 + aff2 + ... = 0
+    
+    Aff Structure for Symbolic Variables (created by Aff.term/var/const):
+    ====================================================================
+    For Aff.term(coef, "varname"):
+        stride=coef, dim=dummy, offset="varname"(str), incf=1
+        Expression: coef * (1 * 0 + "varname") = coef * varname
+        
+    For Aff.const(value):
+        stride=1, dim=dummy, offset=value(int), incf=0
+        Expression: 1 * (0 * dim + value) = value
+        
+    So for symbolic Affs:
+        - Variable term: offset is str, incf != 0, coefficient = stride * incf
+        - Constant term: incf == 0, constant = stride * offset
     """
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
-        """Verify AccessMap structure."""
-        assert all([isinstance(x, Aff) for x in args]), "Constraint is created from a list of Aff"
+        assert all(isinstance(x, Aff) for x in args), "Constraint requires Aff arguments"
         return (ATenOpType(axes=(), dtype=dtype.bool, offset=_const(0, index)), )
-    def __eq__(self, other: ir.ATenOp) -> bool: return ir.ATenOp.eql(self.expr, other)
-    def rename(self, mapping: Mapping[str, str]) -> Costraint:
-        return Constraint(tuple(x.rename(mapping) for x in self.args))
     
-    def substitute(self, name: str, aff: ir.ATenOp) -> Constraint:
-        # TODO: This not implemented yet
-        # 
-        return Constraint(self.expr.substitute(var, aff))
+    def get_coefficient_of(self, varname: str) -> ATenOp:
+        """Get the total coefficient of a variable as an ATenOp.
+        
+        For symbolic Affs, the variable name is stored in offset (as a string Const).
+        The coefficient is stride * incf. Returns a computation graph that can be
+        simplified later.
+        """
+        terms: List[ATenOp] = []
+        for aff in self.args:
+            offset_val = aff.offset.item
+            # Check if this Aff represents the target variable
+            if isinstance(offset_val, str) and offset_val == varname:
+                # Coefficient = stride * incf (as computation graph)
+                terms.append(aff.stride * aff.incf)
+        if not terms:
+            return _const(0, index)
+        return functools.reduce(lambda a, b: Add((a, b)), terms)
+    
+    def get_constant(self) -> ATenOp:
+        """Get the constant term as an ATenOp.
+        
+        For symbolic Affs, constant terms have incf == 0.
+        The constant value is stride * offset. Returns a computation graph.
+        """
+        terms: List[ATenOp] = []
+        for aff in self.args:
+            incf_simplified = aff.incf.simplify()
+            # Constant term: incf == 0
+            if ATenOp.eql(incf_simplified, 0):
+                # Constant = stride * offset (as computation graph)
+                terms.append(aff.stride * aff.offset)
+        if not terms:
+            return _const(0, index)
+        return functools.reduce(lambda a, b: Add((a, b)), terms)
+    
+    def variables(self) -> FrozenSet[str]:
+        """Get all variable names (where offset is str and incf != 0)."""
+        result: Set[str] = set()
+        for aff in self.args:
+            offset_val = aff.offset.item
+            incf_simplified = aff.incf.simplify()
+            if isinstance(offset_val, str) and not ATenOp.eql(incf_simplified, 0):
+                result.add(offset_val)
+        return frozenset(result)
+    
+    def without_var(self, varname: str) -> tuple[Aff, ...]:
+        """Return Affs excluding the specified variable."""
+        return tuple(aff for aff in self.args 
+                     if not (isinstance(aff.offset.item, str) and aff.offset.item == varname))
+    
+    def substitute(self, varname: str, solution: tuple[Aff, ...]) -> "Constraint":
+        """Substitute variable with solution Affs, scaling by the variable's coefficient.
+        
+        Uses computation graphs for coefficient scaling.
+        """
+        coef = self.get_coefficient_of(varname).simplify()
+        if ATenOp.eql(coef, 0):
+            return self
+        remaining = list(self.without_var(varname))
+        for aff in solution:
+            # Scale stride by coefficient: new_stride = stride * coef (computation graph)
+            new_stride = aff.stride * coef
+            remaining.append(Aff((new_stride, aff.dim, aff.offset, aff.incf)))
+        return Constraint(tuple(remaining))
     
     def is_trivial(self) -> bool:
-        return ir.ATenOp.eql(self.expr, 0)
-
+        """Check if constraint is 0 = 0 (all coefficients sum to 0 and constant is 0)."""
+        for var in self.variables():
+            coef = self.get_coefficient_of(var).simplify()
+            if not ATenOp.eql(coef, 0):
+                return False
+        const = self.get_constant().simplify()
+        return ATenOp.eql(const, 0)
+    
     def is_contradiction(self) -> bool:
-        """Check if constraint is const = 0 where const != 0."""
-        # ??
-        if self.expr.coeff: return False
-        return not _coeff_is_zero(self.expr.const)
-
-    def variables(self) -> FrozenSet[str]: return self.expr.variables()
+        """Check if constraint is unsatisfiable (no variables but non-zero constant)."""
+        if len(self.variables()) != 0:
+            return False
+        const = self.get_constant().simplify()
+        return not ATenOp.eql(const, 0)
+    
+    def rename(self, mapping: Mapping[str, str]) -> "Constraint":
+        return Constraint(tuple(x.rename(mapping) for x in self.args))
+    
     def __str__(self) -> str:
+        if not self.args:
+            return "0 = 0"
         total = functools.reduce(lambda a, b: Add((a, b)), [x.index() for x in self.args])
         return f"{total.render()} = 0"
-    # [TODO]
-    # ./test/test_union_map.py
-    # Implement eliminate_vars
-    # Enhancement on Symbolic Array
-    # Symbolic Equality Graph
+    
     @staticmethod
-    def fourier_motzkin(constraints: List[Constraint], vars_to_elim: Sequence[str]) -> List[Constraint]:
+    def fourier_motzkin(constraints: List["Constraint"], vars_to_elim: Sequence[str]) -> List["Constraint"]:
         """
         Eliminate variables via Fourier-Motzkin style substitution.
         
-        TODO: Implement proper variable elimination. Currently returns constraints unchanged.
-        This requires implementing:
-        - get_coefficient_of(var) method on Constraint
-        - substitute(var, expr) method on Constraint  
-        - is_trivial() method that checks if constraint is always satisfied
+        For each variable to eliminate:
+        1. Find constraint where variable has coefficient ±1
+        2. Solve for variable: if coef=1: var=-rest, if coef=-1: var=rest
+        3. Substitute into remaining constraints
+        4. Remove pivot constraint
+        
+        Only eliminates variables with coefficient ±1 (exact integer solution).
+        Uses computation graphs for all arithmetic operations.
         """
-        # TODO: Full implementation pending
-        # For now, return constraints unchanged (no elimination)
-        return list(constraints)
+        constraints = list(constraints)
+        for var in vars_to_elim:
+            pivot_idx: Optional[int] = None
+            solution: Optional[tuple[Aff, ...]] = None
+            for i, c in enumerate(constraints):
+                coef = c.get_coefficient_of(var).simplify()
+                if ATenOp.eql(coef, 1) or ATenOp.eql(coef, -1):
+                    pivot_idx = i
+                    rest = c.without_var(var)
+                    if ATenOp.eql(coef, 1):
+                        # var + rest = 0 => var = -rest (negate all rest terms via computation graph)
+                        negated = []
+                        for aff in rest:
+                            # new_stride = -1 * stride (computation graph)
+                            neg_stride = _const(-1, index) * aff.stride
+                            negated.append(Aff((neg_stride, aff.dim, aff.offset, aff.incf)))
+                        solution = tuple(negated)
+                    else:  # coef == -1
+                        # -var + rest = 0 => var = rest
+                        solution = rest
+                    break
+            if pivot_idx is None or solution is None:
+                continue
+            constraints.pop(pivot_idx)
+            constraints = [c.substitute(var, solution) for c in constraints]
+        return [c for c in constraints if not c.is_trivial()]
 
 @dataclass(frozen=True)
 class BasicMap(ScheduleOps, ViewOps, ATenOp):
