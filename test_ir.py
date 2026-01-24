@@ -6,10 +6,10 @@ for polyhedral loop fusion.
 """
 from __future__ import annotations
 
-import caten.ir as ir
-from typing import List, Tuple, Dict, Optional, Set
 from dataclasses import dataclass
+from typing import List, Tuple
 
+import caten.ir as ir
 
 # ============================================================
 # Helper classes for analysis

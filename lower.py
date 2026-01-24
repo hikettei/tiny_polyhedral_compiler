@@ -7,7 +7,7 @@ Tests for the unified fusion framework:
 3. Basic AccessMap functionality
 """
 import caten as C
-import caten.ir as ir
+
 
 def stop():
     import sys

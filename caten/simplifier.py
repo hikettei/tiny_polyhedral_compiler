@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import is_dataclass, replace
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union, cast
 
 import caten.ir as ir
 
@@ -108,18 +108,19 @@ constant_folder = Simplifier(
 )
 
 # Algebraic identity rules
+# Algebraic identity rules
 algebraic_identities = Simplifier([
     # x + 0 = x
-    (Pat(ir.Add, src=(Pat.var("x"), Pat(ir.Const, name="zero", meta={"v": lambda n: n.value}))),
+    (Pat(ir.Add, src=(Pat.var("x"), Pat(ir.Const, name="zero", meta={"v": lambda n: cast(ir.Const, n).value}))),
      lambda x, v: x if v == 0 else None),
     # 0 + x = x
-    (Pat(ir.Add, src=(Pat(ir.Const, name="zero", meta={"v": lambda n: n.value}), Pat.var("x"))),
+    (Pat(ir.Add, src=(Pat(ir.Const, name="zero", meta={"v": lambda n: cast(ir.Const, n).value}), Pat.var("x"))),
      lambda x, v: x if v == 0 else None),
     # x * 1 = x
-    (Pat(ir.Mul, src=(Pat.var("x"), Pat(ir.Const, name="one", meta={"v": lambda n: n.value}))),
+    (Pat(ir.Mul, src=(Pat.var("x"), Pat(ir.Const, name="one", meta={"v": lambda n: cast(ir.Const, n).value}))),
      lambda x, v: x if v == 1 else None),
     # 1 * x = x
-    (Pat(ir.Mul, src=(Pat(ir.Const, name="one", meta={"v": lambda n: n.value}), Pat.var("x"))),
+    (Pat(ir.Mul, src=(Pat(ir.Const, name="one", meta={"v": lambda n: cast(ir.Const, n).value}), Pat.var("x"))),
      lambda x, v: x if v == 1 else None),
     # x * 0 = 0
     (Pat(ir.Mul, src=(Pat.var("x"), Pat(ir.Const, name="zero"))),

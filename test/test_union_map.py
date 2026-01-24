@@ -1183,8 +1183,8 @@ class TestEdgeCases:
 
     def test_range_non_scalar_fails(self):
         """Test Range with non-scalar size fails."""
-        # Create a 1D tensor (not scalar)
-        t = ir.ATenOpType.from_shape((10,), index)
+        # Create a 1D tensor type (not scalar) - kept for documentation
+        _t = ir.ATenOpType.from_shape((10,), index)  # noqa: F841
         # This should fail because Range expects scalar
         # We need to create a tensor op with this type
         # For now, just test with a valid scalar

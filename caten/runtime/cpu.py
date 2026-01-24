@@ -24,6 +24,14 @@ class CPUTensor(C.TensorImpl):
         2. Render each Exec as a separate kernel
         3. MemoryOf just returns the buffer name (Exec already rendered)
         """
+        var_map: dict[int, str] = {}
+        decls: list[str] = []
+        counter = [0]
+        def fresh(prefix: str) -> str:
+            counter[0] += 1
+            return f"{prefix}_{counter[0]}"
+        def get_size(size_node: Any) -> str:
+            return emit_expr(size_node)
         def emit_expr(node: Any) -> str:
             """Emit an expression (no side effects, returns string)."""
             nid = id(node)
@@ -79,12 +87,8 @@ class CPUTensor(C.TensorImpl):
                     if id(exec_node) in var_map:
                         var_map[nid] = var_map[id(exec_node)]
                         return var_map[nid]
-                    # Fallback: render the exec (shouldn't happen with proper ordering)
-                    render_exec(exec_node)
-                    if id(exec_node) in var_map:
-                        var_map[nid] = var_map[id(exec_node)]
-                        return var_map[nid]
-                    return "/* MemoryOf error */"
+                    # Fallback: exec not yet rendered (shouldn't happen with proper ordering)
+                    return "/* MemoryOf error: exec not rendered */"
 
                 case ir.Load():
                     buf = emit_expr(node.args[0])
