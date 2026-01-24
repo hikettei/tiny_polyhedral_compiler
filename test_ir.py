@@ -134,7 +134,6 @@ def extract_tile_relations(
                 offset_var=best_match[2]
             ))
     return tile_relations, shared_dims
-    return tile_relations, shared_dims
 
 
 def analyze_dependencies(

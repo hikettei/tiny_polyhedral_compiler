@@ -987,11 +987,25 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
 
     def is_empty(self) -> bool:
         """Check if this BasicMap has no solutions (is unsatisfiable).
-        
-        TODO: Implement proper satisfiability checking. Currently always returns False
-        (assumes all maps are non-empty). A proper implementation would check if
-        the constraints are contradictory.
+
+        Uses Fourier-Motzkin elimination to eliminate all variables.
+        If any resulting constraint is a contradiction (e.g., 5 = 0),
+        the system is unsatisfiable and the map is empty.
+
+        Note: This is sound but incomplete for integer constraints - it may
+        return False for some empty maps that require integer reasoning.
         """
+        if not self.constraints:
+            return False  # No constraints = always satisfiable
+
+        # Eliminate all variables using Fourier-Motzkin
+        all_vars = list(self.all_variables())
+        reduced = Constraint.fourier_motzkin(list(self.constraints), all_vars)
+
+        # Check if any reduced constraint is a contradiction
+        for c in reduced:
+            if c.is_contradiction():
+                return True
         return False
 
     # [TODO] lru_cache
