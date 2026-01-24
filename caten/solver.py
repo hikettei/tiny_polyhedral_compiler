@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-import caten.ir as ir
+
 # [TODO] Whether They should be defined as
 
 
