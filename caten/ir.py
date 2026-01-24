@@ -729,10 +729,9 @@ class Constraint(ScheduleOps, ViewOps, ATenOp):
     
     def get_coefficient_of(self, varname: str) -> ATenOp:
         """Get the total coefficient of a variable as an ATenOp.
-        
+
         For symbolic Affs, the variable name is stored in offset (as a string Const).
-        The coefficient is stride * incf. Returns a computation graph that can be
-        simplified later.
+        The coefficient is stride * incf.
         """
         terms: List[ATenOp] = []
         for aff in self.args:
@@ -744,18 +743,17 @@ class Constraint(ScheduleOps, ViewOps, ATenOp):
         if not terms:
             return _const(0, index)
         return functools.reduce(lambda a, b: Add((a, b)), terms)
-    
+
     def get_constant(self) -> ATenOp:
         """Get the constant term as an ATenOp.
-        
+
         For symbolic Affs, constant terms have incf == 0.
-        The constant value is stride * offset. Returns a computation graph.
+        The constant value is stride * offset.
         """
         terms: List[ATenOp] = []
         for aff in self.args:
-            incf_simplified = aff.incf.simplify()
             # Constant term: incf == 0
-            if ATenOp.eql(incf_simplified, 0):
+            if ATenOp.eql(aff.incf, 0):
                 # Constant = stride * offset (as computation graph)
                 terms.append(aff.stride * aff.offset)
         if not terms:

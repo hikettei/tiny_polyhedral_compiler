@@ -107,5 +107,26 @@ constant_folder = Simplifier(
     ) for op in [ir.Add, ir.Mul, ir.IDiv, ir.Max, ir.Mod, ir.Neq, ir.Lt]]
 )
 
+# Algebraic identity rules
+algebraic_identities = Simplifier([
+    # x + 0 = x
+    (Pat(ir.Add, src=(Pat.var("x"), Pat(ir.Const, name="zero", meta={"v": lambda n: n.value}))),
+     lambda x, v: x if v == 0 else None),
+    # 0 + x = x
+    (Pat(ir.Add, src=(Pat(ir.Const, name="zero", meta={"v": lambda n: n.value}), Pat.var("x"))),
+     lambda x, v: x if v == 0 else None),
+    # x * 1 = x
+    (Pat(ir.Mul, src=(Pat.var("x"), Pat(ir.Const, name="one", meta={"v": lambda n: n.value}))),
+     lambda x, v: x if v == 1 else None),
+    # 1 * x = x
+    (Pat(ir.Mul, src=(Pat(ir.Const, name="one", meta={"v": lambda n: n.value}), Pat.var("x"))),
+     lambda x, v: x if v == 1 else None),
+    # x * 0 = 0
+    (Pat(ir.Mul, src=(Pat.var("x"), Pat(ir.Const, name="zero"))),
+     lambda x, zero: zero if zero.value == 0 else None),
+    # 0 * x = 0
+    (Pat(ir.Mul, src=(Pat(ir.Const, name="zero"), Pat.var("x"))),
+     lambda x, zero: zero if zero.value == 0 else None),
+])
 
-simplifier = constant_folder
+simplifier = constant_folder + algebraic_identities
