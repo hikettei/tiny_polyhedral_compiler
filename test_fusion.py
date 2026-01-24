@@ -5,13 +5,9 @@ Test script demonstrating automatic loop fusion analysis.
 This script shows how the affine relation algebra can detect fusion opportunities
 for operations like Conv+Pool, element-wise chains, and reshape sequences.
 """
+from caten.aff import AffExpr, BasicMap, UnionMap, attempt_fusion
+
 import caten as C
-from caten.aff import (
-    AffExpr,
-    BasicMap,
-    UnionMap,
-    attempt_fusion,
-)
 
 
 def test_identity_fusion():

@@ -1,10 +1,27 @@
 from __future__ import annotations
 
-import itertools, functools, math, operator, weakref, dataclasses
-from dataclasses import dataclass, replace, field
-from typing import Any, Dict, Union, FrozenSet
+import dataclasses
+import functools
+import itertools
+import math
+import operator
+import weakref
+from dataclasses import dataclass, field, replace
+from typing import (
+    Any,
+    Dict,
+    FrozenSet,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Union,
+    cast,
+)
 
 import caten.dtype as dtype
+
 from .dtype import DType, index
 
 
@@ -30,7 +47,7 @@ class ATenOpMetaclass(type):
             if t == "Range" and cls_name != "Band":
                 raise TypeError(f"{cls_name}: Range can only be referenced by Band")
     
-    def __call__(cls, args: tuple[ATenOp, ...] | list[ATenOp], T: "tuple[ATenOpType|None, ...]" = (None), **kwargs: Any) -> ATenOp:
+    def __call__(cls, args: tuple[ATenOp, ...] | list[ATenOp], T: "tuple[ATenOpType|None, ...] | None" = None, **kwargs: Any) -> ATenOp:
         args = tuple(args)
         ATenOpMetaclass._check_struct(cls.__name__, args)
         T = cls.verify(args, T, **kwargs) # type: ignore
@@ -47,7 +64,7 @@ class ATenAxis():
     incf: ATenOp
     def range(self) -> "Range": return Range((self.size,))
     def aff(self, band: "Band", dim: int) -> "Aff":
-        assert 0 <= dim < len(band.args), f"Band"
+        assert 0 <= dim < len(band.args), "Band"
         return Aff((self.stride, Dim((band,), dim=dim), self.offset, self.incf))
     def index(self, band: "Band", dim: int) -> ATenOp:
         assert 0 <= dim < len(band.args), f"Band dim {dim} out of range [0, {len(band.args)})"
@@ -71,7 +88,7 @@ class ATenOpType():
     @property
     def ndim(self) -> int: return len(self.axes)
     @property
-    def shape(self) -> tuple[ATenOp, ...]: return [x.size for x in self.axes]
+    def shape(self) -> tuple[ATenOp, ...]: return tuple(x.size for x in self.axes)
     @staticmethod
     def from_shape(shape: tuple[Any, ...], dtype: DType) -> ATenOpType:
         if len(shape) == 0: return ATenOpType(axes=(), dtype=dtype)
@@ -81,7 +98,7 @@ class ATenOpType():
         # Size-1 dimensions get stride=0 for broadcast semantics
         axes = []
         for size, stride in zip(shape, strides, strict=True):
-            stride = 0 if ATenOp.eql(size, 1) else stride
+            stride = _const(0) if ATenOp.eql(size, 1) else stride
             axes.append(ATenAxis(size=_const(size), stride=_const(stride), offset=_const(0), incf=_const(1)))
         return ATenOpType(axes=tuple(axes), dtype=dtype)
 
@@ -117,9 +134,9 @@ class ATenOp(metaclass=ATenOpMetaclass):
         return get_jupyter_graphviz(to_dot(self))
 
     @property
-    def item(self) -> Union[int, float, ATenOp]:
+    def item(self) -> Union[int, float, str, ATenOp]:
         # Returns scalar value if self is constant folded
-        if isinstance(self, Const) and isinstance(self.value, (int, float)):
+        if isinstance(self, Const) and isinstance(self.value, (int, float, str)):
             return self.value
         else: return self
     # Mixin for computing shapes (required by reshape, etc)
@@ -172,56 +189,58 @@ class TensorOps():
         
         Note: In Unary/Binary/TernaryOps, A, B, C produce the equivalent band space, because shapes are equal.
         """
-        if all([x.T[0].ndim == 0 for x in self.args]) is True:
-            return (self,) # the graph is lowered, returning myself
+        this = cast(ATenOp, self)
+        if all([x.T[0] is not None and x.T[0].ndim == 0 for x in this.args]) is True:
+            return (this,)  # the graph is lowered, returning myself
         else:
             # we can use: all x.ndim, shape, are equal here.
-            band = self.args[0].T[0].band()
-            args = []
-            for arg in self.args:
+            assert this.args[0].T[0] is not None
+            band = this.args[0].T[0].band()
+            args_list: list[ATenOp] = []
+            for arg in this.args:
                 lowered = arg.lower()
                 assert len(lowered) == 1, "Tensor graph should not produce multiple outputs!"
-                args.append(Load.from_tensor(lowered[0], band))
+                args_list.append(Load.from_tensor(lowered[0], band))
             # Note: out is keep viewed? or contiguous?
-            r0 = replace(self, args=tuple(args)) # note: __call__ will update the output
+            r0 = replace(this, args=tuple(args_list))  # note: __call__ will update the output
             assert r0.T[0] is not None and r0.T[0].ndim == 0
-            out = Memory.defglobal([arg.size for arg in self.T[0].axes], self.T[0].dtype, tmp=True)
+            assert this.T[0] is not None
+            out = Memory.defglobal(tuple(arg.size for arg in this.T[0].axes), this.T[0].dtype, tmp=True)
             # Run r0 over band.all_dimensions(), with access relations defined by Load.from_tensor
             # returning out
             instance = Polyhedron.schedule(band.all_dimensions(), (out,), Store.new(Load.from_tensor(out, band), r0))
-            return (MemoryOf((instance,), nth=0, T=(out.T[0],)),) # the output become contiguous array!
+            return (MemoryOf((instance,), nth=0, T=(out.T[0],)),)  # the output become contiguous array!
 # UnaryOps verifier: check dtypes/shapes of arguments
 class UnaryOps(TensorOps):
     # ops whose first argument is returned dtype
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...] | None, **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 1, f"UnaryOp {cls.__name__} takes one argument, getting {args}"
         assert args[0].T[0] is not None
-        return args[0].T
+        return cast(tuple[ATenOpType, ...], args[0].T)
 class BinaryOps(TensorOps):
     # ops whose first argument is returned dtype
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...] | None, **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 2, f"BinaryOp {cls.__name__} takes two argument, getting {args}"
-        assert args[0].T is not None
-        assert ATenOp.equals(args[0].T[0].shape, args[1].T[0].shape), f"BinaryOps: Detected shape mismatch."
-        
-        return args[0].T
+        assert args[0].T[0] is not None and args[1].T[0] is not None
+        assert ATenOp.equals(args[0].T[0].shape, args[1].T[0].shape), "BinaryOps: Detected shape mismatch."
+        return cast(tuple[ATenOpType, ...], args[0].T)
 class TernaryOps(TensorOps):
     # ops whose first argument is returned dtype
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
-        assert len(args) == 3,f"TernaryOp {cls.__name__} takes three argument, getting {args}"
-        assert args[0].T is not None
-        assert ATenOp.equals(args[0].T[0].shape, args[1].T[0].shape), f"TernaryOps: Detected shape mismatch."
-        assert ATenOp.equals(args[1].T[0].shape, args[2].T[0].shape), f"TernaryOps: Detected shape mismatch."
-        return args[0].T
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...] | None, **kwargs: Any) -> tuple[ATenOpType, ...]:
+        assert len(args) == 3, f"TernaryOp {cls.__name__} takes three argument, getting {args}"
+        assert args[0].T[0] is not None and args[1].T[0] is not None and args[2].T[0] is not None
+        assert ATenOp.equals(args[0].T[0].shape, args[1].T[0].shape), "TernaryOps: Detected shape mismatch."
+        assert ATenOp.equals(args[1].T[0].shape, args[2].T[0].shape), "TernaryOps: Detected shape mismatch."
+        return cast(tuple[ATenOpType, ...], args[0].T)
 class ViewOps():
     # ops whose return dtypes are explicitly provided via T option
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
-        assert T[0] is not None, f"Cannot create {cls.__name__} without providing T"
-        return T
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...] | None, **kwargs: Any) -> tuple[ATenOpType, ...]:
+        assert T is not None and T[0] is not None, f"Cannot create {cls.__name__} without providing T"
+        return cast(tuple[ATenOpType, ...], T)
 ### UnaryOps
 @dataclass(frozen=True)
 class Neg(UnaryOps, ATenOp):
@@ -329,18 +348,18 @@ class Lt(BinaryOps, ATenOp):
 class Where(TernaryOps, ATenOp):
     python_op = lambda a, b, c: b if a else c
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...] | None, **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 3, f"TernaryOp {cls.__name__} takes three argument, getting {args}"
-        assert args[1].T[0] is not None
-        assert ATenOp.equals(args[0].T[0].shape, args[1].T[0].shape), f"TernaryOps: Detected shape mismatch."
-        assert ATenOp.equals(args[1].T[0].shape, args[2].T[0].shape), f"TernaryOps: Detected shape mismatch."
-        return args[1].T # extend the result's shape
+        assert args[0].T[0] is not None and args[1].T[0] is not None and args[2].T[0] is not None
+        assert ATenOp.equals(args[0].T[0].shape, args[1].T[0].shape), "TernaryOps: Detected shape mismatch."
+        assert ATenOp.equals(args[1].T[0].shape, args[2].T[0].shape), "TernaryOps: Detected shape mismatch."
+        return cast(tuple[ATenOpType, ...], args[1].T)  # extend the result's shape
 
 @dataclass(frozen=True)
 class Const(ViewOps, ATenOp):
     value: Union[int, float, str, bool] = 0.0
     @staticmethod
-    def new(value: Union[int, float, str, bool, ATenOp], dtype: DType) -> Const:
+    def new(value: Union[int, float, str, bool, ATenOp], dtype: DType) -> ATenOp:
         assert isinstance(value, (int, float, str, bool, ATenOp)), f"{value} should be int/float/str/bool"
         if isinstance(value, ATenOp): return value
         else: return Const(args=(), value=value, T=(ATenOpType(axes=(), dtype=dtype),))
@@ -438,11 +457,12 @@ class View(ViewOps, ATenOp):
     def lower(self) -> tuple[ATenOp, ...]:
         """Lower View to Sync that copies to contiguous buffer."""
         # Y = View(X, T=(T_New,))
+        assert self.T[0] is not None
         band = self.T[0].band()
         lowered = self.args[0].lower()
         assert len(lowered) == 1, "Tensor graph should not produce multiple outputs!"
         src = Load.from_tensor(lowered[0], band, T=self.T[0])
-        dst = Memory.defglobal([arg.size for arg in self.T[0].axes], self.T[0].dtype, tmp=True)
+        dst = Memory.defglobal(tuple(arg.size for arg in self.T[0].axes), self.T[0].dtype, tmp=True)
         mv = Store.new(Load.from_tensor(dst, band), src)
         instance = Polyhedron.schedule(band.all_dimensions(), (dst,), mv)
         return (MemoryOf((instance,), nth=0),)
@@ -478,13 +498,15 @@ class Reduce(MetaOps, ATenOp):
 
     def lower(self) -> tuple[ATenOp, ...]:
         assert len(self.args) == 2
+        assert self.args[0].T[0] is not None
         band = self.args[0].T[0].band()
 
         a, b = tuple([x.lower()[0] for x in self.args])
-        a, b = [Load.from_tensor(a, band), Load.from_tensor(b, band)]
+        a_load, b_load = Load.from_tensor(a, band), Load.from_tensor(b, band)
         # note: set bop=None to just filling by values.
-        reduced = self.bop((a, b)) if self.bop is not None else b
-        instance = Polyhedron.schedule(band.all_dimensions(), (a, ), Store.new(a, reduced))
+        # bop is type[BinaryOps] but actually calls ATenOp.__init__
+        reduced: ATenOp = cast(ATenOp, self.bop((a_load, b_load))) if self.bop is not None else b_load  # type: ignore[call-arg]
+        instance = Polyhedron.schedule(band.all_dimensions(), (a_load,), Store.new(a_load, reduced))
         # Use self.T (reduce output type) instead of instance.T (buffer type)
         return (MemoryOf((instance,), nth=0, T=self.T),)
 
@@ -516,7 +538,7 @@ class Range(ScheduleOps, ATenOp):
     def size(self) -> ATenOp: return self.args[0]
     def named(self, name: str) -> Range: return Range(self.args, name=name)
     def rename(self, mapping: Mapping[str, str]) -> Range:
-        if self.name in mapping: return self.named(mapping.get(self.name))
+        if self.name is not None and self.name in mapping: return self.named(mapping[self.name])
         else: return self
 
 @dataclass(frozen=True)
@@ -541,13 +563,13 @@ class Band(ScheduleOps, ATenOp):
     @property
     def ndim(self) -> int: return len(self.args)
     @property
-    def ranges(self) -> tuple[Range, ...]: return tuple(r for r in self.args)
-    def all_dimensions(self) -> tuple[ATenOp, ...]:
-        return tuple([Dim((self,), dim=i) for i in range(self.ndim)])
+    def ranges(self) -> tuple[Range, ...]: return cast(tuple[Range, ...], self.args)
+    def all_dimensions(self) -> tuple[Dim, ...]:
+        return tuple(Dim((self,), dim=i) for i in range(self.ndim))
     @property
     def shape(self) -> tuple[ATenOp, ...]: return tuple(r.size for r in self.ranges)
     def rename(self, mapping: Mapping[str, str]) -> Band:
-        return Band(tuple(x.rename(mapping) for x in self.args))
+        return Band(tuple(cast(Range, x).rename(mapping) for x in self.args))
     # TODO: Implement reshape
     # - Semantics: They returns "a new band" for the size.
     # def tile(self):
@@ -566,22 +588,22 @@ class Dim(ScheduleOps, ATenOp):
     """
     dim: int = 0
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...] | None, **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 1, "Dim requires exactly one Band argument"
         assert isinstance(args[0], Band), f"Dim arg must be Band, got {type(args[0]).__name__}"
-        assert "dim" in kwargs, f"dim is required."
-        dim = kwargs.get("dim")
-        assert 0 <= dim < args[0].ndim, f"Dim {dim} out of range for Band with {args[0].ndim} dims"
+        assert "dim" in kwargs, "dim is required."
+        dim = kwargs["dim"]
+        assert isinstance(dim, int) and 0 <= dim < args[0].ndim, f"Dim {dim} out of range for Band with {args[0].ndim} dims"
         return (ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index)), )
 
     @property
-    def domain(self) -> Band: return self.args[0]
+    def domain(self) -> Band: return cast(Band, self.args[0])
     @property
-    def range(self) -> Range: return self.domain.args[self.dim]
+    def range(self) -> Range: return cast(Range, self.domain.args[self.dim])
     @property
-    def ndim(self) -> ATenOp: return len(self.domain.args)
+    def ndim(self) -> int: return len(self.domain.args)
     def rename(self, mapping: Mapping[str, str]) -> Dim:
-        return Dim((self.args[0].rename(mapping),), dim=self.dim)
+        return Dim((self.domain.rename(mapping),), dim=self.dim)
 
 ### Polyhedral Compiler Primitives
 @dataclass(frozen=True)
@@ -617,15 +639,78 @@ class Aff(ScheduleOps, ATenOp):
         return self.stride*self.incf, self.stride*self.offset
     def index(self) -> ATenOp:
         a, b = self.ax_b()
+        # For symbolic Affs (_cst dimension), skip a*dim since dim is always 0
+        if isinstance(self.dim, Dim):
+            band = cast(Band, self.dim.args[0])
+            rng = cast(Range, band.args[0])
+            if rng.name == "_cst":
+                return b
         return a * self.dim + b
-    # TODO is_cst
     @staticmethod
-    def var(name: str, flip:bool=False) -> Aff:
-        cst = Dim((Band((Range((_const(1, index),), name="_cst"),)),), dim=0)
+    def _cst_dim() -> Dim:
+        """Create a dummy constant dimension for symbolic Affs."""
+        return Dim((Band((Range((_const(1, index),), name="_cst"),)),), dim=0)
+    
+    @staticmethod
+    def var(name: str, flip: bool = False) -> Aff:
+        """Create a variable Aff: name (or -name if flip=True).
+        
+        Example:
+            Aff.var("i")       # represents variable i
+            Aff.var("i", True) # represents -i
+        """
+        cst = Aff._cst_dim()
         return Aff((_const(1, index), cst, Const.new(name, index), _const(-1 if flip else 1, index),))
     
+    @staticmethod
+    def term(coef: int, varname: str) -> Aff:
+        """Create an affine term: coef * varname.
+        
+        Example:
+            Aff.term(2, "i")   # represents 2*i
+            Aff.term(-3, "j")  # represents -3*j
+        """
+        cst = Aff._cst_dim()
+        return Aff((_const(coef, index), cst, Const.new(varname, index), _const(1, index),))
+    
+    @staticmethod
+    def const(value: int) -> Aff:
+        """Create a constant Aff: value.
+        
+        Example:
+            Aff.const(5)   # represents constant 5
+            Aff.const(-3)  # represents constant -3
+        """
+        cst = Aff._cst_dim()
+        # stride=1, offset=value, incf=0 => 1 * (0 * dim + value) = value
+        return Aff((_const(1, index), cst, _const(value, index), _const(0, index),))
+    
+    @staticmethod
+    def lin(coef: int, varname: str, const: int = 0) -> tuple[Aff, ...]:
+        """Create linear expression: coef * varname + const.
+        
+        Returns a tuple of Affs suitable for use in constraints/BasicMap.
+        
+        Example:
+            Aff.lin(2, "i", 3)   # (2*i, 3) representing 2*i + 3
+            Aff.lin(1, "j")      # (j,) representing just j
+            Aff.lin(0, "i", 5)   # (5,) just a constant
+        """
+        if coef == 0:
+            return (Aff.const(const),) if const != 0 else ()
+        if const == 0:
+            return (Aff.term(coef, varname),)
+        return (Aff.term(coef, varname), Aff.const(const))
+    
     def rename(self, mapping: Mapping[str, str]) -> Aff:
-        return Aff((self.stride, self.dim.rename(mapping), self.offset, self.incf))
+        # For symbolic Affs, the variable name is stored in offset (as a string Const)
+        new_offset = self.offset
+        offset_val = self.offset.item
+        if isinstance(offset_val, str) and offset_val in mapping:
+            assert self.offset.T[0] is not None
+            new_offset = Const.new(mapping[offset_val], self.offset.T[0].dtype)
+        dim_node = cast(Dim, self.dim)
+        return Aff((self.stride, dim_node.rename(mapping), new_offset, self.incf))
     @classmethod
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 4, "Aff is defined as: Aff(Stride, Dim, Offset, Incf)"
@@ -643,75 +728,161 @@ class Aff(ScheduleOps, ATenOp):
 @dataclass(frozen=True)
 class Constraint(ScheduleOps, ViewOps, ATenOp):
     """
-    Equality constraint:
-    Constraint(aff1, aff2, ...) == 0
-    i.e.: aff1 + aff2 + aff3 + ... == 0
-    where each aff is Aff(Stride, Dim, Offset, Incf)
-    Stride(Dim*Incf+Offset)
-    (Stride*Incf)*Dim+Offset*Stride
+    Equality constraint: sum of Affs == 0
+    
+    Constraint(aff1, aff2, ...) represents: aff1 + aff2 + ... = 0
+    
+    Aff Structure for Symbolic Variables (created by Aff.term/var/const):
+    ====================================================================
+    For Aff.term(coef, "varname"):
+        stride=coef, dim=dummy, offset="varname"(str), incf=1
+        Expression: coef * (1 * 0 + "varname") = coef * varname
+        
+    For Aff.const(value):
+        stride=1, dim=dummy, offset=value(int), incf=0
+        Expression: 1 * (0 * dim + value) = value
+        
+    So for symbolic Affs:
+        - Variable term: offset is str, incf != 0, coefficient = stride * incf
+        - Constant term: incf == 0, constant = stride * offset
     """
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
-        """Verify AccessMap structure."""
-        assert all([isinstance(x, Aff) for x in args]), "Constraint is created from a list of Aff"
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...] | None, **kwargs: Any) -> tuple[ATenOpType, ...]:
+        assert all(isinstance(x, Aff) for x in args), "Constraint requires Aff arguments"
         return (ATenOpType(axes=(), dtype=dtype.bool, offset=_const(0, index)), )
-    def __eq__(self, other: ir.ATenOp) -> bool: return ir.ATenOp.eql(self.expr, other)
-    def rename(self, mapping: Mapping[str, str]) -> Costraint:
-        return Constraint(tuple(x.rename(mapping) for x in self.args))
+
+    @property
+    def affs(self) -> tuple[Aff, ...]:
+        """Get args as Affs (verified in verify method)."""
+        return cast(tuple[Aff, ...], self.args)
+
+    def get_coefficient_of(self, varname: str) -> ATenOp:
+        """Get the total coefficient of a variable as an ATenOp.
+
+        For symbolic Affs, the variable name is stored in offset (as a string Const).
+        The coefficient is stride * incf.
+        """
+        terms: List[ATenOp] = []
+        for aff in self.affs:
+            offset_val = aff.offset.item
+            # Check if this Aff represents the target variable
+            if isinstance(offset_val, str) and offset_val == varname:
+                # Coefficient = stride * incf (as computation graph)
+                terms.append(aff.stride * aff.incf)
+        if not terms:
+            return _const(0, index)
+        return functools.reduce(lambda a, b: Add((a, b)), terms)
+
+    def get_constant(self) -> ATenOp:
+        """Get the constant term as an ATenOp.
+
+        For symbolic Affs, constant terms have incf == 0.
+        The constant value is stride * offset.
+        """
+        terms: List[ATenOp] = []
+        for aff in self.affs:
+            # Constant term: incf == 0
+            if ATenOp.eql(aff.incf, 0):
+                # Constant = stride * offset (as computation graph)
+                terms.append(aff.stride * aff.offset)
+        if not terms:
+            return _const(0, index)
+        return functools.reduce(lambda a, b: Add((a, b)), terms)
     
-    def substitute(self, name: str, aff: ir.ATenOp) -> Constraint:
-        # TODO: This not implemented yet
-        # 
-        return Constraint(self.expr.substitute(var, aff))
+    def variables(self) -> FrozenSet[str]:
+        """Get all variable names (where offset is str and incf != 0)."""
+        result: Set[str] = set()
+        for aff in self.affs:
+            offset_val = aff.offset.item
+            incf_simplified = aff.incf.simplify()
+            if isinstance(offset_val, str) and not ATenOp.eql(incf_simplified, 0):
+                result.add(offset_val)
+        return frozenset(result)
+    
+    def without_var(self, varname: str) -> tuple[Aff, ...]:
+        """Return Affs excluding the specified variable."""
+        return tuple(aff for aff in self.affs
+                     if not (isinstance(aff.offset.item, str) and aff.offset.item == varname))
+    
+    def substitute(self, varname: str, solution: tuple[Aff, ...]) -> "Constraint":
+        """Substitute variable with solution Affs, scaling by the variable's coefficient.
+        
+        Uses computation graphs for coefficient scaling.
+        """
+        coef = self.get_coefficient_of(varname).simplify()
+        if ATenOp.eql(coef, 0):
+            return self
+        remaining = list(self.without_var(varname))
+        for aff in solution:
+            # Scale stride by coefficient: new_stride = stride * coef (computation graph)
+            new_stride = aff.stride * coef
+            remaining.append(Aff((new_stride, aff.dim, aff.offset, aff.incf)))
+        return Constraint(tuple(remaining))
     
     def is_trivial(self) -> bool:
-        return ir.ATenOp.eql(self.expr, 0)
-
+        """Check if constraint is 0 = 0 (all coefficients sum to 0 and constant is 0)."""
+        for var in self.variables():
+            coef = self.get_coefficient_of(var).simplify()
+            if not ATenOp.eql(coef, 0):
+                return False
+        const = self.get_constant().simplify()
+        return ATenOp.eql(const, 0)
+    
     def is_contradiction(self) -> bool:
-        """Check if constraint is const = 0 where const != 0."""
-        # ??
-        if self.expr.coeff: return False
-        return not _coeff_is_zero(self.expr.const)
-
-    def variables(self) -> FrozenSet[str]: return self.expr.variables()
+        """Check if constraint is unsatisfiable (no variables but non-zero constant)."""
+        if len(self.variables()) != 0:
+            return False
+        const = self.get_constant().simplify()
+        return not ATenOp.eql(const, 0)
+    
+    def rename(self, mapping: Mapping[str, str]) -> "Constraint":
+        return Constraint(tuple(aff.rename(mapping) for aff in self.affs))
+    
     def __str__(self) -> str:
-        total = functools.reduce(lambda a, b: Add((a, b)), [x.index() for x in self.args])
+        if not self.args:
+            return "0 = 0"
+        total = functools.reduce(lambda a, b: Add((a, b)), [aff.index() for aff in self.affs])
         return f"{total.render()} = 0"
-    # [TODO]
-    # ./test/test_union_map.py
-    # Implement eliminate_vars
-    # Enhancement on Symbolic Array
-    # Symbolic Equality Graph
+    
     @staticmethod
-    def fourier_motzkin(constraints: List[Constraint], vars_to_elim: Sequence[str]) -> List[Constraint]:
+    def fourier_motzkin(constraints: List["Constraint"], vars_to_elim: Sequence[str]) -> List["Constraint"]:
         """
         Eliminate variables via Fourier-Motzkin style substitution.
+        
+        For each variable to eliminate:
+        1. Find constraint where variable has coefficient ±1
+        2. Solve for variable: if coef=1: var=-rest, if coef=-1: var=rest
+        3. Substitute into remaining constraints
+        4. Remove pivot constraint
+        
+        Only eliminates variables with coefficient ±1 (exact integer solution).
+        Uses computation graphs for all arithmetic operations.
         """
-        def _solve_for(constraint: Constraint, var: str) -> Optional[Aff]:
-            # TODO
-            # self.expr helper (compute into aff expr)
-            c = constraint.get_coefficient_of(var)
-            if (ir.ATenOp.eql(c, 0) or
-                (not ((is_one:=ir.ATenOp.eql(c, 1)) or ir.ATenOp.eql(c, -1)))):
-                return None
-            # rest = expr - c*var
-            rest = Aff(...) # TODO
-            # If c=1:  var + rest = 0 => var = -rest
-            # If c=-1: -var + rest =0 => var = rest
-            if is_one: return -rest
-            return rest
-
+        constraints = list(constraints)
         for var in vars_to_elim:
             pivot_idx: Optional[int] = None
-            solution: Optional[Aff] = None
+            solution: Optional[tuple[Aff, ...]] = None
             for i, c in enumerate(constraints):
-                if (sol := _solve_for(c, var)) is not None:
-                    pivot_idx, solution = i, sol
+                coef = c.get_coefficient_of(var).simplify()
+                if ATenOp.eql(coef, 1) or ATenOp.eql(coef, -1):
+                    pivot_idx = i
+                    rest = c.without_var(var)
+                    if ATenOp.eql(coef, 1):
+                        # var + rest = 0 => var = -rest (negate all rest terms via computation graph)
+                        negated = []
+                        for aff in rest:
+                            # new_stride = -1 * stride (computation graph)
+                            neg_stride = _const(-1, index) * aff.stride
+                            negated.append(Aff((neg_stride, aff.dim, aff.offset, aff.incf)))
+                        solution = tuple(negated)
+                    else:  # coef == -1
+                        # -var + rest = 0 => var = rest
+                        solution = rest
                     break
-                # cannot eliminate this variable with +- 1 coeff?
-                if pivot_idx is None or solution is None: continue
-                constraints.pop(pivot_idx)
-                constraints = [c.substitute(var, solution) for c in constraints]
+            if pivot_idx is None or solution is None:
+                continue
+            constraints.pop(pivot_idx)
+            constraints = [c.substitute(var, solution) for c in constraints]
         return [c for c in constraints if not c.is_trivial()]
 
 @dataclass(frozen=True)
@@ -726,16 +897,20 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
         { S[gid0, gid1, gid2] -> [addr] : addr = 1500*gid0 + 30*gid1 + gid2 }
     The constraints are stored as a list of Constraint objects.
     """
-    dom_vars: tuple[str, ...] = field(default_factory=list)
-    rng_vars: tuple[str, ...] = field(default_factory=list)
+    dom_vars: tuple[str, ...] = field(default_factory=tuple)
+    rng_vars: tuple[str, ...] = field(default_factory=tuple)
     dom_name: str = "S"
     rng_name: str = ""
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...] | None, **kwargs: Any) -> tuple[ATenOpType, ...]:
         """Verify AccessMap structure."""
         assert all([isinstance(x, Constraint) for x in args]), "BasicMap is only constrainted by Constraint."
         return (ATenOpType(axes=(), dtype=index, offset=_const(0, index)), )
 
+    @property
+    def constraints(self) -> tuple[Constraint, ...]:
+        """Get args as Constraints (verified in verify method)."""
+        return cast(tuple[Constraint, ...], self.args)
     @staticmethod
     def from_affine(dom_vars: tuple[str, ...], rng_vars: tuple[str, ...], rng_exprs: tuple[tuple[Aff, ...], ...], dom_name: str = "S", rng_name: str = "") -> BasicMap:
         if not len(rng_vars) == len(rng_exprs):
@@ -748,8 +923,46 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
                         T=(ATenOpType(axes=(), dtype=index),))
 
     @staticmethod
+    def define(
+        dom: tuple[str, ...],
+        mapping: dict[str, tuple[Aff, ...]],
+        dom_name: str = "S",
+        rng_name: str = ""
+    ) -> BasicMap:
+        """Create a BasicMap with a cleaner dict-based API.
+        
+        Args:
+            dom: Domain variable names (e.g., ("i", "j"))
+            mapping: Dict mapping range variables to their affine expressions.
+                     Each value is a tuple of Affs that are summed.
+            dom_name: Name of the domain space (default "S")
+            rng_name: Name of the range space (default "")
+        
+        Example:
+            # Create map: S[i, j] -> T[x, y] where x = 2*i + j, y = j + 5
+            BasicMap.define(
+                dom=("i", "j"),
+                mapping={
+                    "x": Aff.lin(2, "i") + Aff.lin(1, "j"),  # 2*i + j
+                    "y": Aff.lin(1, "j", 5),                 # j + 5
+                },
+                dom_name="S",
+                rng_name="T"
+            )
+            
+            # Simpler example: S[i] -> [addr] where addr = 10*i + 3
+            BasicMap.define(
+                dom=("i",),
+                mapping={"addr": Aff.lin(10, "i", 3)},
+            )
+        """
+        rng_vars = tuple(mapping.keys())
+        rng_exprs = tuple(mapping.values())
+        return BasicMap.from_affine(dom, rng_vars, rng_exprs, dom_name, rng_name)
+
+    @staticmethod
     def from_tensor_type(band: Band, T: ATenOpType) -> BasicMap:
-        if T.ndim == 0: return BasicMap((), T=(ATenOpType(axes=(), dtype=T.dtype),), n_ranges=0)
+        if T.ndim == 0: return BasicMap((), T=(ATenOpType(axes=(), dtype=T.dtype),))
         affs: tuple[Aff, ...] = tuple(axis.aff(band, dim) for dim, axis in enumerate(T.axes))
         return BasicMap.from_affine(
             tuple([f"gid_{i}" for i in range(len(affs))]),
@@ -760,22 +973,45 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
     # TODO: def index
     def all_variables(self) -> FrozenSet[str]:
         vars_set: Set[str] = set(self.dom_vars) | set(self.rng_vars)
-        for c in self.args: vars_set |= self.variables()
+        for c in self.constraints: vars_set |= c.variables()
         return frozenset(vars_set)
 
     def rename_vars(self, mapping: Mapping[str, str]) -> BasicMap:
         new_dom = tuple(mapping.get(v, v) for v in self.dom_vars)
         new_rng = tuple(mapping.get(v, v) for v in self.rng_vars)
-        new_cons = tuple(c.rename(mapping) for c in self.args)
+        new_cons = tuple(c.rename(mapping) for c in self.constraints)
         return BasicMap(new_cons, dom_vars=new_dom, rng_vars=new_rng, dom_name=self.dom_name, rng_name=self.rng_name)
 
     def reverse(self) -> BasicMap:
         return BasicMap(self.args, dom_vars=self.rng_vars, rng_vars=self.dom_vars, dom_name=self.rng_name or "S", rng_name=self.dom_name)
 
+    def is_empty(self) -> bool:
+        """Check if this BasicMap has no solutions (is unsatisfiable).
+
+        Uses Fourier-Motzkin elimination to eliminate all variables.
+        If any resulting constraint is a contradiction (e.g., 5 = 0),
+        the system is unsatisfiable and the map is empty.
+
+        Note: This is sound but incomplete for integer constraints - it may
+        return False for some empty maps that require integer reasoning.
+        """
+        if not self.constraints:
+            return False  # No constraints = always satisfiable
+
+        # Eliminate all variables using Fourier-Motzkin
+        all_vars = list(self.all_variables())
+        reduced = Constraint.fourier_motzkin(list(self.constraints), all_vars)
+
+        # Check if any reduced constraint is a contradiction
+        for c in reduced:
+            if c.is_contradiction():
+                return True
+        return False
+
     # [TODO] lru_cache
     def apply_range(self, other: BasicMap) -> BasicMap:
         if len(self.rng_vars) != len(other.dom_vars):
-            return ValueError(
+            raise ValueError(
                 f"Range/Domain arity mismatch: {len(self.rng_vars)} vs {len(other.dom_vars)}")
         intermidate = tuple(f"__m{i}" for i in range(len(self.rng_vars)))
         self_renamed = self.rename_vars(
@@ -784,8 +1020,8 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
         other_renamed = other.rename_vars(
             {v: m for v, m in zip(other.dom_vars, intermidate, strict=True)}
         )
-        all_csts = list(self_renamed.args) + list(other_renamed.args)
-        final_constraints = Constraints.fourier_motzkin(all_constraints, intermidate)
+        all_csts: list[Constraint] = [cast(Constraint, c) for c in self_renamed.args] + [cast(Constraint, c) for c in other_renamed.args]
+        final_constraints = Constraint.fourier_motzkin(all_csts, intermidate)
         return BasicMap(
             tuple(final_constraints),
             dom_vars=self_renamed.dom_vars,
@@ -809,31 +1045,37 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
 @dataclass(frozen=True)
 class UnionMap(ScheduleOps, ViewOps, ATenOp):
     """Union of multiple BasicMaps. { map1; map2; ...}"""
+    
+    @property
+    def maps(self) -> tuple[BasicMap, ...]:
+        """Get args as BasicMaps (verified in verify method)."""
+        return cast(tuple[BasicMap, ...], self.args)
+    
     def __or__(self, other: UnionMap) -> UnionMap: return UnionMap(self.args + other.args)
-    def reverse(self) -> UnionMap: return UnionMap([m.reverse() for m in self.args])
-    def is_empty(self) -> bool: return all(m.is_empty() for m in self.args) if self.args else True
+    def reverse(self) -> UnionMap: return UnionMap(tuple(m.reverse() for m in self.maps))
+    def is_empty(self) -> bool: return all(m.is_empty() for m in self.maps) if self.args else True
     def apply_range(self, other: UnionMap) -> UnionMap:
         result: List[BasicMap] = []
-        for m1 in self.args:
-            for m2 in other.args:
+        for m1 in self.maps:
+            for m2 in other.maps:
                 if not (composed:=m1.apply_range(m2)).is_empty():
                     result.append(composed)
-        return UnionMap(result)
+        return UnionMap(tuple(result))
     def apply_domain(self, other: UnionMap) -> UnionMap:
         result: List[BasicMap] = []
-        for m1 in self.args:
-            for m2 in other.args:
+        for m1 in self.maps:
+            for m2 in other.maps:
                 if not (composed:=m1.apply_domain(m2)).is_empty():
                     result.append(composed)
-        return UnionMap(result)
+        return UnionMap(tuple(result))
     @classmethod
-    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...] | None, **kwargs: Any) -> tuple[ATenOpType, ...]:
         """Verify AccessMap structure."""
         assert all([isinstance(x, BasicMap) for x in args]), "UnionMap: all args should be type of BasicMap"
         return (ATenOpType(axes=(), dtype=index, offset=_const(0, index)), )
 
     def __str__(self) -> str:
-        return "<UnionMap: { " + " ; ".join(str(m)[2:-2] for m in self.args) + " }>"
+        return "<UnionMap: { " + " ; ".join(str(m)[2:-2] for m in self.maps) + " }>"
 ## == Read/Write access in the polyhedral model ==========================================
 @dataclass(frozen=True)
 class Load(ScheduleOps, ATenOp):
@@ -879,7 +1121,7 @@ class Store(ScheduleOps, ATenOp):
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 2, "Store takes (dst, src)"
         assert args[0].T[0] is not None and args[1].T[0] is not None
-        assert args[0].T[0].ndim == 0 and args[1].T[0].ndim == 0, f"Store can only take scalar values!"
+        assert args[0].T[0].ndim == 0 and args[1].T[0].ndim == 0, "Store can only take scalar values!"
         return (ATenOpType(axes=(), dtype=args[0].T[0].dtype), )
 ## ==========================================================================
 ## Memory Allocation Model
@@ -908,12 +1150,16 @@ class MemoryOf(ScheduleOps, ViewOps, ATenOp):
         assert isinstance(args[0], Polyhedron), f"MemoryOf arg must be Polyhedron, got {type(args[0]).__name__}"
         assert "nth" in kwargs, "MemoryOf requires nth argument."
         nth = kwargs.get("nth")
-        assert 0 <= nth < len(args[0].T), f"MemoryOf(Polyhedron, nth={nth}) out of range for Polyhedron with {1+len(args[0].T_rest)} outputs"
+        assert isinstance(nth, int), "MemoryOf: nth must be an integer"
+        poly = args[0]
+        assert 0 <= nth < len(poly.T), f"MemoryOf(Polyhedron, nth={nth}) out of range for Polyhedron with {len(poly.T)} outputs"
         # If T is explicitly provided (e.g., from Reduce.lower()), use it
         # Otherwise fall back to Polyhedron's output type
         if T is not None and T[0] is not None:
-            return T
-        return (args[0].T[nth],)
+            return cast(tuple[ATenOpType, ...], T)
+        result = poly.T[nth]
+        assert result is not None, f"MemoryOf: Polyhedron output at nth={nth} is None"
+        return (result,)
 
 @dataclass(frozen=True)
 class Polyhedron(ScheduleOps, ViewOps, ATenOp):
@@ -976,13 +1222,13 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
     n_outs: int = 0
     root: bool = True
     @staticmethod
-    def explore_predecessors(roots: tuple[ATenOp, ...]) -> tuple[tuple[Polyhedron, ...], tuple[ATenOp, ...], tuple[AccessMap, ...], tuple[AccessMap, ...]]:
+    def explore_predecessors(roots: tuple[ATenOp, ...]) -> tuple[tuple[Polyhedron, ...], tuple[ATenOp, ...], tuple[BasicMap, ...], tuple[BasicMap, ...]]:
         """Extract all Polyhedron nodes that roots depend on."""
         seen: set[int] = set()
         body: list[ATenOp] = []
         parents: list[Polyhedron] = []
-        reads: list[AccessMap] = []
-        writes: list[AccessMap] = []
+        reads: list[BasicMap] = []
+        writes: list[BasicMap] = []
         def _explore(node: ATenOp, read: bool=True) -> None:
             if id(node) in seen: return
             seen.add(id(node))
@@ -995,7 +1241,7 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
                     else:    writes.append(node)
             body.append(node)
             if isinstance(node, Store):
-                assert len(node.args) == 2 and read is True, f"Currently WaW (write-after-write) dependency is not supported"
+                assert len(node.args) == 2 and read is True, "Currently WaW (write-after-write) dependency is not supported"
                 # Note: how to support waw
                 # for a in range(10):
                 #   a[i] = 10
@@ -1011,9 +1257,7 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
     def schedule(dims: tuple[Dim, ...], outs: tuple[ATenOp, ...], op: ATenOp) -> Polyhedron:
         parents, body, R, W = Polyhedron.explore_predecessors((op,))
         assert all([o in body for o in outs]), f"Cannot schedule missing vars for {outs}"
-        for item in body: pass
-        # TODO: Doing some assertions
-        # like every user sharing the same band
+        # TODO: Assert every user shares the same band
         instance = Polyhedron((UnionMap(R), UnionMap(W), op), n_outs=len(outs), T=tuple([o.T[0] for o in outs]))
         # triggers fusion
         for p in parents: instance += p
@@ -1032,8 +1276,8 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
         # 1. AccessMapを削除
         # 2. IRを適切に定義するところを実装
         # 3. Domain+Domainの計算を実装
-        R: UnionMap = self.args[0]
-        W: UnionMap = self.args[1]
+        R = cast(UnionMap, self.args[0])
+        W = cast(UnionMap, self.args[1])
         print(R)
         print(W)
         # [TODO]
@@ -1050,6 +1294,6 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
         # - otherwise root=False
         return self
 
-    def search(self):
+    def search(self) -> None:
         # TODO: Beam Search Trigger.
         pass

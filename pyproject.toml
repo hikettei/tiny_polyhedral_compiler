@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "caten-py"
 version = "0.1.0"
@@ -49,3 +53,6 @@ dev = [
     "mkdocs-material>=9.7.0",
     "mkdocstrings[python]>=0.30.1",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["caten"]

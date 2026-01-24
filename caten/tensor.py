@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import os
 from abc import ABCMeta, abstractmethod
-from typing import Any, Callable, Tuple, Union
+from typing import Any, Callable, Tuple, Union, cast
 
 import caten.ir as ir
 from caten.helpers import align_left, argfix, prod
@@ -33,7 +33,7 @@ class ATen:
     @classmethod
     def from_shape(cls, shape: tuple[int|ir.ATenOp, ...], dtype: DType=default_float) -> ATen: return Tensor(op=ir.Memory.defglobal(shape, dtype))
     @classmethod
-    def const(cls, obj: Any, dtype: DType=index) -> ir.Const:
+    def const(cls, obj: Any, dtype: DType=index) -> ir.ATenOp:
         match obj:
             case int(): assert dtype in integers
             case float(): assert dtype in floats
@@ -124,11 +124,11 @@ class ATen:
         if len(arg) != self.ndim:
             raise ValueError(f"shrink arg length {len(arg)} != ndim {self.ndim}")
         # Normalize: None -> (0, size)
-        bounds: list[tuple[int, int] | None] = []
+        bounds: list[tuple[int, int | ir.ATenOp] | None] = []
         for b, s in zip(arg, self.shape, strict=True):
             if b is None:
-                size = s.item if hasattr(s, 'item') else s
-                bounds.append((0, size))
+                size = s.item if hasattr(s, "item") else s
+                bounds.append((0, size))  # type: ignore[arg-type]
             else:
                 bounds.append(b)
         return Tensor(op=ir.View.shrink(self.op, tuple(bounds)))
@@ -260,16 +260,17 @@ class ATen:
         assert self.op.T[0] is not None
         axes = tuple(range(self.ndim)) if axis is None else (tuple(axis) if isinstance(axis, (tuple, list)) else (axis,))
         axes = tuple(self._resolve_dim(x) for x in axes)
-        reduce_axes, out_shape = [], []
+        reduce_axes: list[int | ir.ATenOp] = []
+        out_shape: list[ir.ATenOp] = []
         for i in range(self.ndim):
             if i in axes:
                 reduce_axes.append(1)
             else:
                 reduce_axes.append(self.op.T[0].axes[i].size)
                 out_shape.append(self.op.T[0].axes[i].size)
-        out = ir.Memory.defglobal(reduce_axes, dtype=self.op.T[0].dtype, tmp=True)
+        out: ir.ATenOp = ir.Memory.defglobal(tuple(reduce_axes), dtype=self.op.T[0].dtype, tmp=True)
         out = ir.View.expand(out, tuple([arg.size for arg in self.op.T[0].axes]))
-        out = ir.Reduce((out, ir._const(initial_value, self.dtype)), keepdim=False, axis=tuple(), bop=None) # out = initial_value
+        out = ir.Reduce((out, ir._const(initial_value, self.dtype)), keepdim=False, axis=tuple(), bop=None)  # out = initial_value
         return self.forward(ir.Reduce, (out, self.op), bop=op, axis=axes, keepdim=keepdim)
 
     def sum(self, axis: int | tuple[int, ...] | None = None, keepdim: bool = False) -> Tensor:
@@ -346,6 +347,7 @@ class ATen:
         sh, sw = (stride, stride) if isinstance(stride, int) else (stride if stride else (kh, kw))
         
         N, C, H, W = [s.item for s in self.shape]
+        assert isinstance(H, int) and isinstance(W, int), "pool2d requires concrete (int) spatial dimensions"
         
         if H % sh != 0 or W % sw != 0:
             raise ValueError(f"Input size ({H}, {W}) not divisible by stride ({sh}, {sw})")
@@ -357,7 +359,7 @@ class ATen:
         H_out, W_out = H // kh, W // kw
         
         # Reshape: [N, C, H, W] -> [N, C, H_out, kh, W_out, kw]
-        x = self.reshape((N, C, H_out, kh, W_out, kw))
+        x = self.reshape((N, C, H_out, kh, W_out, kw))  # type: ignore[arg-type]
         # Permute: -> [N, C, H_out, W_out, kh, kw]
         x = x.permute((0, 1, 2, 4, 3, 5))
         
@@ -393,48 +395,50 @@ class ATen:
         
         # noop_ indices (batch dims), i_ (spatial input sizes)
         noop_len = self.ndim - ndim_k
-        i_ = [s.item for s in self.shape[-ndim_k:]]  # spatial sizes
-        noop1_ = [s for s in self.shape[:noop_len]]  # batch shape
+        i_raw = [s.item for s in self.shape[-ndim_k:]]  # spatial sizes
+        assert all(isinstance(x, int) for x in i_raw), "unfold requires concrete (int) spatial dimensions"
+        i_: list[int] = cast(list[int], i_raw)
+        noop1_ = [s for s in self.shape[:noop_len]]  # batch shape (can be symbolic)
         
         # Output spatial sizes: o = ceil((i - d*(k-1)) / s)
-        o_ = [math.ceil((i - d * (k - 1)) / s) for i, d, k, s in zip(i_, d_, k_, s_)]
+        o_ = [math.ceil((i - d * (k - 1)) / s) for i, d, k, s in zip(i_, d_, k_, s_, strict=True)]
         
         # Step 1: repeat spatial dims
         # repeat factors: [1]*noop_len + [ceil(k*(i+d)/i) for k,i,d in zip(k_,i_,d_)]
-        repeat_factors = [1] * noop_len + [math.ceil(k * (i + d) / i) for k, i, d in zip(k_, i_, d_)]
+        repeat_factors = [1] * noop_len + [math.ceil(k * (i + d) / i) for k, i, d in zip(k_, i_, d_, strict=True)]
         xup = self.repeat(tuple(repeat_factors))
         
         # Step 2: shrink to [(0, k*(i+d)) for k,i,d in zip(k_,i_,d_)]
-        shrink_bounds: list[tuple[int, int] | None] = [None] * noop_len + [(0, k * (i + d)) for k, i, d in zip(k_, i_, d_)]
+        shrink_bounds: list[tuple[int, int] | None] = [None] * noop_len + [(0, k * (i + d)) for k, i, d in zip(k_, i_, d_, strict=True)]
         xup = xup.shrink(tuple(shrink_bounds))
         
         # Step 3: reshape to noop1_ + flatten((k, i+d) for k,i,d in zip(k_,i_,d_))
         reshape1: list[Any] = list(noop1_)
-        for k, i, d in zip(k_, i_, d_):
+        for k, i, d in zip(k_, i_, d_, strict=True):
             reshape1.extend([k, i + d])
         xup = xup.reshape(tuple(reshape1))
         
         # Step 4: shrink to noop_ + flatten(((0,k), (0,o*s)) for k,o,s in zip(k_,o_,s_))
         shrink2: list[tuple[int, int] | None] = [None] * noop_len
-        for k, o, s in zip(k_, o_, s_):
+        for k, o, s in zip(k_, o_, s_, strict=True):
             shrink2.extend([(0, k), (0, o * s)])
         xup = xup.shrink(tuple(shrink2))
         
         # Step 5: reshape to noop1_ + flatten((k,o,s) for k,o,s in zip(k_,o_,s_))
         reshape2: list[Any] = list(noop1_)
-        for k, o, s in zip(k_, o_, s_):
+        for k, o, s in zip(k_, o_, s_, strict=True):
             reshape2.extend([k, o, s])
         xup = xup.reshape(tuple(reshape2))
         
         # Step 6: shrink to noop_ + flatten(((0,k), (0,o), (0,1)) for k,o in zip(k_,o_))
         shrink3: list[tuple[int, int] | None] = [None] * noop_len
-        for k, o in zip(k_, o_):
+        for k, o in zip(k_, o_, strict=True):
             shrink3.extend([(0, k), (0, o), (0, 1)])
         xup = xup.shrink(tuple(shrink3))
         
         # Step 7: reshape to noop1_ + flatten((k,o) for k,o in zip(k_,o_))
         reshape3: list[Any] = list(noop1_)
-        for k, o in zip(k_, o_):
+        for k, o in zip(k_, o_, strict=True):
             reshape3.extend([k, o])
         xup = xup.reshape(tuple(reshape3))
         
@@ -486,6 +490,9 @@ class ATen:
         
         N, C_in, H, W = [s.item for s in self.shape]
         C_out, C_in_w, KH, KW = [s.item for s in weight.shape]
+        # conv2d requires concrete dimensions for kernel computation
+        assert all(isinstance(x, int) for x in [H, W, KH, KW]), "conv2d requires concrete spatial dimensions"
+        H, W, KH, KW = cast(int, H), cast(int, W), cast(int, KH), cast(int, KW)
         
         if C_in != C_in_w:
             raise ValueError(f"Channel mismatch: input has {C_in}, weight expects {C_in_w}")
@@ -501,22 +508,22 @@ class ATen:
         x = x.permute((0, 2, 3, 1, 4, 5))
         
         # Step 3: reshape to [N, H_out*W_out, C_in*KH*KW]
-        x = x.reshape((N, H_out * W_out, C_in * KH * KW))
+        x = x.reshape((N, H_out * W_out, C_in * KH * KW))  # type: ignore[arg-type]
         
         # Step 4: reshape weight to [C_out, C_in*KH*KW] then transpose for matmul
-        w = weight.reshape((C_out, C_in * KH * KW))
+        w = weight.reshape((C_out, C_in * KH * KW))  # type: ignore[arg-type]
         # w.T -> [C_in*KH*KW, C_out]
         w = w.permute((1, 0))
-        
         # Step 5: matmul [N, H_out*W_out, C_in*KH*KW] @ [C_in*KH*KW, C_out]
         # -> [N, H_out*W_out, C_out]
-        y = x.matmul(w)
+        y: ATen = x.matmul(w)
         
         # Step 6: reshape to [N, H_out, W_out, C_out]
-        y = y.reshape((N, H_out, W_out, C_out))
+        y = y.reshape((N, H_out, W_out, C_out))  # type: ignore[arg-type]
         
         # Step 7: permute to [N, C_out, H_out, W_out]
-        return y.permute((0, 3, 1, 2))
+        result = y.permute((0, 3, 1, 2))
+        return cast(Tensor, result)
 
     def matmul(self, other: ATen|TOperand) -> Tensor:
         """
@@ -542,8 +549,9 @@ class TensorImpl(ATen, metaclass=ABCMeta):
     @abstractmethod
     def compile(self) -> None: ...
     @staticmethod
+    @staticmethod
     @abstractmethod
-    def render(op: Any) -> None: ...
+    def render(op: Any) -> str: ...
 
 class Tensor(ATen):
     def __new__(cls: Any, *args: Any, **kwargs: Any) -> Any:
