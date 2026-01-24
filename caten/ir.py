@@ -1,10 +1,16 @@
 from __future__ import annotations
 
-import itertools, functools, math, operator, weakref, dataclasses
-from dataclasses import dataclass, replace, field
-from typing import Any, Dict, Union, FrozenSet
+import dataclasses
+import functools
+import itertools
+import math
+import operator
+import weakref
+from dataclasses import dataclass, field, replace
+from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Sequence, Set, Union
 
 import caten.dtype as dtype
+
 from .dtype import DType, index
 
 
@@ -47,7 +53,7 @@ class ATenAxis():
     incf: ATenOp
     def range(self) -> "Range": return Range((self.size,))
     def aff(self, band: "Band", dim: int) -> "Aff":
-        assert 0 <= dim < len(band.args), f"Band"
+        assert 0 <= dim < len(band.args), "Band"
         return Aff((self.stride, Dim((band,), dim=dim), self.offset, self.incf))
     def index(self, band: "Band", dim: int) -> ATenOp:
         assert 0 <= dim < len(band.args), f"Band dim {dim} out of range [0, {len(band.args)})"
@@ -204,7 +210,7 @@ class BinaryOps(TensorOps):
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 2, f"BinaryOp {cls.__name__} takes two argument, getting {args}"
         assert args[0].T is not None
-        assert ATenOp.equals(args[0].T[0].shape, args[1].T[0].shape), f"BinaryOps: Detected shape mismatch."
+        assert ATenOp.equals(args[0].T[0].shape, args[1].T[0].shape), "BinaryOps: Detected shape mismatch."
         
         return args[0].T
 class TernaryOps(TensorOps):
@@ -213,8 +219,8 @@ class TernaryOps(TensorOps):
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 3,f"TernaryOp {cls.__name__} takes three argument, getting {args}"
         assert args[0].T is not None
-        assert ATenOp.equals(args[0].T[0].shape, args[1].T[0].shape), f"TernaryOps: Detected shape mismatch."
-        assert ATenOp.equals(args[1].T[0].shape, args[2].T[0].shape), f"TernaryOps: Detected shape mismatch."
+        assert ATenOp.equals(args[0].T[0].shape, args[1].T[0].shape), "TernaryOps: Detected shape mismatch."
+        assert ATenOp.equals(args[1].T[0].shape, args[2].T[0].shape), "TernaryOps: Detected shape mismatch."
         return args[0].T
 class ViewOps():
     # ops whose return dtypes are explicitly provided via T option
@@ -332,8 +338,8 @@ class Where(TernaryOps, ATenOp):
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 3, f"TernaryOp {cls.__name__} takes three argument, getting {args}"
         assert args[1].T[0] is not None
-        assert ATenOp.equals(args[0].T[0].shape, args[1].T[0].shape), f"TernaryOps: Detected shape mismatch."
-        assert ATenOp.equals(args[1].T[0].shape, args[2].T[0].shape), f"TernaryOps: Detected shape mismatch."
+        assert ATenOp.equals(args[0].T[0].shape, args[1].T[0].shape), "TernaryOps: Detected shape mismatch."
+        assert ATenOp.equals(args[1].T[0].shape, args[2].T[0].shape), "TernaryOps: Detected shape mismatch."
         return args[1].T # extend the result's shape
 
 @dataclass(frozen=True)
@@ -569,7 +575,7 @@ class Dim(ScheduleOps, ATenOp):
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 1, "Dim requires exactly one Band argument"
         assert isinstance(args[0], Band), f"Dim arg must be Band, got {type(args[0]).__name__}"
-        assert "dim" in kwargs, f"dim is required."
+        assert "dim" in kwargs, "dim is required."
         dim = kwargs.get("dim")
         assert 0 <= dim < args[0].ndim, f"Dim {dim} out of range for Band with {args[0].ndim} dims"
         return (ATenOpType(axes=tuple(), dtype=index, offset=_const(0, index)), )
@@ -618,11 +624,61 @@ class Aff(ScheduleOps, ATenOp):
     def index(self) -> ATenOp:
         a, b = self.ax_b()
         return a * self.dim + b
-    # TODO is_cst
     @staticmethod
-    def var(name: str, flip:bool=False) -> Aff:
-        cst = Dim((Band((Range((_const(1, index),), name="_cst"),)),), dim=0)
+    def _cst_dim() -> Dim:
+        """Create a dummy constant dimension for symbolic Affs."""
+        return Dim((Band((Range((_const(1, index),), name="_cst"),)),), dim=0)
+    
+    @staticmethod
+    def var(name: str, flip: bool = False) -> Aff:
+        """Create a variable Aff: name (or -name if flip=True).
+        
+        Example:
+            Aff.var("i")       # represents variable i
+            Aff.var("i", True) # represents -i
+        """
+        cst = Aff._cst_dim()
         return Aff((_const(1, index), cst, Const.new(name, index), _const(-1 if flip else 1, index),))
+    
+    @staticmethod
+    def term(coef: int, varname: str) -> Aff:
+        """Create an affine term: coef * varname.
+        
+        Example:
+            Aff.term(2, "i")   # represents 2*i
+            Aff.term(-3, "j")  # represents -3*j
+        """
+        cst = Aff._cst_dim()
+        return Aff((_const(coef, index), cst, Const.new(varname, index), _const(1, index),))
+    
+    @staticmethod
+    def const(value: int) -> Aff:
+        """Create a constant Aff: value.
+        
+        Example:
+            Aff.const(5)   # represents constant 5
+            Aff.const(-3)  # represents constant -3
+        """
+        cst = Aff._cst_dim()
+        # stride=1, offset=value, incf=0 => 1 * (0 * dim + value) = value
+        return Aff((_const(1, index), cst, _const(value, index), _const(0, index),))
+    
+    @staticmethod
+    def lin(coef: int, varname: str, const: int = 0) -> tuple[Aff, ...]:
+        """Create linear expression: coef * varname + const.
+        
+        Returns a tuple of Affs suitable for use in constraints/BasicMap.
+        
+        Example:
+            Aff.lin(2, "i", 3)   # (2*i, 3) representing 2*i + 3
+            Aff.lin(1, "j")      # (j,) representing just j
+            Aff.lin(0, "i", 5)   # (5,) just a constant
+        """
+        if coef == 0:
+            return (Aff.const(const),) if const != 0 else ()
+        if const == 0:
+            return (Aff.term(coef, varname),)
+        return (Aff.term(coef, varname), Aff.const(const))
     
     def rename(self, mapping: Mapping[str, str]) -> Aff:
         return Aff((self.stride, self.dim.rename(mapping), self.offset, self.incf))
@@ -686,33 +742,16 @@ class Constraint(ScheduleOps, ViewOps, ATenOp):
     def fourier_motzkin(constraints: List[Constraint], vars_to_elim: Sequence[str]) -> List[Constraint]:
         """
         Eliminate variables via Fourier-Motzkin style substitution.
+        
+        TODO: Implement proper variable elimination. Currently returns constraints unchanged.
+        This requires implementing:
+        - get_coefficient_of(var) method on Constraint
+        - substitute(var, expr) method on Constraint  
+        - is_trivial() method that checks if constraint is always satisfied
         """
-        def _solve_for(constraint: Constraint, var: str) -> Optional[Aff]:
-            # TODO
-            # self.expr helper (compute into aff expr)
-            c = constraint.get_coefficient_of(var)
-            if (ir.ATenOp.eql(c, 0) or
-                (not ((is_one:=ir.ATenOp.eql(c, 1)) or ir.ATenOp.eql(c, -1)))):
-                return None
-            # rest = expr - c*var
-            rest = Aff(...) # TODO
-            # If c=1:  var + rest = 0 => var = -rest
-            # If c=-1: -var + rest =0 => var = rest
-            if is_one: return -rest
-            return rest
-
-        for var in vars_to_elim:
-            pivot_idx: Optional[int] = None
-            solution: Optional[Aff] = None
-            for i, c in enumerate(constraints):
-                if (sol := _solve_for(c, var)) is not None:
-                    pivot_idx, solution = i, sol
-                    break
-                # cannot eliminate this variable with +- 1 coeff?
-                if pivot_idx is None or solution is None: continue
-                constraints.pop(pivot_idx)
-                constraints = [c.substitute(var, solution) for c in constraints]
-        return [c for c in constraints if not c.is_trivial()]
+        # TODO: Full implementation pending
+        # For now, return constraints unchanged (no elimination)
+        return list(constraints)
 
 @dataclass(frozen=True)
 class BasicMap(ScheduleOps, ViewOps, ATenOp):
@@ -748,8 +787,46 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
                         T=(ATenOpType(axes=(), dtype=index),))
 
     @staticmethod
+    def define(
+        dom: tuple[str, ...],
+        mapping: dict[str, tuple[Aff, ...]],
+        dom_name: str = "S",
+        rng_name: str = ""
+    ) -> BasicMap:
+        """Create a BasicMap with a cleaner dict-based API.
+        
+        Args:
+            dom: Domain variable names (e.g., ("i", "j"))
+            mapping: Dict mapping range variables to their affine expressions.
+                     Each value is a tuple of Affs that are summed.
+            dom_name: Name of the domain space (default "S")
+            rng_name: Name of the range space (default "")
+        
+        Example:
+            # Create map: S[i, j] -> T[x, y] where x = 2*i + j, y = j + 5
+            BasicMap.define(
+                dom=("i", "j"),
+                mapping={
+                    "x": Aff.lin(2, "i") + Aff.lin(1, "j"),  # 2*i + j
+                    "y": Aff.lin(1, "j", 5),                 # j + 5
+                },
+                dom_name="S",
+                rng_name="T"
+            )
+            
+            # Simpler example: S[i] -> [addr] where addr = 10*i + 3
+            BasicMap.define(
+                dom=("i",),
+                mapping={"addr": Aff.lin(10, "i", 3)},
+            )
+        """
+        rng_vars = tuple(mapping.keys())
+        rng_exprs = tuple(mapping.values())
+        return BasicMap.from_affine(dom, rng_vars, rng_exprs, dom_name, rng_name)
+
+    @staticmethod
     def from_tensor_type(band: Band, T: ATenOpType) -> BasicMap:
-        if T.ndim == 0: return BasicMap((), T=(ATenOpType(axes=(), dtype=T.dtype),), n_ranges=0)
+        if T.ndim == 0: return BasicMap((), T=(ATenOpType(axes=(), dtype=T.dtype),))
         affs: tuple[Aff, ...] = tuple(axis.aff(band, dim) for dim, axis in enumerate(T.axes))
         return BasicMap.from_affine(
             tuple([f"gid_{i}" for i in range(len(affs))]),
@@ -772,6 +849,15 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
     def reverse(self) -> BasicMap:
         return BasicMap(self.args, dom_vars=self.rng_vars, rng_vars=self.dom_vars, dom_name=self.rng_name or "S", rng_name=self.dom_name)
 
+    def is_empty(self) -> bool:
+        """Check if this BasicMap has no solutions (is unsatisfiable).
+        
+        TODO: Implement proper satisfiability checking. Currently always returns False
+        (assumes all maps are non-empty). A proper implementation would check if
+        the constraints are contradictory.
+        """
+        return False
+
     # [TODO] lru_cache
     def apply_range(self, other: BasicMap) -> BasicMap:
         if len(self.rng_vars) != len(other.dom_vars):
@@ -785,7 +871,7 @@ class BasicMap(ScheduleOps, ViewOps, ATenOp):
             {v: m for v, m in zip(other.dom_vars, intermidate, strict=True)}
         )
         all_csts = list(self_renamed.args) + list(other_renamed.args)
-        final_constraints = Constraints.fourier_motzkin(all_constraints, intermidate)
+        final_constraints = Constraint.fourier_motzkin(all_csts, intermidate)
         return BasicMap(
             tuple(final_constraints),
             dom_vars=self_renamed.dom_vars,
@@ -879,7 +965,7 @@ class Store(ScheduleOps, ATenOp):
     def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...], **kwargs: Any) -> tuple[ATenOpType, ...]:
         assert len(args) == 2, "Store takes (dst, src)"
         assert args[0].T[0] is not None and args[1].T[0] is not None
-        assert args[0].T[0].ndim == 0 and args[1].T[0].ndim == 0, f"Store can only take scalar values!"
+        assert args[0].T[0].ndim == 0 and args[1].T[0].ndim == 0, "Store can only take scalar values!"
         return (ATenOpType(axes=(), dtype=args[0].T[0].dtype), )
 ## ==========================================================================
 ## Memory Allocation Model
@@ -995,7 +1081,7 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
                     else:    writes.append(node)
             body.append(node)
             if isinstance(node, Store):
-                assert len(node.args) == 2 and read is True, f"Currently WaW (write-after-write) dependency is not supported"
+                assert len(node.args) == 2 and read is True, "Currently WaW (write-after-write) dependency is not supported"
                 # Note: how to support waw
                 # for a in range(10):
                 #   a[i] = 10
