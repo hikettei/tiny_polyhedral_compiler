@@ -623,6 +623,9 @@ class Aff(ScheduleOps, ATenOp):
         return self.stride*self.incf, self.stride*self.offset
     def index(self) -> ATenOp:
         a, b = self.ax_b()
+        # For symbolic Affs (_cst dimension), skip a*dim since dim is always 0
+        if isinstance(self.dim, Dim) and self.dim.args[0].args[0].name == "_cst":
+            return b
         return a * self.dim + b
     @staticmethod
     def _cst_dim() -> Dim:

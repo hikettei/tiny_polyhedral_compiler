@@ -12,51 +12,8 @@ from dataclasses import dataclass
 
 
 # ============================================================
-# Helper functions for formatting and analysis
+# Helper classes for analysis
 # ============================================================
-
-def format_constraint(cst: ir.Constraint) -> str:
-    """Format a constraint in readable form: 128*h - 512*hp = 0"""
-    terms = []
-    for var in sorted(cst.variables()):
-        coef = cst.get_coefficient_of(var).item
-        if coef == 0:
-            continue
-        if coef == 1:
-            terms.append(var)
-        elif coef == -1:
-            terms.append(f"-{var}")
-        elif coef > 0:
-            terms.append(f"{coef}*{var}")
-        else:
-            terms.append(f"{coef}*{var}")
-    
-    const = cst.get_constant().item
-    if const != 0:
-        terms.append(str(const))
-    
-    if not terms:
-        return "0 = 0"
-    
-    result = terms[0]
-    for t in terms[1:]:
-        if t.startswith("-"):
-            result += f" {t}"
-        else:
-            result += f" + {t}"
-    return f"{result} = 0"
-
-
-def format_basic_map(bmap: ir.BasicMap) -> str:
-    """Format BasicMap in ISL-like syntax."""
-    dom = ", ".join(bmap.dom_vars)
-    rng = ", ".join(bmap.rng_vars)
-    
-    if bmap.args:
-        csts = " and ".join(format_constraint(c) for c in bmap.args)
-        return f"{{ {bmap.dom_name}[{dom}] -> [{rng}] : {csts} }}"
-    else:
-        return f"{{ {bmap.dom_name}[{dom}] -> [{rng}] }}"
 
 
 @dataclass
@@ -366,9 +323,9 @@ def test_conv_pool_style():
     )
 
     print("\nConv writes: Out[n,k,h,w]")
-    print(f"  Access map: {format_basic_map(conv_write)}")
+    print(f"  Access map: {conv_write}")
     print("\nPool reads:  Out[n,k,hp*4+rh,wp*4+rw]")
-    print(f"  Access map: {format_basic_map(pool_read)}")
+    print(f"  Access map: {pool_read}")
 
     result = attempt_fusion(
         ir.UnionMap((conv_write,)),
@@ -382,7 +339,7 @@ def test_conv_pool_style():
     print(f"Message: {result.message}")
     
     if result.dep_info.raw.args:
-        print(f"RAW deps: {format_basic_map(result.dep_info.raw.args[0])}")
+        print(f"RAW deps: {result.dep_info.raw.args[0]}")
 
     print("\n--- Detected Tiling Strategy ---")
     print(f"  Shared dimensions: {result.shared_dims}")
