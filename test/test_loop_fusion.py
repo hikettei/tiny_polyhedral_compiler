@@ -294,3 +294,117 @@ class TestNonFusion:
         fused = consumer + producer
         # No fusion: same object back
         assert fused is consumer
+
+
+# ---------------------------------------------------------------------------
+# Reshape-decomposition based fusion (the "reshape → fuse → simplify" path)
+# ---------------------------------------------------------------------------
+
+def _count(root: ir.ATenOp, kind: type) -> int:
+    seen: set[int] = set()
+    n = 0
+    def go(node: ir.ATenOp) -> None:
+        nonlocal n
+        if id(node) in seen: return
+        seen.add(id(node))
+        if isinstance(node, kind): n += 1
+        for a in node.args: go(a)
+    go(root)
+    return n
+
+
+def _count_polyhedrons(root: ir.ATenOp) -> int:
+    return _count(root, ir.Polyhedron)
+
+
+def _count_loads_of_memof(root: ir.ATenOp) -> int:
+    seen: set[int] = set()
+    n = 0
+    def go(node: ir.ATenOp) -> None:
+        nonlocal n
+        if id(node) in seen: return
+        seen.add(id(node))
+        if isinstance(node, ir.Load) and isinstance(node.args[0], ir.MemoryOf):
+            n += 1
+        for a in node.args: go(a)
+    go(root)
+    return n
+
+
+class TestReshapeDecomposition:
+    """End-to-end: sin → reshape → sin should fuse into a single kernel via the
+    stride-alignment decomposition (no FM solver needed)."""
+
+    def test_sin_reshape_sin_fully_fuses(self):
+        import caten as C
+        a = C.Tensor([10, 20])
+        res = a.sin().reshape(5, 2, 5, 4).sin()
+        lowered = res.op.lower()
+        root = lowered[0]
+        assert _count_polyhedrons(root) == 1, "sin→reshape→sin should produce one Polyhedron"
+        assert _count_loads_of_memof(root) == 0, "no intermediate MemoryOf reads should remain"
+        assert _count(root, ir.Sin) == 2, "both sins should be preserved in the fused body"
+
+    def test_sin_sum_fuses_into_reduction(self):
+        import caten as C
+        a = C.Tensor([10, 20])
+        res = a.sin().sum(axis=1)
+        lowered = res.op.lower()
+        root = lowered[0]
+        assert _count_polyhedrons(root) == 1
+        assert _count_loads_of_memof(root) == 0
+        assert _count(root, ir.Sin) == 1
+        # The sum's accumulator Add should be in the body.
+        assert _count(root, ir.Add) >= 1
+
+    def test_sum_sum_fuses(self):
+        import caten as C
+        a = C.Tensor([10, 20])
+        res = a.sum(axis=1).sum(axis=0)
+        lowered = res.op.lower()
+        root = lowered[0]
+        assert _count_polyhedrons(root) == 1, "nested sum∘sum should collapse to one kernel"
+        assert _count_loads_of_memof(root) == 0
+
+
+class TestDecomposeAxes:
+    """Unit tests for the stride-alignment decomposition algorithm."""
+
+    def test_identity_decompose(self):
+        # Identity reshape: shapes match 1:1 with same strides.
+        prod = [(ir.Const.new(20, index), ir.Const.new(10, index), 0),
+                (ir.Const.new(1, index), ir.Const.new(20, index), 1)]
+        cons = [(ir.Const.new(20, index), ir.Const.new(10, index), 0),
+                (ir.Const.new(1, index), ir.Const.new(20, index), 1)]
+        sub = ir._decompose_axes(prod, cons, prod_ndim=2)
+        assert sub is not None
+        assert 0 in sub and 1 in sub
+
+    def test_reshape_decompose(self):
+        # Producer (10, 20) strides (20, 1) → consumer (5, 2, 5, 4) strides (40, 20, 4, 1).
+        prod = [(ir.Const.new(20, index), ir.Const.new(10, index), 0),
+                (ir.Const.new(1, index), ir.Const.new(20, index), 1)]
+        cons = [(ir.Const.new(40, index), ir.Const.new(5, index), 0),
+                (ir.Const.new(20, index), ir.Const.new(2, index), 1),
+                (ir.Const.new(4, index), ir.Const.new(5, index), 2),
+                (ir.Const.new(1, index), ir.Const.new(4, index), 3)]
+        sub = ir._decompose_axes(prod, cons, prod_ndim=2)
+        assert sub is not None
+        # sub[0] should be 2*c_0 + c_1 (covers prod axis 0, size 10 = 5*2)
+        # sub[1] should be 4*c_2 + c_3 (covers prod axis 1, size 20 = 5*4)
+        # Verify by inspecting the LinSub structure.
+        s0 = sub[0]
+        s1 = sub[1]
+        # s0 terms: [(2, 0), (1, 1)]  — sorted by stride ascending, smaller first
+        terms_0 = {(c.simplify().item, idx) for c, idx in s0.terms}
+        terms_1 = {(c.simplify().item, idx) for c, idx in s1.terms}
+        assert terms_0 == {(1, 1), (2, 0)}
+        assert terms_1 == {(1, 3), (4, 2)}
+
+    def test_non_aligned_reshape_returns_none(self):
+        # (10,) → (3, 4) would need 10 = 3*4 = 12, not divisible. Stride alignment fails.
+        prod = [(ir.Const.new(1, index), ir.Const.new(10, index), 0)]
+        cons = [(ir.Const.new(4, index), ir.Const.new(3, index), 0),
+                (ir.Const.new(1, index), ir.Const.new(4, index), 1)]
+        sub = ir._decompose_axes(prod, cons, prod_ndim=1)
+        assert sub is None

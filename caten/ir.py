@@ -497,18 +497,77 @@ class Reduce(MetaOps, ATenOp):
         return (ATenOpType(axes=tuple(new_axes), dtype=tensor.T[0].dtype, offset=tensor.T[0].offset,),)
 
     def lower(self) -> tuple[ATenOp, ...]:
+        """Lower a Reduce into a Polyhedron writing to a FRESH output buffer.
+
+        Convention (mirrors tensor.py's ``_reduce``):
+          - args[0] supplies the *iteration shape* (full input shape, kept+reduced
+            dims). Its actual data is unused here when bop≠None; we only iterate
+            over its band.
+          - args[1] is the data operand:
+              * for bop=None ("fill"): a scalar init value (or any tensor whose
+                load gives the per-position fill value); body becomes
+                ``out[full] = b_load``.
+              * for bop≠None ("accumulate"): the input data; body becomes
+                ``out[kept] = bop(out[kept], b_load)`` — the canonical
+                read-modify-write accumulator pattern.
+
+        The out buffer is freshly allocated (no MemoryOf aliasing with the input
+        chain) — this is what makes downstream fusion clean and lets ``reshape →
+        fuse → simplify`` collapse the whole chain.
+        """
         assert len(self.args) == 2
         assert self.args[0].T[0] is not None
-        band = self.args[0].T[0].band()
+        input_T = self.args[0].T[0]
+        band = input_T.band()
+        b = self.args[1].lower()[0]
+        b_load = Load.from_tensor(b, band)
 
-        a, b = tuple([x.lower()[0] for x in self.args])
-        a_load, b_load = Load.from_tensor(a, band), Load.from_tensor(b, band)
-        # note: set bop=None to just filling by values.
-        # bop is type[BinaryOps] but actually calls ATenOp.__init__
-        reduced: ATenOp = cast(ATenOp, self.bop((a_load, b_load))) if self.bop is not None else b_load  # type: ignore[call-arg]
-        instance = Polyhedron.schedule(band.all_dimensions(), (a_load,), Store.new(a_load, reduced))
-        # Use self.T (reduce output type) instead of instance.T (buffer type)
-        return (MemoryOf((instance,), nth=0, T=self.T),)
+        reduce_axes_set: Set[int] = set(self.axis)
+        if self.bop is None:
+            # "Fill" Reduce: write b at every position of a fresh full-shape buffer.
+            out_shape = tuple(input_T.axes[i].size for i in range(input_T.ndim))
+            out_mem = Memory.defglobal(out_shape, input_T.dtype, tmp=True)
+            out_load = Load.from_tensor(out_mem, band)
+            body_val: ATenOp = b_load
+            instance = Polyhedron.schedule(band.all_dimensions(), (out_mem,), Store.new(out_load, body_val))
+            return (MemoryOf((instance,), nth=0),)
+
+        # bop != None: accumulator over reduce axes into a kept-dim-shaped buffer.
+        if self.keepdim:
+            out_shape_kd = tuple(input_T.axes[i].size if i not in reduce_axes_set else _const(1, index)
+                                  for i in range(input_T.ndim))
+            out_mem = Memory.defglobal(out_shape_kd, input_T.dtype, tmp=True)
+            out_load = Load.from_tensor(out_mem, band)
+        else:
+            kept_axes = tuple(i for i in range(input_T.ndim) if i not in reduce_axes_set)
+            if not kept_axes:
+                # Full reduction → scalar (shape (1,)).  All band coords collapse to addr 0.
+                out_mem = Memory.defglobal((_const(1, index),), input_T.dtype, tmp=True)
+                out_bmap = BasicMap(
+                    (Constraint((_aff_const_general(_const(0, index)), Aff.var("addr", flip=True))),),
+                    dom_vars=tuple(f"gid_{i}" for i in range(band.ndim)),
+                    rng_vars=("addr",), dom_name="S", rng_name="",
+                )
+                out_load = Load((out_mem, out_bmap))
+            else:
+                out_shape_kept = tuple(input_T.axes[i].size for i in kept_axes)
+                out_mem = Memory.defglobal(out_shape_kept, input_T.dtype, tmp=True)
+                kept_affs: List[Aff] = []
+                out_T = out_mem.T[0]
+                assert out_T is not None
+                for new_k, ki in enumerate(kept_axes):
+                    out_axis = out_T.axes[new_k]
+                    kept_affs.append(Aff((out_axis.stride, Dim((band,), dim=ki),
+                                          out_axis.offset, out_axis.incf)))
+                out_bmap = BasicMap.from_affine(
+                    tuple(f"gid_{i}" for i in range(band.ndim)),
+                    ("addr",), (tuple(kept_affs),),
+                    dom_name="S", rng_name="",
+                )
+                out_load = Load((out_mem, out_bmap))
+        body_val = cast(ATenOp, self.bop((out_load, b_load)))  # type: ignore[call-arg]
+        instance = Polyhedron.schedule(band.all_dimensions(), (out_mem,), Store.new(out_load, body_val))
+        return (MemoryOf((instance,), nth=0),)
 
 @dataclass(frozen=True)
 class Einsum(MetaOps, ATenOp): pass
@@ -1432,10 +1491,255 @@ def _rebuild(node: ATenOp, new_args: tuple[ATenOp, ...]) -> ATenOp:
         kwargs[f.name] = getattr(node, f.name)
     return type(node)(new_args, T=node.T, **kwargs)
 
+
+@dataclass(frozen=True)
+class _LinSub:
+    """A linear substitution for a single producer dim, expressed as
+       p_i = sum(coef_k * Dim(cons_band, c_idx_k)) + const
+    where each coef is an ATenOp (typically Const, but kept general)."""
+    terms: tuple[tuple[ATenOp, int], ...]  # (coef, c_dim_idx)
+    const: ATenOp
+
+    def materialize(self, cons_band: "Band") -> ATenOp:
+        result: Optional[ATenOp] = None
+        for coef, c_idx in self.terms:
+            d = Dim((cons_band,), dim=c_idx)
+            coef_s = coef.simplify()
+            term = d if (isinstance(coef_s, Const) and coef_s.value == 1) else Mul((coef_s, d))
+            result = term if result is None else Add((result, term))
+        const_s = self.const.simplify()
+        if not (isinstance(const_s, Const) and const_s.value == 0):
+            result = const_s if result is None else Add((result, const_s))
+        return (result if result is not None else _const(0, index)).simplify()
+
+
+def _extract_axes_from_bmap(bmap: BasicMap, band: Band) -> Optional[List[tuple[ATenOp, ATenOp, int]]]:
+    """From a `from_tensor_type`-style BasicMap whose graph Affs reference `band`,
+    return per-access-axis (stride, size, dim_idx_in_band).  Returns None if the
+    bmap's structure does not match the expected single-flat-addr form."""
+    if not bmap.constraints:
+        return []
+    if len(bmap.constraints) != 1:
+        return None
+    c = bmap.constraints[0]
+    axes: List[tuple[ATenOp, ATenOp, int]] = []
+    for aff in c.affs:
+        if not isinstance(aff.dim, Dim):
+            continue
+        band_of_aff = aff.dim.args[0]
+        if not isinstance(band_of_aff, Band) or band_of_aff is not band:
+            continue
+        # Skip the dummy _cst dim used for symbolic Affs (it would have a Range named "_cst").
+        rng0 = band_of_aff.args[0]
+        if isinstance(rng0, Range) and rng0.name == "_cst":
+            continue
+        dim_idx = aff.dim.dim
+        # Effective stride contribution: stride*incf  (since aff = stride*(incf*dim + offset))
+        eff_stride = (aff.stride * aff.incf).simplify()
+        size = band.args[dim_idx].args[0]
+        axes.append((eff_stride, size, dim_idx))
+    return axes
+
+
+def _decompose_axes(prod_axes: List[tuple[ATenOp, ATenOp, int]],
+                    cons_axes: List[tuple[ATenOp, ATenOp, int]],
+                    prod_ndim: int) -> Optional[Dict[int, _LinSub]]:
+    """Greedy stride-alignment decomposition.  Given the per-axis stride/size info
+    for producer and consumer accessing the same memory, derive a linear substitution
+    expressing every producer dim as a combination of consumer dims.
+
+    Returns None if the strides cannot be aligned (e.g. non-divisible reshape).
+
+    This is the heart of "reshape -> fuse -> simplify": ANY axis-aligned reshape /
+    permute / strided access between producer and consumer reduces to walking the
+    stride lists in ascending order and grouping consumer axes whose sizes multiply
+    to match each producer axis size.  Runtime is O(P + C) — linear.
+    """
+    def _try_int(x: ATenOp) -> Optional[int]:
+        s = x.simplify()
+        return s.value if isinstance(s, Const) and isinstance(s.value, int) else None
+
+    # Filter zero-stride / size-1 axes — they don't contribute to flat addr.
+    def usable(axes: List[tuple[ATenOp, ATenOp, int]]) -> List[tuple[int, int, int]]:
+        out: List[tuple[int, int, int]] = []
+        for s, n, k in axes:
+            sv, nv = _try_int(s), _try_int(n)
+            if sv is None or nv is None:
+                return []  # bail: only handle fully-concrete shapes here
+            if sv == 0 or nv == 1:
+                continue
+            out.append((sv, nv, k))
+        return out
+
+    prod = usable(prod_axes)
+    cons = usable(cons_axes)
+    if not prod and not cons:
+        # both empty — identity substitution for size-1 dims handled below
+        sub: Dict[int, _LinSub] = {}
+        for _, n, k in prod_axes:
+            sub[k] = _LinSub(terms=(), const=_const(0, index))
+        return sub
+
+    # Sort by stride ascending (innermost first).
+    prod.sort(key=lambda t: t[0])
+    cons.sort(key=lambda t: t[0])
+
+    sub = {}
+    ci = 0
+    for s_p, n_p, p_idx in prod:
+        span = 1
+        group: List[tuple[int, int, int]] = []  # (s_c, n_c, c_idx)
+        while ci < len(cons) and span < n_p:
+            s_c, n_c, c_idx = cons[ci]
+            expected = s_p * span
+            if s_c != expected:
+                return None
+            if span * n_c > n_p:
+                return None
+            group.append((s_c, n_c, c_idx))
+            span *= n_c
+            ci += 1
+        if span != n_p:
+            return None
+        terms: List[tuple[ATenOp, int]] = []
+        for s_c, _n_c, c_idx in group:
+            mult = s_c // s_p
+            terms.append((_const(mult, index), c_idx))
+        sub[p_idx] = _LinSub(terms=tuple(terms), const=_const(0, index))
+
+    if ci != len(cons):
+        return None  # leftover consumer axes — extra structure we can't account for
+
+    # Producer dims that were filtered out (zero-stride or size-1) map to 0.
+    seen_p_idxs = {k for _, _, k in prod}
+    for _, _, k in prod_axes:
+        if k not in seen_p_idxs and k not in sub:
+            sub[k] = _LinSub(terms=(), const=_const(0, index))
+    # Any prod_ndim dim not represented (e.g. doesn't appear in axes list at all): map to 0.
+    for k in range(prod_ndim):
+        if k not in sub:
+            sub[k] = _LinSub(terms=(), const=_const(0, index))
+    return sub
+
+
+def _aff_apply_sub(aff: Aff, prod_band: Band, sub: Dict[int, _LinSub],
+                    cons_band: Band) -> tuple[Aff, ...]:
+    """Substitute Dim(prod_band, k) inside a graph Aff via `sub`, returning
+    one or more new graph Affs that sum to the substituted value.
+
+    Aff = stride * (incf * dim + offset)
+    After substituting dim with sum(coef_l * c_l) + const:
+       = sum_l(stride*incf*coef_l * c_l) + stride*(incf*const + offset)
+    """
+    if not (isinstance(aff.dim, Dim) and aff.dim.args[0] is prod_band):
+        return (aff,)
+    k = aff.dim.dim
+    if k not in sub:
+        return (aff,)
+    lin = sub[k]
+    result: List[Aff] = []
+    for coef, c_idx in lin.terms:
+        new_stride = (aff.stride * aff.incf * coef).simplify()
+        c_dim = Dim((cons_band,), dim=c_idx)
+        # Build Aff: new_stride * (1 * c_dim + 0)
+        result.append(Aff((new_stride, c_dim, _const(0, index), _const(1, index))))
+    const_part = (aff.stride * (aff.incf * lin.const + aff.offset)).simplify()
+    if not (isinstance(const_part, Const) and const_part.value == 0):
+        result.append(_aff_const_general(const_part))
+    return tuple(result)
+
+
+def _substitute_dims_general(node: ATenOp, prod_band: Band, sub: Dict[int, _LinSub],
+                              cons_band: Band, memo: Optional[Dict[int, ATenOp]] = None) -> ATenOp:
+    """Walk `node`, replacing Dim(prod_band, k) with the materialized sub[k].
+
+    Special-cases the polyhedral primitives so structural invariants are preserved:
+      - Aff: rebuilds into one or more new Affs via _aff_apply_sub.
+      - Constraint: rebuilds as a flat sum of substituted Affs.
+      - BasicMap: rebuilds each Constraint; dom_vars/rng_vars labels are kept (they're
+        opaque labels for the FM solver, irrelevant to codegen).
+    Other ATenOps (Add/Mul/Load/Store/etc.) get vanilla recursive substitution.
+    """
+    if memo is None: memo = {}
+    if id(node) in memo: return memo[id(node)]
+
+    # Dim node: leaf case, replace if it references prod_band.
+    if isinstance(node, Dim) and node.args[0] is prod_band:
+        k = node.dim
+        if k in sub:
+            result = sub[k].materialize(cons_band)
+            memo[id(node)] = result
+            return result
+        memo[id(node)] = node
+        return node
+
+    # Aff: rebuild via _aff_apply_sub if it references prod_band.
+    if isinstance(node, Aff):
+        new_affs = _aff_apply_sub(node, prod_band, sub, cons_band)
+        # If exactly one Aff produced and it's equal to the original, return as-is.
+        if len(new_affs) == 1 and new_affs[0] is node:
+            memo[id(node)] = node
+            return node
+        # Aff returns a single ATenOp — but _aff_apply_sub may return multiple.
+        # When more than one, callers (Constraint) splice them in.  Here we return
+        # the first; this case shouldn't be hit outside of Constraint context.
+        if len(new_affs) == 1:
+            memo[id(node)] = new_affs[0]
+            return new_affs[0]
+        # Multiple Affs without an enclosing Constraint to absorb them.  Sum them
+        # algebraically via .index() to produce a single scalar ATenOp expression.
+        from functools import reduce as _reduce
+        result = _reduce(lambda a, b: Add((a, b)), [a.index() for a in new_affs])
+        memo[id(node)] = result
+        return result
+
+    # Constraint: collect substituted Affs and rebuild.
+    if isinstance(node, Constraint):
+        flat: List[Aff] = []
+        changed = False
+        for aff in node.affs:
+            sub_affs = _aff_apply_sub(aff, prod_band, sub, cons_band)
+            if not (len(sub_affs) == 1 and sub_affs[0] is aff):
+                changed = True
+            flat.extend(sub_affs)
+        if not changed:
+            memo[id(node)] = node
+            return node
+        result = Constraint(tuple(flat))
+        memo[id(node)] = result
+        return result
+
+    # BasicMap: rebuild each Constraint via this same routine, keep labels.
+    if isinstance(node, BasicMap):
+        new_constraints = tuple(_substitute_dims_general(c, prod_band, sub, cons_band, memo)
+                                for c in node.constraints)
+        if all(a is b for a, b in zip(new_constraints, node.constraints, strict=True)):
+            memo[id(node)] = node
+            return node
+        result = BasicMap(new_constraints, dom_vars=node.dom_vars, rng_vars=node.rng_vars,
+                          dom_name=node.dom_name, rng_name=node.rng_name)
+        memo[id(node)] = result
+        return result
+
+    # Default: recursive substitution.
+    if not node.args:
+        memo[id(node)] = node
+        return node
+    new_args = tuple(_substitute_dims_general(a, prod_band, sub, cons_band, memo) for a in node.args)
+    if all(a is b for a, b in zip(new_args, node.args, strict=True)):
+        memo[id(node)] = node
+        return node
+    result = _rebuild(node, new_args)
+    memo[id(node)] = result
+    return result
+
+
+# Keep legacy name for tests that exercise the simple Dim-substitution case.
 def _substitute_dims(node: ATenOp, prod_band: Band, sub: Dict[int, ATenOp],
                      memo: Optional[Dict[int, ATenOp]] = None) -> ATenOp:
-    """Walk node, replacing every Dim(prod_band, i) with sub[i].
-    Dim references to OTHER bands (e.g. nested reduction bands) are left untouched."""
+    """Legacy walker: replaces Dim(prod_band, k) with sub[k] verbatim.  Used by the
+    early dependency-solver tests where each sub[k] is itself a Dim node.  For
+    general substitution under reshape, use _substitute_dims_general."""
     if memo is None: memo = {}
     if id(node) in memo: return memo[id(node)]
     if isinstance(node, Dim) and node.args[0] is prod_band:
@@ -1453,9 +1757,10 @@ def _substitute_dims(node: ATenOp, prod_band: Band, sub: Dict[int, ATenOp],
     memo[id(node)] = result
     return result
 
+
 def _replace_loads(node: ATenOp, producer: Polyhedron, replacement: ATenOp,
                    memo: Optional[Dict[int, ATenOp]] = None) -> ATenOp:
-    """In node, replace every Load(MemoryOf(producer), _) with `replacement`."""
+    """In `node`, replace every Load(MemoryOf(producer), _) with `replacement`."""
     if memo is None: memo = {}
     if id(node) in memo: return memo[id(node)]
     if isinstance(node, Load):
@@ -1474,69 +1779,109 @@ def _replace_loads(node: ATenOp, producer: Polyhedron, replacement: ATenOp,
     memo[id(node)] = result
     return result
 
+
 def _producer_stored_value(producer: Polyhedron) -> Optional[ATenOp]:
-    """Extract the scalar value being stored by producer's outermost Store.
-    Returns None if the body isn't a straight Store(dst, value) pattern."""
+    """Extract the scalar value being stored by producer's outermost Store.  Returns
+    None if the body isn't a straight Store(dst, value) pattern."""
     body = producer.args[2]
     if isinstance(body, Store):
         return body.args[1]
     return None
 
+
+def _find_store_dst_loads(node: ATenOp, memo: Optional[Set[int]] = None,
+                          out: Optional[Set[int]] = None) -> Set[int]:
+    """Collect ids of Load nodes that appear at Store.args[0] (destination position).
+    These represent write addresses, not value reads; fusing them out would corrupt
+    the Store invariant."""
+    if memo is None: memo = set()
+    if out is None: out = set()
+    if id(node) in memo: return out
+    memo.add(id(node))
+    if isinstance(node, Polyhedron): return out
+    if isinstance(node, Store):
+        out.add(id(node.args[0]))
+    for a in node.args:
+        _find_store_dst_loads(a, memo, out)
+    return out
+
+
 def _fuse_polyhedra(consumer: Polyhedron, producer: Polyhedron) -> Optional[Polyhedron]:
-    """Attempt to fuse `producer` into `consumer`. Returns the fused Polyhedron or None."""
-    # 1. Identify the connecting Memory: producer's Store(Load(M, ...), …) where consumer reads MemoryOf(producer)
+    """Attempt to fuse `producer` into `consumer`. Returns the fused Polyhedron, or
+    None on failure (caller keeps producer as a separate kernel)."""
+    # 1. Producer must have a straight Store body so we can extract its iteration band
+    #    and stored value.
     p_body = producer.args[2]
     if not isinstance(p_body, Store):
-        return None  # only handle straight Store-bodied producers for now
+        return None
     p_dst = p_body.args[0]
     if not isinstance(p_dst, Load):
         return None
-    p_memory = p_dst.args[0]
-    if not isinstance(p_memory, Memory):
-        return None
-    p_band = _band_from_bmap(cast(BasicMap, p_dst.args[1]))
+    # Note: p_dst.args[0] may be a Memory or a MemoryOf (chained producers, e.g. Reduce
+    # writes via Load(MemoryOf(init_poly), ...)).  We don't restrict it here; what
+    # matters for fusion is the access pattern (the bmap).
+    p_bmap = cast(BasicMap, p_dst.args[1])
+    p_band = _band_from_bmap(p_bmap)
     if p_band is None: return None
-    p_T = p_memory.T[0]
-    if p_T is None or p_band.ndim != p_T.ndim: return None
+    p_axes = _extract_axes_from_bmap(p_bmap, p_band)
+    if p_axes is None: return None
 
-    # 2. Find Loads in consumer body that read MemoryOf(producer)
-    reads = _collect_reads_from(consumer.args[2], producer)
-    if not reads: return None
-    # All reads from the same producer should share the same consumer band; pick the first.
-    c_band, c_T, _first_load = reads[0]
-    if c_T.ndim != p_T.ndim:
-        # consumer's view of the producer must match producer's stored shape
-        return None
+    # 2. Find a Load in consumer that reads MemoryOf(producer); use its bmap to
+    #    determine consumer-side access.
+    #
+    # Safety: if ANY such Load is at a Store-destination position in consumer's body,
+    # fusion would corrupt the Store invariant (dst must be a Load — but inlining the
+    # producer's stored value would turn it into a scalar expression).  Bail in that
+    # case; an accumulator-style read/write pattern (e.g. Reduce's in-place update)
+    # is the typical trigger.  A fuller fix lives in Reduce.lower's redesign so the
+    # producer doesn't have to alias the accumulator.
+    store_dsts = _find_store_dst_loads(consumer.args[2])
+    target_load: Optional[Load] = None
+    has_dst_alias = False
+    seen_walk: Set[int] = set()
+    def _find(node: ATenOp) -> None:
+        nonlocal target_load, has_dst_alias
+        if id(node) in seen_walk: return
+        seen_walk.add(id(node))
+        if isinstance(node, Polyhedron): return
+        if isinstance(node, Load):
+            src = node.args[0]
+            if isinstance(src, MemoryOf) and src.args[0] is producer:
+                if id(node) in store_dsts:
+                    has_dst_alias = True
+                elif target_load is None:
+                    target_load = node
+        for a in node.args: _find(a)
+    _find(consumer.args[2])
+    if has_dst_alias: return None
+    if target_load is None: return None
 
-    # 3. Build per-dim access maps (symbolic)
-    W_per, _W_rng = _per_dim_access(p_band, p_T, dom_prefix="p")
-    R_per, _R_rng = _per_dim_access(c_band, c_T, dom_prefix="c")
+    c_bmap = cast(BasicMap, target_load.args[1])
+    c_band = _band_from_bmap(c_bmap)
+    if c_band is None: return None
+    c_axes = _extract_axes_from_bmap(c_bmap, c_band)
+    if c_axes is None: return None
 
-    p_dim_to_name = {Dim((p_band,), dim=i): f"p_{i}" for i in range(p_band.ndim)}
-    c_dim_to_name = {Dim((c_band,), dim=j): f"c_{j}" for j in range(c_band.ndim)}
-    W_sym = _symbolize_bmap(W_per, p_dim_to_name)
-    R_sym = _symbolize_bmap(R_per, c_dim_to_name)
-
-    # 4. Compute dependency D = W ∘ R^{-1}
-    D = W_sym.apply_range(R_sym.reverse())
-    if D.is_empty(): return None
-
-    # 5. Solve substitution
-    sub = _solve_producer_dims(D, p_band, "p", c_band, "c")
+    # 3. Stride-alignment decomposition — the general "reshape -> fuse -> simplify"
+    #    algorithm.  Solves elementwise / reshape / permute / strided cases in one
+    #    pass.
+    sub = _decompose_axes(p_axes, c_axes, p_band.ndim)
     if sub is None: return None
 
-    # 6. Substitute Dim(p_band, i) → sub[i] in producer's stored value
+    # 4. Substitute producer's iteration vars in its stored value, preserving Aff/
+    #    Constraint/BasicMap structural invariants where they appear (e.g. inside
+    #    nested Loads inside the producer body).
     p_value = _producer_stored_value(producer)
     if p_value is None: return None
-    substituted_value = _substitute_dims(p_value, p_band, sub)
+    substituted_value = _substitute_dims_general(p_value, p_band, sub, c_band)
 
-    # 7. Inline: replace Load(MemoryOf(producer), …) in consumer.args[2] with substituted_value
+    # 5. Inline: replace every Load(MemoryOf(producer), …) in consumer's body with
+    #    the substituted scalar value.  The producer's intermediate buffer becomes
+    #    dead — eliminated implicitly.
     new_op = _replace_loads(consumer.args[2], producer, substituted_value)
 
-    # 8. Build new reads/writes by collecting accesses afresh from new_op
-    #    (delegates to the existing explore_predecessors logic, restricted to the new body)
+    # 6. Recompute reads/writes from the new body.
     _parents2, _body2, new_R, new_W = Polyhedron.explore_predecessors((new_op,))
-
     fused = Polyhedron(
         (UnionMap(new_R), UnionMap(new_W), new_op),
         n_outs=consumer.n_outs, T=consumer.T, root=consumer.root,
