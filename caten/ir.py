@@ -14,10 +14,12 @@ from typing import (
     List,
     Mapping,
     Optional,
-    Sequence,
     Set,
     Union,
     cast,
+)
+from typing import (
+    Sequence as _TypingSequence,
 )
 
 import caten.dtype as dtype
@@ -39,11 +41,11 @@ class ATenOpMetaclass(type):
         return x
     @staticmethod
     def _check_struct(cls_name: str, args: tuple) -> None:
-        """Structural constraints: Polyhedron→MemoryOf only, Range→Band only."""
+        """Structural constraints: Polyhedron→{MemoryOf, Sequence}, Range→Band only."""
         for arg in args:
             t = type(arg).__name__
-            if t == "Polyhedron" and cls_name != "MemoryOf":
-                raise TypeError(f"{cls_name}: Polyhedron can only be referenced by MemoryOf")
+            if t == "Polyhedron" and cls_name not in ("MemoryOf", "Sequence"):
+                raise TypeError(f"{cls_name}: Polyhedron can only be referenced by MemoryOf or Sequence")
             if t == "Range" and cls_name != "Band":
                 raise TypeError(f"{cls_name}: Range can only be referenced by Band")
     
@@ -904,7 +906,7 @@ class Constraint(ScheduleOps, ViewOps, ATenOp):
         return f"{total.render()} = 0"
     
     @staticmethod
-    def fourier_motzkin(constraints: List["Constraint"], vars_to_elim: Sequence[str]) -> List["Constraint"]:
+    def fourier_motzkin(constraints: List["Constraint"], vars_to_elim: _TypingSequence[str]) -> List["Constraint"]:
         """
         Eliminate variables via Fourier-Motzkin style substitution.
         
@@ -1184,6 +1186,31 @@ class Store(ScheduleOps, ATenOp):
         return (ATenOpType(axes=(), dtype=args[0].T[0].dtype), )
 ## ==========================================================================
 ## Memory Allocation Model
+@dataclass(frozen=True)
+class Sequence(ScheduleOps, ATenOp):
+    """Execute child ops sequentially at the current iteration point of the enclosing
+    Polyhedron.  Used to express "do A, then B, then C" inside a Polyhedron's body —
+    the canonical case being:
+        Sequence(
+            Store(local_acc, init),               # initialise scalar register
+            inner_Polyhedron_writing_to_local,    # run a full sub-iteration
+            Store(out, fn(load(local_acc), …)),   # consume the accumulated value
+        )
+    This is the on-the-fly reduction pattern used to fuse Conv into Pool.
+
+    A nested Polyhedron inside Sequence runs its FULL iteration before the next
+    sibling op begins — that's the whole point of having a Sequence wrapper.
+    The Sequence itself is a scalar (T inherited from its last child) so it can
+    sit inside a Polyhedron's body slot.
+    """
+    @classmethod
+    def verify(cls, args: tuple[ATenOp, ...], T: tuple[Union[None, ATenOpType], ...] | None, **kwargs: Any) -> tuple[ATenOpType, ...]:
+        assert len(args) >= 1, "Sequence requires at least one child"
+        last = args[-1]
+        if last.T and last.T[0] is not None:
+            return (last.T[0],)
+        return (ATenOpType(axes=(), dtype=dtype.bool, offset=_const(0, index)),)
+
 @dataclass(frozen=True)
 class Memory(ScheduleOps, ViewOps, ATenOp):
     """Memory(ATenOp). A root of memory allocation."""
@@ -1492,27 +1519,6 @@ def _rebuild(node: ATenOp, new_args: tuple[ATenOp, ...]) -> ATenOp:
     return type(node)(new_args, T=node.T, **kwargs)
 
 
-@dataclass(frozen=True)
-class _LinSub:
-    """A linear substitution for a single producer dim, expressed as
-       p_i = sum(coef_k * Dim(cons_band, c_idx_k)) + const
-    where each coef is an ATenOp (typically Const, but kept general)."""
-    terms: tuple[tuple[ATenOp, int], ...]  # (coef, c_dim_idx)
-    const: ATenOp
-
-    def materialize(self, cons_band: "Band") -> ATenOp:
-        result: Optional[ATenOp] = None
-        for coef, c_idx in self.terms:
-            d = Dim((cons_band,), dim=c_idx)
-            coef_s = coef.simplify()
-            term = d if (isinstance(coef_s, Const) and coef_s.value == 1) else Mul((coef_s, d))
-            result = term if result is None else Add((result, term))
-        const_s = self.const.simplify()
-        if not (isinstance(const_s, Const) and const_s.value == 0):
-            result = const_s if result is None else Add((result, const_s))
-        return (result if result is not None else _const(0, index)).simplify()
-
-
 def _extract_axes_from_bmap(bmap: BasicMap, band: Band) -> Optional[List[tuple[ATenOp, ATenOp, int]]]:
     """From a `from_tensor_type`-style BasicMap whose graph Affs reference `band`,
     return per-access-axis (stride, size, dim_idx_in_band).  Returns None if the
@@ -1541,31 +1547,165 @@ def _extract_axes_from_bmap(bmap: BasicMap, band: Band) -> Optional[List[tuple[A
     return axes
 
 
+def _max_bound(node: ATenOp) -> Optional[int]:
+    """Conservative upper bound for an ATenOp expression, assuming each Dim ranges
+    over its Band's Range size.  Returns None when the bound can't be inferred."""
+    if isinstance(node, Const) and isinstance(node.value, int):
+        return node.value
+    if isinstance(node, Dim):
+        rng_size = node.range.args[0]
+        if isinstance(rng_size, Const) and isinstance(rng_size.value, int):
+            return rng_size.value - 1
+        return None
+    if isinstance(node, Add):
+        a, b = _max_bound(node.args[0]), _max_bound(node.args[1])
+        return a + b if a is not None and b is not None else None
+    if isinstance(node, Mul):
+        a, b = _max_bound(node.args[0]), _max_bound(node.args[1])
+        if a is None or b is None or a < 0 or b < 0: return None
+        return a * b
+    if isinstance(node, Mod):
+        d = node.args[1]
+        if isinstance(d, Const) and isinstance(d.value, int) and d.value > 0:
+            return d.value - 1
+        return None
+    if isinstance(node, IDiv):
+        a = _max_bound(node.args[0])
+        d = node.args[1]
+        if a is None or not (isinstance(d, Const) and isinstance(d.value, int) and d.value > 0):
+            return None
+        return a // d.value
+    return None
+
+
+def _flatten_add(expr: ATenOp) -> List[ATenOp]:
+    if isinstance(expr, Add):
+        return _flatten_add(expr.args[0]) + _flatten_add(expr.args[1])
+    return [expr]
+
+
+def _term_int_coef(t: ATenOp) -> tuple[Optional[int], ATenOp]:
+    """If t = coef * var with coef integer, return (coef, var); else (None, t)."""
+    if isinstance(t, Mul):
+        a, b = t.args
+        if isinstance(a, Const) and isinstance(a.value, int): return (a.value, b)
+        if isinstance(b, Const) and isinstance(b.value, int): return (b.value, a)
+    return (None, t)
+
+
+def _simplify_divmod_one(expr: ATenOp) -> ATenOp:
+    """One-step bound-aware simplification of IDiv/Mod over linear expressions:
+        IDiv(c*x + y, c)  ->  x        when 0 ≤ y < c
+        Mod (c*x + y, c)  ->  y        when 0 ≤ y < c
+    Also handles multiple c*x_i terms.  Returns expr unchanged if no rule applies."""
+    if isinstance(expr, IDiv):
+        num, denom = expr.args
+        if not (isinstance(denom, Const) and isinstance(denom.value, int) and denom.value > 0):
+            return expr
+        d = denom.value
+        if d == 1: return num
+        terms = _flatten_add(num)
+        quotient: List[ATenOp] = []
+        small_max = 0
+        ok = True
+        for t in terms:
+            coef, var = _term_int_coef(t)
+            if coef is not None and coef != 0 and coef % d == 0:
+                nc = coef // d
+                quotient.append(var if nc == 1 else Mul((_const(nc, index), var)))
+                continue
+            mb = _max_bound(t)
+            if mb is None or mb < 0:
+                ok = False
+                break
+            small_max += mb
+        if not ok or small_max >= d: return expr
+        if not quotient: return _const(0, index)
+        result: ATenOp = quotient[0]
+        for q in quotient[1:]: result = Add((result, q))
+        return result
+    if isinstance(expr, Mod):
+        num, denom = expr.args
+        if not (isinstance(denom, Const) and isinstance(denom.value, int) and denom.value > 0):
+            return expr
+        d = denom.value
+        if d == 1: return _const(0, index)
+        terms = _flatten_add(num)
+        remainder: List[ATenOp] = []
+        small_max = 0
+        ok = True
+        for t in terms:
+            coef, _var = _term_int_coef(t)
+            if coef is not None and coef != 0 and coef % d == 0:
+                continue  # contributes 0 mod d
+            mb = _max_bound(t)
+            if mb is None or mb < 0:
+                ok = False
+                break
+            small_max += mb
+            remainder.append(t)
+        if not ok or small_max >= d: return expr
+        if not remainder: return _const(0, index)
+        result = remainder[0]
+        for r in remainder[1:]: result = Add((result, r))
+        return result
+    return expr
+
+
+def _simplify_divmod_tree(expr: ATenOp, memo: Optional[Dict[int, ATenOp]] = None) -> ATenOp:
+    """Recursively apply _simplify_divmod_one bottom-up, then rerun simplify on the
+    rebuilt parent so chained simplifications cascade."""
+    if memo is None: memo = {}
+    if id(expr) in memo: return memo[id(expr)]
+    if not expr.args:
+        memo[id(expr)] = expr
+        return expr
+    new_args = tuple(_simplify_divmod_tree(a, memo) for a in expr.args)
+    if not all(a is b for a, b in zip(new_args, expr.args, strict=True)):
+        expr = _rebuild(expr, new_args)
+    simplified = _simplify_divmod_one(expr)
+    if simplified is not expr:
+        simplified = _simplify_divmod_tree(simplified, memo)
+    memo[id(expr)] = simplified
+    return simplified
+
+
 def _decompose_axes(prod_axes: List[tuple[ATenOp, ATenOp, int]],
                     cons_axes: List[tuple[ATenOp, ATenOp, int]],
-                    prod_ndim: int) -> Optional[Dict[int, _LinSub]]:
-    """Greedy stride-alignment decomposition.  Given the per-axis stride/size info
-    for producer and consumer accessing the same memory, derive a linear substitution
-    expressing every producer dim as a combination of consumer dims.
+                    cons_band: Band,
+                    prod_ndim: int) -> Optional[Dict[int, ATenOp]]:
+    """Dependency-based delinearization.  Given per-axis (stride, size, dim_idx) for
+    producer's write and consumer's read into the same flat memory, derive an
+    expression for each producer iteration dim in terms of the consumer iteration.
 
-    Returns None if the strides cannot be aligned (e.g. non-divisible reshape).
+    The key relation: producer's flat addr equals consumer's flat addr.  For a
+    contiguous row-major producer with strides s_p_j and sizes n_p_j,
 
-    This is the heart of "reshape -> fuse -> simplify": ANY axis-aligned reshape /
-    permute / strided access between producer and consumer reduces to walking the
-    stride lists in ascending order and grouping consumer axes whose sizes multiply
-    to match each producer axis size.  Runtime is O(P + C) — linear.
+        p_j = (cons_addr // s_p_j) % n_p_j
+
+    This single formula covers:
+      - identity / permute (the div/mod collapses to a single c_dim)
+      - reshape split (cons has finer dims; div/mod picks the right combination)
+      - reshape merge (cons has coarser dims; div/mod actually performs the
+        delinearization)
+      - shrink with start=0 (cons range is a prefix of prod range)
+      - expand (stride 0 producer dims map to 0)
+
+    We rely on the simplifier (and bounds implied by Band ranges) to collapse the
+    div/mod into a closed form when possible.  Returns None only when consumer's
+    range exceeds the producer's (semantically impossible to fuse without
+    out-of-bounds reads).
     """
     def _try_int(x: ATenOp) -> Optional[int]:
         s = x.simplify()
         return s.value if isinstance(s, Const) and isinstance(s.value, int) else None
 
-    # Filter zero-stride / size-1 axes — they don't contribute to flat addr.
     def usable(axes: List[tuple[ATenOp, ATenOp, int]]) -> List[tuple[int, int, int]]:
         out: List[tuple[int, int, int]] = []
         for s, n, k in axes:
             sv, nv = _try_int(s), _try_int(n)
             if sv is None or nv is None:
-                return []  # bail: only handle fully-concrete shapes here
+                return []
             if sv == 0 or nv == 1:
                 continue
             out.append((sv, nv, k))
@@ -1573,91 +1713,75 @@ def _decompose_axes(prod_axes: List[tuple[ATenOp, ATenOp, int]],
 
     prod = usable(prod_axes)
     cons = usable(cons_axes)
-    if not prod and not cons:
-        # both empty — identity substitution for size-1 dims handled below
-        sub: Dict[int, _LinSub] = {}
-        for _, n, k in prod_axes:
-            sub[k] = _LinSub(terms=(), const=_const(0, index))
-        return sub
 
-    # Sort by stride ascending (innermost first).
-    prod.sort(key=lambda t: t[0])
-    cons.sort(key=lambda t: t[0])
+    # Build cons_addr = sum_l(s_c_l * Dim(cons_band, l))
+    cons_terms: List[ATenOp] = []
+    for s, _, c_idx in cons:
+        d = Dim((cons_band,), dim=c_idx)
+        cons_terms.append(d if s == 1 else Mul((_const(s, index), d)))
+    cons_addr: ATenOp = (
+        functools.reduce(lambda a, b: Add((a, b)), cons_terms) if cons_terms else _const(0, index)
+    )
 
-    sub = {}
-    ci = 0
-    for s_p, n_p, p_idx in prod:
-        span = 1
-        group: List[tuple[int, int, int]] = []  # (s_c, n_c, c_idx)
-        while ci < len(cons) and span < n_p:
-            s_c, n_c, c_idx = cons[ci]
-            expected = s_p * span
-            if s_c != expected:
-                return None
-            if span * n_c > n_p:
-                return None
-            group.append((s_c, n_c, c_idx))
-            span *= n_c
-            ci += 1
-        if span != n_p:
-            return None
-        terms: List[tuple[ATenOp, int]] = []
-        for s_c, _n_c, c_idx in group:
-            mult = s_c // s_p
-            terms.append((_const(mult, index), c_idx))
-        sub[p_idx] = _LinSub(terms=tuple(terms), const=_const(0, index))
+    prod_range = max((s * n for s, n, _ in prod), default=1)
+    cons_range = max((s * n for s, n, _ in cons), default=1)
+    if cons_range > prod_range:
+        return None  # consumer wants more memory than producer wrote
 
-    if ci != len(cons):
-        return None  # leftover consumer axes — extra structure we can't account for
+    # Sort by stride DESC so the outermost producer axis is processed first.
+    # Its mod is unnecessary when prod fully spans the relevant range.
+    sub: Dict[int, ATenOp] = {}
+    prod_sorted = sorted(prod, key=lambda t: -t[0])
+    for i, (s, n, p_idx) in enumerate(prod_sorted):
+        div_expr = cons_addr if s == 1 else IDiv((cons_addr, _const(s, index)))
+        # Outermost: only the highest stride axis truly fills the top — and only if
+        # its range = prod_range = cons_range (we already enforced cons_range ≤ prod_range).
+        is_outermost = (i == 0 and s * n >= cons_range)
+        p_expr: ATenOp = div_expr if (is_outermost or n <= 1) else Mod((div_expr, _const(n, index)))
+        sub[p_idx] = _simplify_divmod_tree(p_expr.simplify())
 
-    # Producer dims that were filtered out (zero-stride or size-1) map to 0.
-    seen_p_idxs = {k for _, _, k in prod}
+    # Producer dims that don't appear in usable (stride 0 or size 1) collapse to 0.
+    seen = {k for _, _, k in prod}
     for _, _, k in prod_axes:
-        if k not in seen_p_idxs and k not in sub:
-            sub[k] = _LinSub(terms=(), const=_const(0, index))
-    # Any prod_ndim dim not represented (e.g. doesn't appear in axes list at all): map to 0.
+        if k not in seen and k not in sub:
+            sub[k] = _const(0, index)
     for k in range(prod_ndim):
         if k not in sub:
-            sub[k] = _LinSub(terms=(), const=_const(0, index))
+            sub[k] = _const(0, index)
     return sub
 
 
-def _aff_apply_sub(aff: Aff, prod_band: Band, sub: Dict[int, _LinSub],
+def _aff_apply_sub(aff: Aff, prod_band: Band, sub: Dict[int, ATenOp],
                     cons_band: Band) -> tuple[Aff, ...]:
-    """Substitute Dim(prod_band, k) inside a graph Aff via `sub`, returning
-    one or more new graph Affs that sum to the substituted value.
+    """Substitute Dim(prod_band, k) inside a graph Aff via `sub`.  Since sub[k]
+    may be an arbitrary ATenOp expression (incl. IDiv/Mod) that cannot fit into
+    the canonical ``Aff(stride, Dim, offset, incf)`` form (where the dim field
+    must be a Dim node), we encode the full substituted value as a single
+    "carrier" Aff whose offset holds the expression.
 
-    Aff = stride * (incf * dim + offset)
-    After substituting dim with sum(coef_l * c_l) + const:
-       = sum_l(stride*incf*coef_l * c_l) + stride*(incf*const + offset)
+    Aff = stride * (incf * dim + offset).  After sub: stride * (incf * expr + offset).
     """
     if not (isinstance(aff.dim, Dim) and aff.dim.args[0] is prod_band):
         return (aff,)
     k = aff.dim.dim
     if k not in sub:
         return (aff,)
-    lin = sub[k]
-    result: List[Aff] = []
-    for coef, c_idx in lin.terms:
-        new_stride = (aff.stride * aff.incf * coef).simplify()
-        c_dim = Dim((cons_band,), dim=c_idx)
-        # Build Aff: new_stride * (1 * c_dim + 0)
-        result.append(Aff((new_stride, c_dim, _const(0, index), _const(1, index))))
-    const_part = (aff.stride * (aff.incf * lin.const + aff.offset)).simplify()
-    if not (isinstance(const_part, Const) and const_part.value == 0):
-        result.append(_aff_const_general(const_part))
-    return tuple(result)
+    expr = sub[k]
+    full = (aff.stride * (aff.incf * expr + aff.offset)).simplify()
+    if isinstance(full, Const) and full.value == 0:
+        return ()  # zero contribution: drop
+    return (_aff_const_general(full),)
 
 
-def _substitute_dims_general(node: ATenOp, prod_band: Band, sub: Dict[int, _LinSub],
+def _substitute_dims_general(node: ATenOp, prod_band: Band, sub: Dict[int, ATenOp],
                               cons_band: Band, memo: Optional[Dict[int, ATenOp]] = None) -> ATenOp:
-    """Walk `node`, replacing Dim(prod_band, k) with the materialized sub[k].
+    """Walk `node`, replacing Dim(prod_band, k) with sub[k] (an arbitrary ATenOp).
 
     Special-cases the polyhedral primitives so structural invariants are preserved:
-      - Aff: rebuilds into one or more new Affs via _aff_apply_sub.
+      - Aff: rebuilds into a carrier Aff via _aff_apply_sub (so non-linear sub[k]
+        — IDiv/Mod — can still live inside a Constraint).
       - Constraint: rebuilds as a flat sum of substituted Affs.
-      - BasicMap: rebuilds each Constraint; dom_vars/rng_vars labels are kept (they're
-        opaque labels for the FM solver, irrelevant to codegen).
+      - BasicMap: rebuilds each Constraint; dom/rng labels are kept (opaque).
     Other ATenOps (Add/Mul/Load/Store/etc.) get vanilla recursive substitution.
     """
     if memo is None: memo = {}
@@ -1667,7 +1791,7 @@ def _substitute_dims_general(node: ATenOp, prod_band: Band, sub: Dict[int, _LinS
     if isinstance(node, Dim) and node.args[0] is prod_band:
         k = node.dim
         if k in sub:
-            result = sub[k].materialize(cons_band)
+            result = sub[k]
             memo[id(node)] = result
             return result
         memo[id(node)] = node
@@ -1789,6 +1913,141 @@ def _producer_stored_value(producer: Polyhedron) -> Optional[ATenOp]:
     return None
 
 
+def _producer_parts(producer: Polyhedron) -> Optional[tuple[tuple[ATenOp, ...], Store]]:
+    """Return (prologue_ops, last_store).  The producer's body is either a single
+    Store (prologue is empty) or a Sequence whose last child is the producing
+    Store (prologue = the preceding ops, e.g. local-accumulator init + inner
+    reduce Polyhedron from a previous option-B fusion)."""
+    body = producer.args[2]
+    if isinstance(body, Store):
+        return ((), body)
+    if isinstance(body, Sequence):
+        last = body.args[-1]
+        if isinstance(last, Store):
+            return (body.args[:-1], last)
+    return None
+
+
+def _replace_specific(node: ATenOp, target: ATenOp, replacement: ATenOp,
+                      memo: Optional[Dict[int, ATenOp]] = None) -> ATenOp:
+    """Replace every reference to the exact `target` node (matched by identity)
+    with `replacement`."""
+    if memo is None: memo = {}
+    if id(node) in memo: return memo[id(node)]
+    if node is target:
+        memo[id(node)] = replacement
+        return replacement
+    if not node.args:
+        memo[id(node)] = node
+        return node
+    new_args = tuple(_replace_specific(a, target, replacement, memo) for a in node.args)
+    if all(a is b for a, b in zip(new_args, node.args, strict=True)):
+        memo[id(node)] = node
+        return node
+    result = _rebuild(node, new_args)
+    memo[id(node)] = result
+    return result
+
+
+def _infer_reduction_init(p_body: ATenOp, dt: DType) -> ATenOp:
+    """Infer a sensible init value for a reduction body of shape
+    ``Store(out_load, bop(out_load, ...))``: bop=Add → 0, bop=Max → very-negative,
+    else 0."""
+    if isinstance(p_body, Store) and len(p_body.args) == 2:
+        val = p_body.args[1]
+        if isinstance(val, Max):
+            if dt.name in ("float32", "float64"):
+                return _const(float("-inf"), dt)
+            return _const(-(1 << 62), dt)
+    return _const(0, dt)
+
+
+def _fuse_reduction_producer(consumer: Polyhedron, producer: Polyhedron,
+                              p_band: Band, c_band: Band,
+                              sub_kept: Dict[int, ATenOp],
+                              reduce_dims: List[int],
+                              target_load: Load,
+                              p_prologue: tuple[ATenOp, ...] = ()) -> Optional[Polyhedron]:
+    """Option B fusion: producer carries reduction dims.  Build a Sequence body in
+    the fused consumer that (a) zeroes a local scalar accumulator, (b) runs an
+    inner Polyhedron over the producer's reduce dims accumulating into the local,
+    and (c) executes the original consumer body with the producer-load replaced
+    by a read from the local accumulator.
+
+    The fused consumer iterates c_band; the inner Polyhedron iterates a fresh
+    Band over the reduce-dim Ranges.
+    """
+    parts = _producer_parts(producer)
+    if parts is None: return None
+    _existing_prologue, p_body = parts
+    p_out_load = p_body.args[0]
+    if not isinstance(p_out_load, Load): return None
+    p_out_mem = p_out_load.args[0]
+    out_T = p_out_mem.T[0]
+    if out_T is None: return None
+    dt = out_T.dtype
+
+    # 1. Local scalar accumulator
+    local_mem = Memory.deflocal((_const(1, index),), dt)
+    local_bmap = BasicMap(
+        (Constraint((_aff_const_general(_const(0, index)), Aff.var("addr", flip=True))),),
+        dom_vars=(),
+        rng_vars=("addr",), dom_name="S", rng_name="",
+    )
+    local_load = Load((local_mem, local_bmap))
+
+    # 2. Inner band from reduce dims (preserving Range identity)
+    inner_ranges = tuple(cast(Range, p_band.args[i]) for i in reduce_dims)
+    inner_band = Band(inner_ranges)
+
+    # 3. Build full substitution: kept dims via sub_kept, reduce dims → Dim(inner_band, new_pos)
+    full_sub: Dict[int, ATenOp] = dict(sub_kept)
+    for new_pos, reduce_idx in enumerate(reduce_dims):
+        full_sub[reduce_idx] = Dim((inner_band,), dim=new_pos)
+
+    # 4. Substitute Dim(p_band, k) throughout producer's body.
+    p_body_subbed = _substitute_dims_general(p_body, p_band, full_sub, c_band)
+    if not isinstance(p_body_subbed, Store):
+        return None
+    new_out_load = p_body_subbed.args[0]
+
+    # 5. Redirect the producer's output Load to the local scalar accumulator.
+    p_body_local = _replace_specific(p_body_subbed, new_out_load, local_load)
+    if not isinstance(p_body_local, Store):
+        return None
+    inner_body = p_body_local
+
+    # 6. Inner Polyhedron over inner_band
+    _, _, inner_R, inner_W = Polyhedron.explore_predecessors((inner_body,))
+    inner_poly = Polyhedron(
+        (UnionMap(inner_R), UnionMap(inner_W), inner_body),
+        n_outs=1, T=(local_mem.T[0],), root=False,
+    )
+
+    # 7. Init: Store(local_load, init_value)
+    init_step = Store.new(local_load, _infer_reduction_init(p_body, dt))
+
+    # 8. Consumer body with target_load replaced by local_load (reads accumulated value)
+    consumer_with_local = _replace_specific(consumer.args[2], target_load, local_load)
+
+    # 9. Sequence: substituted producer-prologue + init + inner + consumer update.
+    #    If the caller-supplied p_prologue is non-empty, those ops belong to a
+    #    chained producer further upstream — substitute and prepend them so the
+    #    upstream accumulator state is computed before this fusion's inner runs.
+    sub_existing = tuple(
+        _substitute_dims_general(op, p_band, sub_kept, c_band) for op in p_prologue
+    )
+    seq_body = Sequence(sub_existing + (init_step, inner_poly, consumer_with_local))
+
+    # 10. Outer Polyhedron over c_band
+    _, _, new_R, new_W = Polyhedron.explore_predecessors((seq_body,))
+    fused = Polyhedron(
+        (UnionMap(new_R), UnionMap(new_W), seq_body),
+        n_outs=consumer.n_outs, T=consumer.T, root=consumer.root,
+    )
+    return fused
+
+
 def _find_store_dst_loads(node: ATenOp, memo: Optional[Set[int]] = None,
                           out: Optional[Set[int]] = None) -> Set[int]:
     """Collect ids of Load nodes that appear at Store.args[0] (destination position).
@@ -1808,13 +2067,16 @@ def _find_store_dst_loads(node: ATenOp, memo: Optional[Set[int]] = None,
 
 def _fuse_polyhedra(consumer: Polyhedron, producer: Polyhedron) -> Optional[Polyhedron]:
     """Attempt to fuse `producer` into `consumer`. Returns the fused Polyhedron, or
-    None on failure (caller keeps producer as a separate kernel)."""
-    # 1. Producer must have a straight Store body so we can extract its iteration band
-    #    and stored value.
-    p_body = producer.args[2]
-    if not isinstance(p_body, Store):
+    None on failure (caller keeps producer as a separate kernel).
+
+    Producer's body may be either a Store (basic case) or a Sequence(...,Store)
+    — the latter arises after a previous option-B fusion left a local-accumulator
+    prologue.  In that case we carry the prologue into the fused consumer body."""
+    parts = _producer_parts(producer)
+    if parts is None:
         return None
-    p_dst = p_body.args[0]
+    p_prologue, p_store = parts
+    p_dst = p_store.args[0]
     if not isinstance(p_dst, Load):
         return None
     # Note: p_dst.args[0] may be a Memory or a MemoryOf (chained producers, e.g. Reduce
@@ -1825,6 +2087,22 @@ def _fuse_polyhedra(consumer: Polyhedron, producer: Polyhedron) -> Optional[Poly
     if p_band is None: return None
     p_axes = _extract_axes_from_bmap(p_bmap, p_band)
     if p_axes is None: return None
+
+    # Detect reduction producers: producer's write bmap references only the kept dims
+    # of its iteration band, while the band itself spans more dims (the reduce dims).
+    # For such producers, the simple "inline producer's stored value" pattern would
+    # lose the reduction semantics.  We instead defer to _fuse_reduction_producer
+    # which builds a Sequence body with a nested inner Polyhedron over the reduce
+    # dims, writing into a local scalar accumulator.
+    p_referenced = {k for _, _, k in p_axes}
+    reduce_dims_in_producer: List[int] = []
+    for i in range(p_band.ndim):
+        if i in p_referenced:
+            continue
+        rng_size = p_band.args[i].args[0]
+        if isinstance(rng_size, Const) and rng_size.value == 1:
+            continue  # size-1 dim is broadcast/keepdim filler, not a real reduce
+        reduce_dims_in_producer.append(i)
 
     # 2. Find a Load in consumer that reads MemoryOf(producer); use its bmap to
     #    determine consumer-side access.
@@ -1865,20 +2143,36 @@ def _fuse_polyhedra(consumer: Polyhedron, producer: Polyhedron) -> Optional[Poly
     # 3. Stride-alignment decomposition — the general "reshape -> fuse -> simplify"
     #    algorithm.  Solves elementwise / reshape / permute / strided cases in one
     #    pass.
-    sub = _decompose_axes(p_axes, c_axes, p_band.ndim)
+    sub = _decompose_axes(p_axes, c_axes, c_band, p_band.ndim)
     if sub is None: return None
 
-    # 4. Substitute producer's iteration vars in its stored value, preserving Aff/
-    #    Constraint/BasicMap structural invariants where they appear (e.g. inside
-    #    nested Loads inside the producer body).
-    p_value = _producer_stored_value(producer)
-    if p_value is None: return None
-    substituted_value = _substitute_dims_general(p_value, p_band, sub, c_band)
+    # 4. If producer has reduction dims, dispatch to the Sequence + nested-Polyhedron
+    #    path (option B).  Otherwise inline the producer's stored value directly.
+    if reduce_dims_in_producer:
+        return _fuse_reduction_producer(
+            consumer, producer, p_band, c_band, sub, reduce_dims_in_producer, target_load,
+            p_prologue,
+        )
+
+    # Substitute Dim(p_band, k) in producer's stored value AND in any prologue ops
+    # (e.g. carried-over local-accumulator init + inner reduce poly).
+    substituted_value = _substitute_dims_general(p_store.args[1], p_band, sub, c_band)
+    sub_prologue = tuple(
+        _substitute_dims_general(op, p_band, sub, c_band) for op in p_prologue
+    )
 
     # 5. Inline: replace every Load(MemoryOf(producer), …) in consumer's body with
     #    the substituted scalar value.  The producer's intermediate buffer becomes
     #    dead — eliminated implicitly.
     new_op = _replace_loads(consumer.args[2], producer, substituted_value)
+
+    # If we carried prologue ops from the producer, wrap consumer's body in a
+    # Sequence so they run first.  If consumer's body is already a Sequence, merge.
+    if sub_prologue:
+        if isinstance(new_op, Sequence):
+            new_op = Sequence(sub_prologue + new_op.args)
+        else:
+            new_op = Sequence(sub_prologue + (new_op,))
 
     # 6. Recompute reads/writes from the new body.
     _parents2, _body2, new_R, new_W = Polyhedron.explore_predecessors((new_op,))

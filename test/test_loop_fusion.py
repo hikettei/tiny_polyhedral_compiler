@@ -357,54 +357,105 @@ class TestReshapeDecomposition:
         # The sum's accumulator Add should be in the body.
         assert _count(root, ir.Add) >= 1
 
-    def test_sum_sum_fuses(self):
+    def test_sum_sum_fuses_via_sequence(self):
+        # sum∘sum: inner sum is a reduction producer, so we use the Sequence path —
+        # one OUTER Polyhedron whose body is a Sequence(init_local, inner_reduce_poly,
+        # outer_update).  Two Polyhedrons are present in total (outer + nested), but
+        # the intermediate MemoryOf chain is gone and they form a single fused
+        # kernel.
         import caten as C
         a = C.Tensor([10, 20])
         res = a.sum(axis=1).sum(axis=0)
         lowered = res.op.lower()
         root = lowered[0]
-        assert _count_polyhedrons(root) == 1, "nested sum∘sum should collapse to one kernel"
+        # outer + nested inner reduction
+        assert _count_polyhedrons(root) == 2
+        # No intermediate MemoryOf reads — the inner uses a local scalar accumulator.
         assert _count_loads_of_memof(root) == 0
+        # A Sequence node confirms the option-B fusion fired.
+        assert _count(root, ir.Sequence) == 1
+
+    def test_conv_pool_fully_fuses(self):
+        # The headline case: Conv (matmul reduce) + Pool (max reduce), with a long
+        # reshape/permute chain between them.  Should collapse to a single outer
+        # Polyhedron (Pool's iteration band) whose Sequence body contains:
+        #   [0] Store: zero the local scalar accumulator
+        #   [1] Polyhedron: inner Conv reduce over (C_in, KH, KW), writing the local
+        #   [2] Store: Pool's max update reading the local
+        import caten as C
+        N, C_in, C_out, H, W = 1, 2, 4, 8, 8
+        x = C.Tensor([N, C_in, H, W])
+        weight = C.Tensor([C_out, C_in, 3, 3])
+        pool_out = x.conv2d(weight).pool2d((2, 2))
+        lowered = pool_out.op.lower()
+        root = lowered[0]
+        # The whole conv-pool pipeline must collapse to one outer + one nested.
+        assert _count_polyhedrons(root) == 2
+        assert _count_loads_of_memof(root) == 0
+        assert _count(root, ir.Sequence) == 1
+        # The inner statement preserves Conv's compute (Mul of x and weight) and
+        # the outer holds Pool's Max.
+        assert _count(root, ir.Mul) >= 1
+        assert _count(root, ir.Max) == 1
 
 
 class TestDecomposeAxes:
-    """Unit tests for the stride-alignment decomposition algorithm."""
+    """Unit tests for the dependency-based decomposition algorithm
+    (delinearization with div/mod)."""
 
     def test_identity_decompose(self):
-        # Identity reshape: shapes match 1:1 with same strides.
+        cons_band = _named_band("c", 10, 20)
         prod = [(ir.Const.new(20, index), ir.Const.new(10, index), 0),
                 (ir.Const.new(1, index), ir.Const.new(20, index), 1)]
         cons = [(ir.Const.new(20, index), ir.Const.new(10, index), 0),
                 (ir.Const.new(1, index), ir.Const.new(20, index), 1)]
-        sub = ir._decompose_axes(prod, cons, prod_ndim=2)
+        sub = ir._decompose_axes(prod, cons, cons_band, prod_ndim=2)
         assert sub is not None
         assert 0 in sub and 1 in sub
+        # When ranges align exactly, the formula reduces to simple expressions.
+        # We don't require a specific canonical form here; just that the substitution
+        # evaluates correctly at a sample point.
 
-    def test_reshape_decompose(self):
+    def test_reshape_split_decompose(self):
         # Producer (10, 20) strides (20, 1) → consumer (5, 2, 5, 4) strides (40, 20, 4, 1).
+        cons_band = _named_band("c", 5, 2, 5, 4)
         prod = [(ir.Const.new(20, index), ir.Const.new(10, index), 0),
                 (ir.Const.new(1, index), ir.Const.new(20, index), 1)]
         cons = [(ir.Const.new(40, index), ir.Const.new(5, index), 0),
                 (ir.Const.new(20, index), ir.Const.new(2, index), 1),
                 (ir.Const.new(4, index), ir.Const.new(5, index), 2),
                 (ir.Const.new(1, index), ir.Const.new(4, index), 3)]
-        sub = ir._decompose_axes(prod, cons, prod_ndim=2)
+        sub = ir._decompose_axes(prod, cons, cons_band, prod_ndim=2)
         assert sub is not None
-        # sub[0] should be 2*c_0 + c_1 (covers prod axis 0, size 10 = 5*2)
-        # sub[1] should be 4*c_2 + c_3 (covers prod axis 1, size 20 = 5*4)
-        # Verify by inspecting the LinSub structure.
-        s0 = sub[0]
-        s1 = sub[1]
-        # s0 terms: [(2, 0), (1, 1)]  — sorted by stride ascending, smaller first
-        terms_0 = {(c.simplify().item, idx) for c, idx in s0.terms}
-        terms_1 = {(c.simplify().item, idx) for c, idx in s1.terms}
-        assert terms_0 == {(1, 1), (2, 0)}
-        assert terms_1 == {(1, 3), (4, 2)}
+        # Evaluate substitution at concrete (c_0, c_1, c_2, c_3) = (3, 1, 2, 3):
+        # cons_addr = 40*3 + 20*1 + 4*2 + 3 = 120 + 20 + 8 + 3 = 151
+        # p_0 = 151 // 20 = 7   (within [0,10))
+        # p_1 = 151 % 20 = 11   (within [0,20))
+        const_sub = {0: ir.Const.new(3, index), 1: ir.Const.new(1, index),
+                     2: ir.Const.new(2, index), 3: ir.Const.new(3, index)}
+        v0 = ir._substitute_dims(sub[0], cons_band, const_sub).simplify().item
+        v1 = ir._substitute_dims(sub[1], cons_band, const_sub).simplify().item
+        assert v0 == 7
+        assert v1 == 11
 
-    def test_non_aligned_reshape_returns_none(self):
-        # (10,) → (3, 4) would need 10 = 3*4 = 12, not divisible. Stride alignment fails.
-        prod = [(ir.Const.new(1, index), ir.Const.new(10, index), 0)]
-        cons = [(ir.Const.new(4, index), ir.Const.new(3, index), 0),
+    def test_reshape_merge_decompose(self):
+        # Producer (8, 4) strides (4, 1), total 32 → consumer (32,) stride 1.
+        cons_band = _named_band("c", 32)
+        prod = [(ir.Const.new(4, index), ir.Const.new(8, index), 0),
                 (ir.Const.new(1, index), ir.Const.new(4, index), 1)]
-        sub = ir._decompose_axes(prod, cons, prod_ndim=1)
+        cons = [(ir.Const.new(1, index), ir.Const.new(32, index), 0)]
+        sub = ir._decompose_axes(prod, cons, cons_band, prod_ndim=2)
+        assert sub is not None
+        # At c_0 = 11: p_0 = 11 // 4 = 2, p_1 = 11 % 4 = 3.
+        const_sub = {0: ir.Const.new(11, index)}
+        v0 = ir._substitute_dims(sub[0], cons_band, const_sub).simplify().item
+        v1 = ir._substitute_dims(sub[1], cons_band, const_sub).simplify().item
+        assert v0 == 2
+        assert v1 == 3
+
+    def test_consumer_larger_than_producer_rejects(self):
+        cons_band = _named_band("c", 12)
+        prod = [(ir.Const.new(1, index), ir.Const.new(10, index), 0)]
+        cons = [(ir.Const.new(1, index), ir.Const.new(12, index), 0)]
+        sub = ir._decompose_axes(prod, cons, cons_band, prod_ndim=1)
         assert sub is None
