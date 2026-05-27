@@ -1263,37 +1263,282 @@ class Polyhedron(ScheduleOps, ViewOps, ATenOp):
         for p in parents: instance += p
         return instance
 
-    # [TODO]
-    # - find_parent_endrangesの範囲ないの全てのノードが，Polyhedronと同じBandを持っているかverifyする
-    # - Rename Polyhedron -> Polyhedra
     def __add__(self, predecessor: Polyhedron) -> Polyhedron:
-        """
-        Triggers the loop fusion.
-        Return Polyhedron when:
-        - Fused     => Fused Polyhedron Instance
-        - Non-Fused => self but separated with the node Separate (or smth)
-        """
-        # 1. AccessMapを削除
-        # 2. IRを適切に定義するところを実装
-        # 3. Domain+Domainの計算を実装
-        R = cast(UnionMap, self.args[0])
-        W = cast(UnionMap, self.args[1])
-        print(R)
-        print(W)
-        # [TODO]
-        # - This should be lru_cache d
-        D: UnionMap = R.apply_range(W.reverse())
-        print("Fusion Triggered")
-        print(D)
-        # TODO
-        # - ir.pyをEGraphで実装したい！
-        # - apply_range, reverse, apply_domain,
-        # - 計算グラフ中に常にR.apply_range(W.reverse())が存在するようにしてもいい。
-        # TODO:
-        # - Set root=True if non-fusible
-        # - otherwise root=False
-        return self
+        """Try to fuse predecessor into self. Returns the fused Polyhedron on success,
+        or self unchanged on failure (predecessor remains referenced via MemoryOf as a
+        separate kernel; root=True signals non-fusion)."""
+        fused = _fuse_polyhedra(self, predecessor)
+        return fused if fused is not None else self
 
     def search(self) -> None:
         # TODO: Beam Search Trigger.
         pass
+
+## ==========================================================================
+## Loop Fusion Engine (ir.py-native; no ISL)
+## ==========================================================================
+##
+## High-level idea:
+##   1. Given consumer C and producer P (where C reads MemoryOf(P)),
+##      collect their per-dimension access maps in symbolic form.
+##   2. Compute D = W_p ∘ R_c^{-1} via the existing apply_range (Fourier-Motzkin).
+##   3. Solve each producer iteration dim p_i as an affine expression in consumer
+##      iteration dims c_j.  This gives a substitution `sub: int -> ATenOp`.
+##   4. Rewrite P's body & access maps under `sub`, then inline P's stored value
+##      into C's body, replacing Load(MemoryOf(P), …) with the substituted value.
+##   5. The intermediate Memory becomes dead.
+##
+## "Automatic tiling" for Conv+Pool falls out of step 3 naturally: solving the
+## dep constraint h_p = 4*h_c + r_c yields a substitution that embeds Conv's h,w
+## into Pool's (hp,wp,rh,rw) — no explicit tile transformation needed.
+
+def _aff_term_general(coef: ATenOp, varname: str) -> Aff:
+    """Symbolic Aff: coef * varname where coef is an arbitrary ATenOp expression."""
+    return Aff((coef, Aff._cst_dim(), Const.new(varname, index), _const(1, index)))
+
+def _aff_const_general(value: ATenOp) -> Aff:
+    """Symbolic constant Aff: holds an arbitrary ATenOp value as the constant term."""
+    return Aff((value, Aff._cst_dim(), _const(1, index), _const(0, index)))
+
+def _symbolize_aff(aff: Aff, dim_to_name: Dict[Any, str]) -> tuple[Aff, ...]:
+    """Convert a graph Aff (referencing a Dim node) into symbolic Affs (using string varnames).
+    A symbolic Aff is what Constraint.get_coefficient_of / fourier_motzkin expect."""
+    if isinstance(aff.dim, Dim) and aff.dim in dim_to_name:
+        varname = dim_to_name[aff.dim]
+        # stride * (incf * dim + offset) = (stride*incf) * varname + (stride*offset)
+        coef = aff.stride * aff.incf
+        const_part = aff.stride * aff.offset
+        return (_aff_term_general(coef, varname), _aff_const_general(const_part))
+    return (aff,)
+
+def _symbolize_bmap(bmap: BasicMap, dim_to_name: Dict[Any, str]) -> BasicMap:
+    """Convert all graph Affs in bmap to symbolic form using dim_to_name."""
+    new_constraints: List[Constraint] = []
+    for c in bmap.constraints:
+        new_affs: List[Aff] = []
+        for aff in c.affs:
+            new_affs.extend(_symbolize_aff(aff, dim_to_name))
+        new_constraints.append(Constraint(tuple(new_affs)))
+    return BasicMap(tuple(new_constraints),
+                    dom_vars=bmap.dom_vars, rng_vars=bmap.rng_vars,
+                    dom_name=bmap.dom_name, rng_name=bmap.rng_name)
+
+def _per_dim_access(band: Band, T: ATenOpType, dom_prefix: str) -> tuple[BasicMap, tuple[str, ...]]:
+    """Build a per-dimension *logical* access map: each tensor axis maps to the
+    matching iteration dim (d_k = Dim(band, k)).  Memory stride/offset are
+    intentionally NOT folded in — for fusion analysis we only need the logical
+    shape correspondence between producer and consumer, not the flat address.
+
+    Requires band.ndim == T.ndim.
+    """
+    assert band.ndim == T.ndim, f"per-dim access requires band.ndim == T.ndim, got {band.ndim} vs {T.ndim}"
+    dom_vars = tuple(f"{dom_prefix}_{i}" for i in range(band.ndim))
+    rng_vars = tuple(f"d_{i}" for i in range(T.ndim))
+    constraints: List[Constraint] = []
+    for k in range(T.ndim):
+        # Graph Aff: 1 * (1 * Dim(band, k) + 0) = Dim(band, k)
+        graph_aff = Aff((_const(1, index), Dim((band,), dim=k), _const(0, index), _const(1, index)))
+        # Constraint: graph_aff - d_k = 0
+        constraints.append(Constraint((graph_aff, Aff.var(rng_vars[k], flip=True))))
+    bmap = BasicMap(tuple(constraints), dom_vars=dom_vars, rng_vars=rng_vars,
+                    dom_name="S", rng_name="")
+    return bmap, rng_vars
+
+def _collect_reads_from(consumer_op: ATenOp, producer: Polyhedron) -> List[tuple[Band, ATenOpType, Load]]:
+    """Find Load nodes inside consumer_op whose source is MemoryOf(producer).
+    Returns (iteration_band, tensor_type, load_node) for each."""
+    results: List[tuple[Band, ATenOpType, Load]] = []
+    seen: Set[int] = set()
+    def _walk(node: ATenOp) -> None:
+        if id(node) in seen: return
+        seen.add(id(node))
+        if isinstance(node, Polyhedron):
+            return  # consumer's nested poly = separate scope
+        if isinstance(node, Load):
+            src = node.args[0]
+            if isinstance(src, MemoryOf) and src.args[0] is producer:
+                band = _band_from_bmap(cast(BasicMap, node.args[1]))
+                T = src.T[0]
+                if band is not None and T is not None and band.ndim == T.ndim:
+                    results.append((band, T, node))
+        for a in node.args:
+            _walk(a)
+    _walk(consumer_op)
+    return results
+
+def _band_from_bmap(bmap: BasicMap) -> Optional[Band]:
+    """Extract the iteration Band from a BasicMap's graph Affs (the band any Dim node points to,
+    excluding the dummy _cst_dim used for symbolic Affs)."""
+    for c in bmap.constraints:
+        for aff in c.affs:
+            if isinstance(aff.dim, Dim):
+                band = aff.dim.args[0]
+                if isinstance(band, Band) and len(band.args) > 0:
+                    rng0 = band.args[0]
+                    if isinstance(rng0, Range) and rng0.name == "_cst":
+                        continue  # this is the dummy cst dim
+                    return band
+    return None
+
+def _solve_producer_dims(D: BasicMap, prod_band: Band, prod_prefix: str,
+                          cons_band: Band, cons_prefix: str) -> Optional[Dict[int, ATenOp]]:
+    """Given dependency D (its constraints reference 'prod_prefix_i' and 'cons_prefix_j' symbolically),
+    return {i: ATenOp expression in Dim(cons_band, j)} for each producer dim.
+
+    Returns None if any producer dim cannot be expressed as a closed-form linear combination
+    of consumer dims (i.e. fusion is not legal under this approach)."""
+    cons_names = [f"{cons_prefix}_{j}" for j in range(cons_band.ndim)]
+    cons_names_set = set(cons_names)
+    sub: Dict[int, ATenOp] = {}
+    for i in range(prod_band.ndim):
+        p_name = f"{prod_prefix}_{i}"
+        solved = False
+        for c in D.constraints:
+            coef = c.get_coefficient_of(p_name).simplify()
+            if ATenOp.eql(coef, 1):
+                sign = 1
+            elif ATenOp.eql(coef, -1):
+                sign = -1
+            else:
+                continue
+            other_vars = c.variables() - {p_name}
+            if not other_vars.issubset(cons_names_set):
+                continue  # constraint mixes other producer vars; can't solve in isolation
+            # sign*p + rest = 0 => p = -sign * rest
+            expr: ATenOp = _const(0, index)
+            for j, c_name in enumerate(cons_names):
+                c_coef = c.get_coefficient_of(c_name).simplify()
+                if ATenOp.eql(c_coef, 0): continue
+                term = Mul((c_coef, Dim((cons_band,), dim=j)))
+                expr = Add((expr, term))
+            const_term = c.get_constant().simplify()
+            if not ATenOp.eql(const_term, 0):
+                expr = Add((expr, const_term))
+            if sign == 1:
+                expr = Neg((expr,))
+            sub[i] = expr.simplify()
+            solved = True
+            break
+        if not solved:
+            return None
+    return sub
+
+def _rebuild(node: ATenOp, new_args: tuple[ATenOp, ...]) -> ATenOp:
+    """Rebuild a node with new args, preserving T and all extra fields (dim, nth, value, ...).
+    Routes through the metaclass so verify/cache logic applies."""
+    kwargs: Dict[str, Any] = {}
+    for f in dataclasses.fields(node):
+        if f.name in ("args", "T"): continue
+        kwargs[f.name] = getattr(node, f.name)
+    return type(node)(new_args, T=node.T, **kwargs)
+
+def _substitute_dims(node: ATenOp, prod_band: Band, sub: Dict[int, ATenOp],
+                     memo: Optional[Dict[int, ATenOp]] = None) -> ATenOp:
+    """Walk node, replacing every Dim(prod_band, i) with sub[i].
+    Dim references to OTHER bands (e.g. nested reduction bands) are left untouched."""
+    if memo is None: memo = {}
+    if id(node) in memo: return memo[id(node)]
+    if isinstance(node, Dim) and node.args[0] is prod_band:
+        result = sub.get(node.dim, node)
+        memo[id(node)] = result
+        return result
+    if not node.args:
+        memo[id(node)] = node
+        return node
+    new_args = tuple(_substitute_dims(a, prod_band, sub, memo) for a in node.args)
+    if all(a is b for a, b in zip(new_args, node.args, strict=True)):
+        memo[id(node)] = node
+        return node
+    result = _rebuild(node, new_args)
+    memo[id(node)] = result
+    return result
+
+def _replace_loads(node: ATenOp, producer: Polyhedron, replacement: ATenOp,
+                   memo: Optional[Dict[int, ATenOp]] = None) -> ATenOp:
+    """In node, replace every Load(MemoryOf(producer), _) with `replacement`."""
+    if memo is None: memo = {}
+    if id(node) in memo: return memo[id(node)]
+    if isinstance(node, Load):
+        src = node.args[0]
+        if isinstance(src, MemoryOf) and src.args[0] is producer:
+            memo[id(node)] = replacement
+            return replacement
+    if not node.args:
+        memo[id(node)] = node
+        return node
+    new_args = tuple(_replace_loads(a, producer, replacement, memo) for a in node.args)
+    if all(a is b for a, b in zip(new_args, node.args, strict=True)):
+        memo[id(node)] = node
+        return node
+    result = _rebuild(node, new_args)
+    memo[id(node)] = result
+    return result
+
+def _producer_stored_value(producer: Polyhedron) -> Optional[ATenOp]:
+    """Extract the scalar value being stored by producer's outermost Store.
+    Returns None if the body isn't a straight Store(dst, value) pattern."""
+    body = producer.args[2]
+    if isinstance(body, Store):
+        return body.args[1]
+    return None
+
+def _fuse_polyhedra(consumer: Polyhedron, producer: Polyhedron) -> Optional[Polyhedron]:
+    """Attempt to fuse `producer` into `consumer`. Returns the fused Polyhedron or None."""
+    # 1. Identify the connecting Memory: producer's Store(Load(M, ...), …) where consumer reads MemoryOf(producer)
+    p_body = producer.args[2]
+    if not isinstance(p_body, Store):
+        return None  # only handle straight Store-bodied producers for now
+    p_dst = p_body.args[0]
+    if not isinstance(p_dst, Load):
+        return None
+    p_memory = p_dst.args[0]
+    if not isinstance(p_memory, Memory):
+        return None
+    p_band = _band_from_bmap(cast(BasicMap, p_dst.args[1]))
+    if p_band is None: return None
+    p_T = p_memory.T[0]
+    if p_T is None or p_band.ndim != p_T.ndim: return None
+
+    # 2. Find Loads in consumer body that read MemoryOf(producer)
+    reads = _collect_reads_from(consumer.args[2], producer)
+    if not reads: return None
+    # All reads from the same producer should share the same consumer band; pick the first.
+    c_band, c_T, _first_load = reads[0]
+    if c_T.ndim != p_T.ndim:
+        # consumer's view of the producer must match producer's stored shape
+        return None
+
+    # 3. Build per-dim access maps (symbolic)
+    W_per, _W_rng = _per_dim_access(p_band, p_T, dom_prefix="p")
+    R_per, _R_rng = _per_dim_access(c_band, c_T, dom_prefix="c")
+
+    p_dim_to_name = {Dim((p_band,), dim=i): f"p_{i}" for i in range(p_band.ndim)}
+    c_dim_to_name = {Dim((c_band,), dim=j): f"c_{j}" for j in range(c_band.ndim)}
+    W_sym = _symbolize_bmap(W_per, p_dim_to_name)
+    R_sym = _symbolize_bmap(R_per, c_dim_to_name)
+
+    # 4. Compute dependency D = W ∘ R^{-1}
+    D = W_sym.apply_range(R_sym.reverse())
+    if D.is_empty(): return None
+
+    # 5. Solve substitution
+    sub = _solve_producer_dims(D, p_band, "p", c_band, "c")
+    if sub is None: return None
+
+    # 6. Substitute Dim(p_band, i) → sub[i] in producer's stored value
+    p_value = _producer_stored_value(producer)
+    if p_value is None: return None
+    substituted_value = _substitute_dims(p_value, p_band, sub)
+
+    # 7. Inline: replace Load(MemoryOf(producer), …) in consumer.args[2] with substituted_value
+    new_op = _replace_loads(consumer.args[2], producer, substituted_value)
+
+    # 8. Build new reads/writes by collecting accesses afresh from new_op
+    #    (delegates to the existing explore_predecessors logic, restricted to the new body)
+    _parents2, _body2, new_R, new_W = Polyhedron.explore_predecessors((new_op,))
+
+    fused = Polyhedron(
+        (UnionMap(new_R), UnionMap(new_W), new_op),
+        n_outs=consumer.n_outs, T=consumer.T, root=consumer.root,
+    )
+    return fused
